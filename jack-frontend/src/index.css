@@ -1,0 +1,73 @@
+/* =========================================
+   1. TAILWIND CORE (v4 FIX)
+========================================= */
+@import "tailwindcss";
+
+/* =========================================
+   2. Jack Essentials GLOBAL VARIABLES & RESET
+========================================= */
+:root {
+  --brand-orange: #FF4500;
+  --brand-dark: #0B0F19;
+}
+
+html {
+  scroll-behavior: smooth; 
+}
+
+body {
+  background-color: #F8F9FA;
+  color: #0F172A;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden; 
+}
+
+/* =========================================
+   3. PREMIUM SCROLLBAR
+========================================= */
+::-webkit-scrollbar {
+  width: 6px;  
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F1F5F9; 
+}
+
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1; 
+  border-radius: 10px;
+  transition: background 0.3s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--brand-orange); 
+}
+
+/* =========================================
+   4. BRANDED TEXT SELECTION 
+========================================= */
+::selection {
+  background-color: var(--brand-orange);
+  color: #FFFFFF;
+}
+
+::-moz-selection {
+  background-color: var(--brand-orange);
+  color: #FFFFFF;
+}
+
+/* =========================================
+   5. UTILITY CLASSES
+========================================= */
+@layer utilities {
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+  
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none; 
+  }
+}

@@ -1,0 +1,5 @@
+node_modules/
+.env
+jack-frontend/node_modules/
+.env.local
+jack-frontend/.env

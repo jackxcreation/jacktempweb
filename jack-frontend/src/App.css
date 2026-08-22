@@ -1,0 +1,75 @@
+/* Tailwind Base Imports */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =========================================
+   Jack Essentials GLOBAL VARIABLES & RESET
+========================================= */
+:root {
+  --brand-orange: #FF4500;
+  --brand-dark: #0B0F19;
+  --brand-indigo: #4F46E5;
+}
+
+html {
+  scroll-behavior: smooth; /* Smooth scrolling all over the site */
+}
+
+body {
+  background-color: #F8F9FA; /* Slate-50 - Matching your UI */
+  color: #0F172A; /* Slate-900 */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden; /* Prevents horizontal scrolling bugs */
+}
+
+/* =========================================
+   PRO FEATURE 1: CUSTOM PREMIUM SCROLLBAR
+========================================= */
+::-webkit-scrollbar {
+  width: 6px;  /* Patla scrollbar */
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F1F5F9; /* Slate-100 */
+}
+
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1; /* Slate-300 */
+  border-radius: 10px;
+  transition: background 0.3s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--brand-orange); /* Hover par tera brand color */
+}
+
+/* =========================================
+   PRO FEATURE 2: BRANDED TEXT SELECTION
+========================================= */
+::selection {
+  background-color: var(--brand-orange);
+  color: #FFFFFF;
+}
+
+::-moz-selection {
+  background-color: var(--brand-orange);
+  color: #FFFFFF;
+}
+
+/* =========================================
+   PRO FEATURE 3: SCROLLBAR HIDE UTILITY
+   (Bohot zaroori for Categories & Carousels)
+========================================= */
+@layer utilities {
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+  
+  .scrollbar-hide {
+    -ms-overflow-style: none; /* IE and Edge */
+    scrollbar-width: none; /* Firefox */
+  }
+}

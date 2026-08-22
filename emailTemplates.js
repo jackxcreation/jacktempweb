@@ -1,0 +1,391 @@
+// emailTemplates.js
+
+const BRAND_COLOR = "#FF4500"; // Jack Essentials Orange
+const DARK_BG = "#0f172a"; // Slate 900
+const LIGHT_BG = "#f8fafc"; // Slate 50
+
+// 1. Premium Dashboard Report Template
+const getReportTemplate = (data, dateRange) => {
+  return `
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <style>
+      body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f1f5f9; margin: 0; padding: 0; }
+      .container { max-width: 600px; margin: 40px auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.05); }
+      .header { background-color: ${DARK_BG}; padding: 30px 20px; text-align: center; border-bottom: 4px solid ${BRAND_COLOR}; }
+      .header h1 { margin: 0; color: #ffffff; font-size: 24px; letter-spacing: 1px; text-transform: uppercase; }
+      .header span { color: ${BRAND_COLOR}; font-weight: 900; }
+      .content { padding: 40px 30px; }
+      .title { color: #334155; font-size: 18px; font-weight: bold; margin-bottom: 25px; text-align: center; text-transform: uppercase; letter-spacing: 2px; }
+      
+      .kpi-grid { width: 100%; margin-bottom: 30px; border-collapse: separate; border-spacing: 15px 0; }
+      .kpi-card { background-color: ${LIGHT_BG}; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; width: 48%; text-align: center; }
+      .kpi-title { color: #64748b; font-size: 12px; font-weight: bold; text-transform: uppercase; margin-bottom: 8px; letter-spacing: 1px; }
+      .kpi-value { color: ${DARK_BG}; font-size: 28px; font-weight: 900; margin: 0; }
+      .kpi-value.profit { color: #10b981; }
+      
+      .list-section { background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+      .list-section h3 { margin-top: 0; color: #0f172a; font-size: 16px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px; }
+      .list-item { padding: 12px 0; border-bottom: 1px dashed #cbd5e1; display: table; width: 100%; }
+      .list-item:last-child { border-bottom: none; padding-bottom: 0; }
+      .list-left { display: table-cell; color: #475569; font-size: 14px; font-weight: 600; }
+      .list-right { display: table-cell; text-align: right; color: #ef4444; font-weight: bold; font-size: 15px; }
+      
+      .footer { background-color: #f8fafc; padding: 20px; text-align: center; border-top: 1px solid #e2e8f0; }
+      .footer p { color: #94a3b8; font-size: 12px; margin: 0; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>JACK<span>™</span> ESSENTIALS</h1>
+      </div>
+      <div class="content">
+        <div class="title">📈 Business Report: ${dateRange}</div>
+        
+        <table class="kpi-grid">
+          <tr>
+            <td class="kpi-card">
+              <p class="kpi-title">Gross Revenue</p>
+              <h2 class="kpi-value">₹${data.totalRevenue.toLocaleString('en-IN')}</h2>
+            </td>
+            <td class="kpi-card" style="border-color: #34d399; background-color: #ecfdf5;">
+              <p class="kpi-title" style="color: #059669;">Net Profit</p>
+              <h2 class="kpi-value profit">₹${data.netProfit > 0 ? data.netProfit.toLocaleString('en-IN') : 0}</h2>
+            </td>
+          </tr>
+        </table>
+
+        <table class="kpi-grid" style="margin-top: 15px;">
+          <tr>
+            <td class="kpi-card">
+              <p class="kpi-title">Total Orders</p>
+              <h2 class="kpi-value" style="font-size: 22px;">${data.totalOrders}</h2>
+            </td>
+            <td class="kpi-card">
+              <p class="kpi-title">Profit Margin</p>
+              <h2 class="kpi-value" style="font-size: 22px; color: #3b82f6;">${data.profitMargin}%</h2>
+            </td>
+            <td class="kpi-card">
+              <p class="kpi-title">CPA (Ad Cost)</p>
+              <h2 class="kpi-value" style="font-size: 22px; color: #f59e0b;">₹${data.cpa}</h2>
+            </td>
+          </tr>
+        </table>
+
+        <div class="list-section">
+          <h3>💸 Expenses Breakdown</h3>
+          <div class="list-item">
+            <span class="list-left">📢 Ad Spend</span>
+            <span class="list-right">-₹${data.totalExpenses - data.totalShipping - data.totalPacking - data.totalCogs}</span>
+          </div>
+          <div class="list-item">
+            <span class="list-left">🚚 Shipping</span>
+            <span class="list-right">-₹${data.totalShipping}</span>
+          </div>
+          <div class="list-item">
+            <span class="list-left">📦 Packing</span>
+            <span class="list-right">-₹${data.totalPacking}</span>
+          </div>
+          <div class="list-item">
+            <span class="list-left">🏭 Product COGS</span>
+            <span class="list-right">-₹${data.totalCogs}</span>
+          </div>
+        </div>
+
+      </div>
+      <div class="footer">
+        <p>This is a strictly confidential automated report generated by your Admin Dashboard.</p>
+        <p style="margin-top: 8px;">© ${new Date().getFullYear()} Jack Essentials Pro.</p>
+      </div>
+    </div>
+  </body>
+  </html>
+  `;
+};
+
+// 2. Premium Bulk Email Template
+const getBulkEmailTemplate = (subject, message) => {
+  return `
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <style>
+      body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f1f5f9; margin: 0; padding: 0; }
+      .container { max-width: 600px; margin: 40px auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
+      .header { background-color: ${DARK_BG}; padding: 25px; text-align: center; }
+      .header h1 { margin: 0; color: #ffffff; font-size: 22px; letter-spacing: 1px; text-transform: uppercase; }
+      .header span { color: ${BRAND_COLOR}; font-weight: 900; }
+      .content { padding: 40px 30px; color: #334155; font-size: 16px; line-height: 1.6; }
+      .footer { background-color: #f8fafc; padding: 20px; text-align: center; border-top: 1px solid #e2e8f0; }
+      .footer p { color: #94a3b8; font-size: 12px; margin: 0; }
+      .btn { display: inline-block; background-color: ${BRAND_COLOR}; color: #ffffff !important; text-decoration: none; padding: 12px 25px; border-radius: 8px; font-weight: bold; margin-top: 20px; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>JACK<span>™</span> ESSENTIALS</h1>
+      </div>
+      <div class="content">
+        ${message}
+      </div>
+      <div class="footer">
+        <p>You received this email because you are subscribed to Jack Essentials updates.</p>
+        <p style="margin-top: 8px;">© ${new Date().getFullYear()} Jack Essentials. All rights reserved.</p>
+      </div>
+    </div>
+  </body>
+  </html>
+  `;
+};
+
+// You can add more templates here later (Welcome, OTP, Login Alert, etc.)
+
+
+// 3. Premium Login Security Alert Template
+const getLoginAlertTemplate = (name, device, time, ip, lockLink) => {
+  return `
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <style>
+      body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f1f5f9; margin: 0; padding: 0; }
+      .container { max-width: 600px; margin: 40px auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border-top: 4px solid #ef4444; }
+      .header { padding: 25px; text-align: center; background-color: #fef2f2; }
+      .header h1 { margin: 0; color: #b91c1c; font-size: 20px; text-transform: uppercase; letter-spacing: 1px; }
+      .content { padding: 30px; color: #334155; font-size: 15px; line-height: 1.6; }
+      .alert-box { background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 15px; margin: 20px 0; font-size: 14px; }
+      .alert-box strong { color: #0f172a; }
+      .btn-danger { display: block; width: 100%; text-align: center; background-color: #ef4444; color: #ffffff !important; text-decoration: none; padding: 14px 0; border-radius: 8px; font-weight: bold; font-size: 16px; margin-top: 25px; text-transform: uppercase; letter-spacing: 1px; }
+      .footer { background-color: #f8fafc; padding: 20px; text-align: center; border-top: 1px solid #e2e8f0; }
+      .footer p { color: #94a3b8; font-size: 12px; margin: 0; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>⚠️ Security Alert: New Login</h1>
+      </div>
+      <div class="content">
+        <p>Hi <strong>${name}</strong>,</p>
+        <p>We noticed a new login to your Jack Essentials account. If this was you, you can safely ignore this email.</p>
+        
+        <div class="alert-box">
+          <p style="margin: 0 0 8px 0;"><strong>Device/Browser:</strong> ${device}</p>
+          <p style="margin: 0 0 8px 0;"><strong>Time:</strong> ${time}</p>
+          <p style="margin: 0;"><strong>IP Address:</strong> ${ip}</p>
+        </div>
+
+        <p style="color: #ef4444; font-weight: bold; margin-top: 25px;">Not you? Secure your account immediately.</p>
+        <p>Clicking the button below will lock your account and log out the unauthorized device. You will need to set a new security PIN to unlock it.</p>
+        
+        <a href="${lockLink}" class="btn-danger">Lock My Account Now</a>
+      </div>
+      <div class="footer">
+        <p>Jack Essentials Security Team</p>
+        <p style="margin-top: 8px;">© ${new Date().getFullYear()} Jack Essentials. All rights reserved.</p>
+      </div>
+    </div>
+  </body>
+  </html>
+  `;
+};
+
+const getWelcomeTemplate = (name) => {
+  const BRAND_COLOR = "#FF4500";
+  const DARK_BG = "#0f172a";
+
+  return `
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <style>
+      body { font-family: 'Inter', 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f4f4f5; margin: 0; padding: 0; }
+      .container { max-width: 600px; margin: 40px auto; background-color: #ffffff; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.05); }
+      
+      /* Mast Banner Image */
+      .hero-image { width: 100%; height: 200px; background-color: ${DARK_BG}; object-fit: cover; display: block; }
+      
+      .header { text-align: center; padding: 30px 20px 10px; }
+      .header h1 { margin: 0; color: ${DARK_BG}; font-size: 28px; font-weight: 900; letter-spacing: -0.5px; }
+      .header span { color: ${BRAND_COLOR}; }
+      
+      .content { padding: 20px 40px 40px; text-align: center; }
+      .content h2 { color: #18181b; font-size: 22px; margin-bottom: 15px; }
+      .content p { font-size: 16px; line-height: 1.6; color: #52525b; margin-bottom: 25px; }
+      
+      /* Cute Info Box */
+      .perks-box { background-color: #fff7ed; border: 1px dashed #fdba74; border-radius: 12px; padding: 20px; margin-bottom: 30px; text-align: left; }
+      .perks-box h3 { margin: 0 0 10px 0; color: #ea580c; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }
+      .perks-box ul { margin: 0; padding-left: 20px; color: #9a3412; font-size: 14px; line-height: 1.8; }
+      
+      /* Button */
+      .btn { display: inline-block; background-color: ${BRAND_COLOR}; color: #ffffff !important; text-decoration: none; padding: 16px 36px; border-radius: 50px; font-weight: bold; font-size: 16px; box-shadow: 0 4px 15px rgba(255, 69, 0, 0.3); transition: all 0.3s ease; }
+      
+      .footer { background-color: #fafafa; padding: 30px; text-align: center; border-top: 1px solid #f4f4f5; }
+      .social-links { margin-bottom: 15px; }
+      .social-links a { color: #a1a1aa; text-decoration: none; margin: 0 10px; font-weight: bold; font-size: 14px; }
+      .footer p { color: #a1a1aa; font-size: 12px; margin: 0; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <img src="https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?q=80&w=600&auto=format&fit=crop" alt="Welcome to Jack Essentials" class="hero-image" />
+      
+      <div class="header">
+        <h1>JACK<span>™</span> ESSENTIALS</h1>
+      </div>
+      
+      <div class="content">
+        <h2>Welcome to the Elite Club, ${name}! 🎉</h2>
+        <p>Your account is locked in. You are now officially part of the most exclusive community for premium lifestyle essentials.</p>
+        
+        <div class="perks-box">
+          <h3>✨ Your Exclusive Perks</h3>
+          <ul>
+            <li>Early access to upcoming drops and sales.</li>
+            <li>Priority VIP customer support.</li>
+            <li>Seamless and lightning-fast checkout.</li>
+          </ul>
+        </div>
+        
+        <a href="https://thejackessentials.com" class="btn">Start Shopping Now</a>
+      </div>
+      
+      <div class="footer">
+        <div class="social-links">
+          <a href="https://thejackessentials.com">Visit Store</a> | 
+          <a href="https://thejackessentials.com/help-center">Help Center</a>
+        </div>
+        <p>If you didn't create this account, please contact support immediately.</p>
+        <p style="margin-top: 8px;">© ${new Date().getFullYear()} Jack Essentials. All rights reserved.</p>
+      </div>
+    </div>
+  </body>
+  </html>
+  `;
+};
+
+const getResetOtpTemplate = (otp) => {
+  const BRAND_COLOR = "#FF4500";
+  const DARK_BG = "#0f172a";
+
+  return `
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <style>
+      body { font-family: 'Inter', Arial, sans-serif; background-color: #f4f4f5; margin: 0; padding: 0; }
+      .container { max-width: 500px; margin: 40px auto; background-color: #ffffff; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.05); border-top: 5px solid ${BRAND_COLOR}; }
+      .header { background-color: ${DARK_BG}; padding: 30px; text-align: center; }
+      .header h1 { margin: 0; color: #ffffff; font-size: 22px; letter-spacing: 2px; text-transform: uppercase; }
+      .content { padding: 40px; text-align: center; }
+      .content h2 { color: #1e293b; font-size: 20px; margin-bottom: 20px; }
+      .otp-box { background-color: #f8fafc; border: 2px dashed ${BRAND_COLOR}; border-radius: 12px; padding: 20px; font-size: 36px; font-weight: 900; color: ${DARK_BG}; letter-spacing: 8px; margin: 30px 0; }
+      .expiry { font-size: 14px; color: #64748b; margin-top: 10px; }
+      .footer { padding: 20px; text-align: center; color: #94a3b8; font-size: 12px; background: #f8fafc; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>JACK<span>™</span> ESSENTIALS</h1>
+      </div>
+      <div class="content">
+        <h2>Security Verification</h2>
+        <p>You requested to reset your password. Please use the following OTP to complete the process:</p>
+        <div class="otp-box">${otp}</div>
+        <p class="expiry">⚠️ <strong>This OTP is valid for 10 minutes only.</strong></p>
+        <p style="font-size: 12px; margin-top: 20px;">If you did not request this, please ignore this email or contact support immediately.</p>
+      </div>
+      <div class="footer">
+        <p>© ${new Date().getFullYear()} Jack Essentials. All rights reserved.</p>
+      </div>
+    </div>
+  </body>
+  </html>
+  `;
+};
+
+// 🔥 6. NEW: PASSWORD SUCCESSFULLY CHANGED TEMPLATE 🔥
+const getPasswordChangedTemplate = (name, loginLink) => {
+  const BRAND_COLOR = "#FF4500";
+  const DARK_BG = "#0f172a";
+  const SUCCESS_GREEN = "#10b981";
+
+  return `
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <style>
+      body { font-family: 'Inter', 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f4f4f5; margin: 0; padding: 0; }
+      .container { max-width: 550px; margin: 40px auto; background-color: #ffffff; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.05); border-top: 5px solid ${SUCCESS_GREEN}; }
+      
+      .header { background-color: ${DARK_BG}; padding: 30px; text-align: center; }
+      .header h1 { margin: 0; color: #ffffff; font-size: 22px; letter-spacing: 2px; text-transform: uppercase; }
+      .header span { color: ${BRAND_COLOR}; }
+      
+      .content { padding: 40px; text-align: center; }
+      .icon-box { width: 70px; height: 70px; background-color: #d1fae5; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 25px; }
+      
+      .content h2 { color: #0f172a; font-size: 24px; margin-top: 0; margin-bottom: 15px; font-weight: 900; letter-spacing: -0.5px; }
+      .content p { color: #475569; font-size: 16px; line-height: 1.6; margin-bottom: 25px; }
+      
+      .btn { display: inline-block; background-color: ${DARK_BG}; color: #ffffff !important; text-decoration: none; padding: 15px 35px; border-radius: 50px; font-weight: bold; font-size: 15px; transition: all 0.3s ease; letter-spacing: 1px; margin-bottom: 20px; }
+      
+      .warning-box { margin-top: 30px; background-color: #fef2f2; border: 1px dashed #fca5a5; padding: 20px; border-radius: 12px; font-size: 13px; color: #ef4444; text-align: left; }
+      .warning-box strong { display: block; margin-bottom: 5px; font-size: 14px; }
+      
+      .footer { background-color: #f8fafc; padding: 25px; text-align: center; border-top: 1px solid #f1f5f9; }
+      .social-links { margin-bottom: 15px; }
+      .social-links a { color: #64748b; text-decoration: none; margin: 0 12px; font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; }
+      .footer p { color: #94a3b8; font-size: 12px; margin: 0; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>JACK<span>™</span> ESSENTIALS</h1>
+      </div>
+      
+      <div class="content">
+        <div class="icon-box">
+          <span style="font-size: 35px;">✅</span>
+        </div>
+        
+        <h2>Password Changed Successfully</h2>
+        <p>Hi <strong>${name || 'Customer'}</strong>,</p>
+        <p>Your Jack Essentials account password has been successfully updated. You can now use your new password to log in and access your account.</p>
+        
+        <a href="${loginLink || 'https://thejackessentials.com/login'}" class="btn">LOGIN TO ACCOUNT</a>
+
+        <div class="warning-box">
+          <strong>⚠️ Didn't make this change?</strong>
+          If you did not change your password, your account may be compromised. Please contact our support team immediately to secure your account.
+        </div>
+      </div>
+      
+      <div class="footer">
+        <div class="social-links">
+          <a href="https://thejackessentials.com/shop">Shop</a> | 
+          <a href="https://thejackessentials.com/help-center">Support</a>
+        </div>
+        <p>© ${new Date().getFullYear()} Jack Essentials. All rights reserved.</p>
+      </div>
+    </div>
+  </body>
+  </html>
+  `;
+};
+
+// Ensure you update your module.exports at the bottom of the file!
+module.exports = {
+  getReportTemplate,
+  getBulkEmailTemplate,
+  getLoginAlertTemplate, // 🔥 Ise add karna mat bhulna
+  getWelcomeTemplate,
+  getResetOtpTemplate,
+  getPasswordChangedTemplate
+};
