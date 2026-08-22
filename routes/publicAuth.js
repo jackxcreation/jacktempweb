@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const nodemailer = require('nodemailer');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto'); // 🔥 ADDED FOR SECURE OTP
+const rateLimit = require('express-rate-limit'); // 🔥 ADDED FOR BRUTE FORCE PROTECTION
 const User = require('../models/User');
 
 // ==========================================
@@ -10,15 +12,19 @@ const User = require('../models/User');
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    // ⚠️ PRO FIX: Hamesha .env file use karo credentials ke liye
     user: process.env.EMAIL_USER, 
     pass: process.env.EMAIL_PASS  
   }
 });
 
-// Global Memory for OTPs 
-// (Pro Tip: For massive scale later, use Redis instead of Map)
 const otpStore = new Map();
+
+// 🔥 Brute-Force Rate Limiter for Verification Route
+const otpVerifyLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000, 
+  max: 10, // Max 10 requests total to this IP for verification
+  message: { error: "Too many attempts from this IP. Please wait." }
+});
 
 // ==========================================
 // 1. 🚀 ROUTE: SEND SECURE OTP
@@ -28,27 +34,25 @@ router.post('/send-otp', async (req, res) => {
     if (!req.body.email) return res.status(400).json({ error: "Email address is required." });
 
     const email = req.body.email.toLowerCase().trim();
-
-    // 🔥 PRO FEATURE: Anti-Spam (60 Seconds Cooldown) 🔥
-    const existingRecord = otpStore.get(email);
     const now = Date.now();
+    const existingRecord = otpStore.get(email);
+
     if (existingRecord && existingRecord.requestedAt > now - 60000) {
       return res.status(429).json({ error: "Please wait 60 seconds before requesting a new OTP." });
     }
 
-    // Generate 6-digit secure OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    // 🔥 SECURITY FIX: Cryptographically Secure OTP instead of Math.random()
+    const otp = crypto.randomInt(100000, 999999).toString();
     
-    // Save to memory (Expires in 5 mins)
     otpStore.set(email, { 
       otp, 
       expires: now + 5 * 60 * 1000,
-      requestedAt: now 
+      requestedAt: now,
+      attempts: 0 // 🔥 Track wrong guesses
     });
     
     console.log(`[AUTH] OTP Generated for: '${email}'`);
 
-    // 🔥 PRO FEATURE: Premium Branded HTML Email Template 🔥
     const mailOptions = {
       from: '"Jack Essentials Security" <no-reply@jackessentials.com>',
       to: email,
@@ -85,7 +89,7 @@ router.post('/send-otp', async (req, res) => {
 // ==========================================
 // 2. 🛡️ ROUTE: VERIFY OTP & LOGIN/REGISTER
 // ==========================================
-router.post('/verify-otp', async (req, res) => {
+router.post('/verify-otp', otpVerifyLimiter, async (req, res) => {
   try {
     if (!req.body.email || !req.body.otp) {
       return res.status(400).json({ error: "Email and OTP are required." });
@@ -96,24 +100,30 @@ router.post('/verify-otp', async (req, res) => {
 
     const record = otpStore.get(email);
 
-    // Strict Validation
     if (!record) {
       return res.status(400).json({ error: "OTP has expired or was not requested." });
     }
 
     if (Date.now() > record.expires) {
-      otpStore.delete(email); // Clean up
+      otpStore.delete(email); 
       return res.status(400).json({ error: "This OTP has expired. Please request a new one." });
     }
 
+    // 🔥 SECURITY FIX: Anti-Brute Force (Max 3 wrong guesses allowed)
+    if (record.attempts >= 3) {
+      otpStore.delete(email);
+      return res.status(403).json({ error: "Too many wrong guesses. OTP invalidated. Request a new one." });
+    }
+
     if (record.otp !== otp) {
-      return res.status(400).json({ error: "Invalid verification code." });
+      record.attempts += 1;
+      otpStore.set(email, record); // Save incremented attempt
+      return res.status(400).json({ error: `Invalid verification code. Attempts left: ${3 - record.attempts}` });
     }
 
     // OTP Verified! Remove it from memory to prevent reuse
     otpStore.delete(email);
 
-    // 🔥 PRO FEATURE: Smart User Management 🔥
     let user = await User.findOne({ email });
     let isNewUser = false;
 
@@ -122,16 +132,21 @@ router.post('/verify-otp', async (req, res) => {
       user = new User({ 
         name: "Valued Customer", 
         email, 
-        role: "customer"
-        // Password field is skipped/empty because login is via OTP
+        role: "user" // Changed to 'user' for consistency with users.js
       });
       await user.save();
     }
 
-    // Generate JWT Token
+    // 🔥 SECURITY FIX: Removed Fallback Secret. If env is missing, it MUST crash safely.
+    if (!process.env.JWT_SECRET) {
+      console.error("🚨 CRITICAL ALERT: JWT_SECRET IS MISSING IN ENVIRONMENT VARIABLES!");
+      return res.status(500).json({ error: "Server Configuration Error" });
+    }
+
+    // Generate Secure JWT Token
     const token = jwt.sign(
       { id: user._id, role: user.role }, 
-      process.env.JWT_SECRET || 'jack_super_secret_key_2026', 
+      process.env.JWT_SECRET, 
       { expiresIn: '7d' }
     );
 
@@ -139,7 +154,7 @@ router.post('/verify-otp', async (req, res) => {
       message: "Authentication successful.", 
       token, 
       user,
-      isNewUser // Frontend can use this to show a special welcome screen
+      isNewUser 
     });
 
   } catch (error) {

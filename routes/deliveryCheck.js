@@ -1,16 +1,30 @@
 const express = require('express');
 const router = express.Router();
+const rateLimit = require('express-rate-limit'); // 🔥 ADDED: For API protection
 
-// 🔥 Pincode Check & ETA Calculation Route 🔥
-router.get('/delivery-check', async (req, res) => {
+// ==========================================
+// 🛡️ SECURITY: Pincode Check Rate Limiter
+// ==========================================
+// Ek IP se 15 minute mein max 30 requests allow hongi
+const pincodeLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, 
+    max: 30, 
+    message: { success: false, message: "Too many requests. Please try again later." }
+});
+
+// ==========================================
+// 📍 Pincode Check & ETA Calculation Route
+// ==========================================
+router.get('/delivery-check', pincodeLimiter, async (req, res) => {
     try {
         const { pincode } = req.query;
         
-        if (!pincode || pincode.length !== 6) {
-            return res.status(400).json({ success: false, message: 'Invalid Pincode' });
+        // 🔥 SECURITY FIX: Strict Regex Validation (Must be exactly 6 numeric digits)
+        if (!pincode || !/^\d{6}$/.test(pincode)) {
+            return res.status(400).json({ success: false, message: 'Invalid Pincode. Please enter a 6-digit number.' });
         }
 
-        // 1. Backend se Delhivery ko call ja raha hai (Frontend ko token nahi dikhega)
+        // 1. Backend se Delhivery ko call ja raha hai
         const response = await fetch(`https://track.delhivery.com/c/api/pin-codes/json/?filter_codes=${pincode}`, {
             method: 'GET',
             headers: {
@@ -19,14 +33,22 @@ router.get('/delivery-check', async (req, res) => {
             }
         });
         
-        const data = await response.json();
+        // 🔥 CRASH FIX: Safe JSON Parsing (Prevents crash if Delhivery sends HTML error page)
+        const rawText = await response.text();
+        let data;
+        try {
+            data = JSON.parse(rawText);
+        } catch (parseError) {
+            console.error("Delhivery API returned non-JSON response:", rawText);
+            return res.status(502).json({ success: false, message: "Courier service is temporarily down. Please try again later." });
+        }
 
         // 2. Agar Pincode Delhivery ke paas available hai
         if (data && data.delivery_codes && data.delivery_codes.length > 0) {
             const zoneInfo = data.delivery_codes[0].postal_code;
             const isCOD = zoneInfo.cod === "Y";
             
-            // 3. Smart ETA Calculation (Tere Odisha Operations ke hisaab se)
+            // 3. Smart ETA Calculation
             let transitDays = 5; // Default poore India ke liye
             
             // 75 or 76 starts means Odisha (Jagatsinghpur/Bhubaneswar region)

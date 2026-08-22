@@ -2,12 +2,15 @@ const express = require('express');
 const router = express.Router();
 const { Order } = require('../models');
 
+// 🚨 IMPORT AUTH MIDDLEWARES (Ensure you have these ready)
+const { protect, admin } = require('../middleware/authMiddleware');
+
 // ==========================================
 // 🛒 3. ORDER APIs (Real-time Socket.IO Enabled)
 // ==========================================
 
-// 1. AWB GENERATION ROUTE
-router.post('/api/orders/:id/generate-awb', async (req, res) => {
+// 1. AWB GENERATION ROUTE - STRICTLY ADMIN ONLY
+router.post('/api/orders/:id/generate-awb', protect, admin, async (req, res) => {
   try {
     const { id } = req.params;
     const order = await Order.findById(id);
@@ -24,13 +27,12 @@ router.post('/api/orders/:id/generate-awb', async (req, res) => {
 });
 
 // ==========================================
-// 🖨️ FETCH DELHIIVERY LABEL (FLIPKART-LEVEL BULLETPROOF)
+// 🖨️ FETCH DELHIIVERY LABEL - STRICTLY ADMIN ONLY
 // ==========================================
-router.get('/api/orders/label/:awb', async (req, res) => {
+router.get('/api/orders/label/:awb', protect, admin, async (req, res) => {
   try {
     const { awb } = req.params;
     
-    // Delhivery API to get Packing Slip (Forcing format=json)
     const response = await fetch(`https://track.delhivery.com/api/p/packing_slip?format=json&wbns=${awb}`, {
       method: 'GET',
       headers: {
@@ -39,7 +41,6 @@ router.get('/api/orders/label/:awb', async (req, res) => {
       }
     });
     
-    // 🔥 MAKHAAN FIX: Seedha JSON parse mat karo, pehle text lo.
     const rawText = await response.text(); 
     
     try {
@@ -49,7 +50,6 @@ router.get('/api/orders/label/:awb', async (req, res) => {
         console.log("Delhivery sent raw HTML instead of JSON for label.");
         res.status(200).json({ isHtml: true, htmlContent: rawText });
     }
-
   } catch (error) {
     console.error("Label Fetch Catch Error:", error);
     res.status(500).json({ success: false, message: "Server error fetching label" });
@@ -57,19 +57,19 @@ router.get('/api/orders/label/:awb', async (req, res) => {
 });
 
 // ==========================================
-// 🚚 SCHEDULE PICKUP / MANIFEST (DYNAMIC)
+// 🚚 SCHEDULE PICKUP / MANIFEST - STRICTLY ADMIN ONLY
 // ==========================================
-router.post('/api/orders/pickup', async (req, res) => {
+router.post('/api/orders/pickup', protect, admin, async (req, res) => {
   try {
     const { package_count, location_name } = req.body;
     
     const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1); // Agle din ka pickup
+    tomorrow.setDate(tomorrow.getDate() + 1); 
 
     const payload = {
       "pickup_time": "14:00:00", 
       "pickup_date": tomorrow.toISOString().split('T')[0], 
-      "pickup_location": location_name || "JACK_HUB", // Ab ye Frontend se dynamic aayega
+      "pickup_location": location_name || "JACK_HUB", 
       "expected_package_count": package_count || 1
     };
 
@@ -96,9 +96,9 @@ router.post('/api/orders/pickup', async (req, res) => {
 });
 
 // ==========================================
-// 🚫 CANCEL DELHIIVERY SHIPMENT (🔥 BULLETPROOF FIXED)
+// 🚫 CANCEL DELHIIVERY SHIPMENT - STRICTLY ADMIN ONLY
 // ==========================================
-router.post('/api/orders/:id/cancel-shipment', async (req, res) => {
+router.post('/api/orders/:id/cancel-shipment', protect, admin, async (req, res) => {
   try {
     const { waybill } = req.body;
     
@@ -113,15 +113,12 @@ router.post('/api/orders/:id/cancel-shipment', async (req, res) => {
       body: JSON.stringify(payload)
     });
     
-    // 🔥 MAKHAAN FIX: Yahan response.json() crash karta tha HTML aane par. Ab text read karega.
     const rawText = await response.text();
     
     try {
         const data = JSON.parse(rawText);
         res.status(200).json(data);
     } catch (e) {
-        console.error("Delhivery sent raw HTML/Text during cancellation:", rawText);
-        // Backend crash hone ke bajaye frontend ko properly batayega ki error kya tha
         res.status(200).json({ success: false, message: "Delhivery Response Error", raw: rawText });
     }
   } catch (error) {
@@ -131,17 +128,31 @@ router.post('/api/orders/:id/cancel-shipment', async (req, res) => {
 });
 
 // ==========================================
-// MAIN ORDER CREATION ROUTE
+// 🛒 MAIN ORDER CREATION ROUTE - PROTECTED (LOGGED IN USERS ONLY)
 // ==========================================
-router.post('/api/orders', async (req, res) => {
+router.post('/api/orders', protect, async (req, res) => {
   try {
-    const { userId, items, totalAmount, status, address, paymentMethod, userDetails, trafficSource } = req.body;
-    const deviceInfo = req.headers['user-agent']?.includes('Mobile') ? 'Mobile Device' : 'Desktop / PC';
+    // 🔥 SECURITY FIX: Removed `userId` and `status` from req.body. We assign them securely on the server.
+    const { items, totalAmount, address, paymentMethod, userDetails, trafficSource } = req.body;
     
+    const secureUserId = req.user._id; // Extracted safely from JWT Token
+    const safeStatus = 'Pending'; // Never trust client for initial order status
+
+    const deviceInfo = req.headers['user-agent']?.includes('Mobile') ? 'Mobile Device' : 'Desktop / PC';
     const io = req.app.get("io"); 
 
+    // TODO: Extreme Security Level - Fetch product prices from DB here and calculate totalAmount dynamically on server instead of trusting req.body.totalAmount.
+
     const newOrder = new Order({ 
-      userId, items, totalAmount, status, address, paymentMethod, userDetails, deviceInfo, trafficSource 
+      userId: secureUserId, 
+      items, 
+      totalAmount, // Note: For 100% security, calculate this on backend later.
+      status: safeStatus, 
+      address, 
+      paymentMethod, 
+      userDetails, 
+      deviceInfo, 
+      trafficSource 
     });
     
     const savedOrder = await newOrder.save();
@@ -177,24 +188,18 @@ router.post('/api/orders', async (req, res) => {
                 totalQuantity = items.reduce((sum, item) => sum + (Number(item.quantity) || 1), 0);
             }
 
-            let totalWeight = 0;
-            let maxL = 0;
-            let maxB = 0;
-            let totalH = 0;
+            let totalWeight = 0, maxL = 15, maxB = 15, totalH = 10;
 
             if (Array.isArray(items) && items.length > 0) {
                 items.forEach(item => {
                     const qty = Number(item.quantity) || 1;
                     totalWeight += (Number(item.weight) || 500) * qty;
                     maxL = Math.max(maxL, Number(item.length) || 15);
-                    maxB = Math.max(maxB, Number(item.breadth) || 15);
+                    maxB = Math.max(maxB, Number(item.length) || 15);
                     totalH += (Number(item.height) || 10) * qty;
                 });
             } else {
                 totalWeight = 500;
-                maxL = 15;
-                maxB = 15;
-                totalH = 10;
             }
 
             const finalW = String(Math.round(totalWeight));
@@ -219,19 +224,10 @@ router.post('/api/orders', async (req, res) => {
                     return_add: "Jack Essentials Return Address", 
                     return_state: "Odisha", 
                     return_country: "India",
-                    
                     products_desc: productsDescription.substring(0, 120),
                     hsn_code: "",
-                    
-                    weight: finalW,
-                    length: finalL,
-                    breadth: finalB,
-                    height: finalH,
-                    
-                    shipment_length: finalL,
-                    shipment_width: finalB,
-                    shipment_height: finalH,
-
+                    weight: finalW, length: finalL, breadth: finalB, height: finalH,
+                    shipment_length: finalL, shipment_width: finalB, shipment_height: finalH,
                     cod_amount: isCod ? finalNumericAmount : 0,
                     order_date: new Date().toISOString(), 
                     total_amount: finalNumericAmount,
@@ -255,21 +251,15 @@ router.post('/api/orders', async (req, res) => {
                 body: urlEncodedData.toString()
             });
             
-            // 🔥 MAKHAAN FIX: Background Order creation ko bhi HTML Crash se bacha liya
             const rawDText = await dRes.text();
             try {
                 const dData = JSON.parse(rawDText);
                 if (dData.success || (dData.packages && dData.packages.length > 0)) {
                     const waybillNo = dData.packages[0]?.waybill || dData.waybill;
                     await Order.findByIdAndUpdate(savedOrder._id, { shiprocketOrderId: waybillNo });
-                } else {
-                    console.error("❌ Delhivery Manifest Error Response:", dData);
                 }
-            } catch (e) {
-                console.error("❌ Delhivery Manifest Raw HTML Error:", rawDText);
-            }
-
-        } catch (err) { console.error("❌ Background Delhivery Error:", err); }
+            } catch (e) { console.error("Delhivery Manifest Error"); }
+        } catch (err) { console.error("Background Delhivery Error:", err); }
       }, 100); 
     }
 
@@ -280,7 +270,10 @@ router.post('/api/orders', async (req, res) => {
   }
 });
 
-router.put('/api/orders/:id', async (req, res) => {
+// ==========================================
+// ✏️ UPDATE ORDER STATUS - STRICTLY ADMIN ONLY
+// ==========================================
+router.put('/api/orders/:id', protect, admin, async (req, res) => {
   try {
     const { status, adminNotes, refundStatus } = req.body;
     const io = req.app.get("io"); 
@@ -304,14 +297,25 @@ router.put('/api/orders/:id', async (req, res) => {
   }
 });
 
-router.get('/api/orders/user/:userId', async (req, res) => {
+// ==========================================
+// 👤 GET USER ORDERS - IDOR FIXED (User can only see their own orders)
+// ==========================================
+router.get('/api/orders/user/:userId', protect, async (req, res) => {
   try {
+    // 🔥 SECURITY FIX: Check if the logged-in user is requesting their OWN data, or if they are an admin.
+    if (req.user._id.toString() !== req.params.userId && req.user.role !== 'admin') {
+       return res.status(403).json({ message: "Access Denied: You can only view your own orders." });
+    }
+
     const orders = await Order.find({ userId: req.params.userId }).sort({ createdAt: -1 }).lean();
     res.json(orders.map(o => ({ ...o, id: o._id.toString() })));
   } catch (error) { res.status(500).json({ message: "Failed to fetch orders" }); }
 });
 
-router.get('/api/orders', async (req, res) => {
+// ==========================================
+// 📦 GET ALL ORDERS - STRICTLY ADMIN ONLY
+// ==========================================
+router.get('/api/orders', protect, admin, async (req, res) => {
   try {
     const orders = await Order.find().sort({ createdAt: -1 }).lean();
     res.json(orders.map(o => ({ ...o, id: o._id.toString() })));
