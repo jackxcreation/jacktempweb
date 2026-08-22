@@ -45,7 +45,6 @@ const Shop = ({ isLoggedIn, setIsLoggedIn }) => {
   } else if (sortBy === "rating") {
     filteredProducts.sort((a, b) => (b.rating || 0) - (a.rating || 0));
   } else if (sortBy === "newest") {
-    // Assuming higher ID or createdAt means newer
     filteredProducts.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
   }
 
@@ -193,7 +192,7 @@ const Shop = ({ isLoggedIn, setIsLoggedIn }) => {
             {filteredProducts.length > 0 ? (
               <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 md:gap-6">
                 {filteredProducts.map((product) => (
-                  <Link key={product.id} to={`/product/${product.id}`} className="block h-full outline-none">
+                  <Link key={product.id || product._id} to={`/product/${product.id || product._id}`} className="block h-full outline-none">
                     <motion.div 
                       initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: "-50px" }}
                       className="bg-white rounded-3xl p-3 shadow-sm hover:shadow-xl transition-all duration-300 border border-slate-100 group relative flex flex-col h-full overflow-hidden"
@@ -209,9 +208,15 @@ const Shop = ({ isLoggedIn, setIsLoggedIn }) => {
                         <FiHeart size={16} />
                       </button>
 
-                      {/* Image Container */}
+                      {/* Image Container - 🔥 PHASE 8: Added loading="lazy" for performance */}
                       <div className="w-full h-40 sm:h-52 bg-slate-50/50 rounded-2xl overflow-hidden mb-4 relative p-4 flex items-center justify-center">
-                        <img src={product.image} alt={product.title} className="max-w-full max-h-full object-contain mix-blend-multiply group-hover:scale-105 transition-transform duration-500" />
+                        <img 
+                          src={product.image || (product.images && product.images[0])} 
+                          alt={product.title} 
+                          loading="lazy"
+                          decoding="async"
+                          className="max-w-full max-h-full object-contain mix-blend-multiply group-hover:scale-105 transition-transform duration-500" 
+                        />
                         
                         {/* Quick Add Button (Desktop Hover) */}
                         <div className="absolute bottom-0 left-0 w-full p-2 translate-y-full group-hover:translate-y-0 transition-transform duration-300 hidden md:block">

@@ -6,7 +6,7 @@ const http = require('http');
 const { Server } = require("socket.io"); 
 const helmet = require('helmet'); 
 const rateLimit = require('express-rate-limit'); 
-const jwt = require('jsonwebtoken'); // 🔥 ADDED FOR SOCKET AUTH
+const jwt = require('jsonwebtoken');
 
 // 🔥 IMPORT YOUR SECURE MIDDLEWARES
 const { protect, admin } = require('./middleware/authMiddleware');
@@ -30,7 +30,21 @@ function getGeminiKeys() {
 
 const app = express();
 
-app.use(helmet()); 
+// ==========================================
+// 🔥 PHASE 9: TRUSTED PROXY & SECURE HEADERS
+// ==========================================
+app.set('trust proxy', 1); // For Vercel/Heroku/Nginx IPs
+
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "https://checkout.razorpay.com"],
+      connectSrc: ["'self'", "https://api.razorpay.com"]
+    }
+  },
+  hsts: { maxAge: 31536000, includeSubDomains: true, preload: true }
+})); 
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, 
@@ -39,8 +53,15 @@ const apiLimiter = rateLimit({
 });
 app.use(apiLimiter);
 
-app.use(express.json({ limit: '50mb' })); 
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+// ==========================================
+// 🔥 PHASE 9: STRICT PAYLOAD LIMITS
+// ==========================================
+// 1. Separate High Limit for AI/Upload Endpoint ONLY
+app.use('/api/generate-catalog', express.json({ limit: '50mb' }));
+
+// 2. Global Strict 1MB Limit for all other normal endpoints
+app.use(express.json({ limit: '1mb' })); 
+app.use(express.urlencoded({ limit: '1mb', extended: true }));
 
 app.use(cors({
   origin: [
@@ -58,12 +79,13 @@ app.use(cors({
 }));
 
 // ==========================================
-// 🏥 HEALTH CHECK & MONITORING (Emergent Requirement)
+// 🏥 HEALTH CHECK & MONITORING (Liveness/Readiness)
 // ==========================================
 app.get('/health', (req, res) => {
   res.status(200).json({ 
     status: 'OK', 
     uptime: process.uptime(),
+    dbState: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected',
     timestamp: new Date().toISOString()
   });
 });
@@ -98,7 +120,7 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/', require('./routes/warehouse'));
 app.use('/api', require('./routes/deliveryCheck'));
 
-// Webhook bypass handled in your payment route if implemented
+// Webhook bypass handled in your payment route natively
 app.use('/api', require('./routes/payment')); 
 
 // ==========================================
@@ -176,7 +198,6 @@ app.post('/api/chat', protect, async (req, res) => {
 // ==========================================
 const activeVisitors = new Map();
 
-// 🔥 MIDDLEWARE: Verify JWT on Socket Connection
 io.use(async (socket, next) => {
   try {
     const token = socket.handshake.auth.token;
@@ -187,7 +208,7 @@ io.use(async (socket, next) => {
     
     if (!user) return next(new Error('Authentication Error: User not found'));
     
-    socket.user = user; // Store user details in socket
+    socket.user = user; 
     next();
   } catch (err) {
     next(new Error('Authentication Error: Invalid token'));
@@ -198,14 +219,12 @@ io.on('connection', (socket) => {
   console.log(`🔒 Secure Connection: ${socket.user.email} (${socket.id})`);
 
   socket.on('lock_user_session', (userId) => {
-    // 🔥 SECURITY: Only Admins can kick users
     if (socket.user.role !== 'admin') return; 
     io.to(userId).emit('force_logout');
   });
 
   socket.on('escalate_to_human', async (data) => {
     try {
-      // Force userId from secure socket token, not client payload
       const secureUserId = socket.user._id.toString();
       
       let ticket = await Ticket.findOne({ userId: secureUserId, status: "open" });
@@ -224,7 +243,6 @@ io.on('connection', (socket) => {
 
   socket.on('admin_reply', async (data) => {
     try {
-      // 🔥 SECURITY: Only Admins can reply
       if (socket.user.role !== 'admin') return; 
 
       const ticket = await Ticket.findById(data.ticketId);
@@ -237,19 +255,17 @@ io.on('connection', (socket) => {
   });
 
   socket.on('join_user_room', (userId) => {
-    // 🔥 SECURITY: Ensure user can only join their OWN room, unless they are admin
     if (socket.user._id.toString() === userId || socket.user.role === 'admin') {
       socket.join(userId);
     }
   });
 
-  // Keep public metrics completely separate or sanitized
   socket.on('join_product_page', (data) => {
     activeVisitors.set(socket.id, {
       socketId: socket.id,
       productId: data.productId,
       productName: data.productName,
-      user: socket.user.name || 'Anonymous', // Use verified identity
+      user: socket.user.name || 'Anonymous', 
       device: data.device || 'Desktop',
       joinedAt: Date.now()
     });
@@ -269,10 +285,17 @@ io.on('connection', (socket) => {
   });
 });
 
-// 🔥 BULLETPROOFING: Global Error Handler
+// ==========================================
+// 🔥 PHASE 9: GLOBAL ERROR HANDLER (No raw messages in Prod)
+// ==========================================
 app.use((err, req, res, next) => {
   console.error("🚨 FATAL SERVER ERROR:", err.stack);
-  res.status(500).json({ message: "Something went wrong on the server!" });
+  res.status(500).json({ 
+    success: false,
+    message: process.env.NODE_ENV === 'production' 
+      ? "Internal Server Error" 
+      : err.message || "Something went wrong on the server!" 
+  });
 });
 
 const os = require('os');
@@ -288,6 +311,30 @@ function getLocalIp() {
 
 const PORT = process.env.PORT || 5000;
 const ip = getLocalIp();
+
+// ==========================================
+// 🔥 PHASE 9: GRACEFUL SHUTDOWN (Zero Downtime Deployments)
+// ==========================================
+const shutdownHandler = () => {
+  console.log('🔄 Received kill signal, shutting down gracefully...');
+  server.close(() => {
+    console.log('🛑 HTTP server closed.');
+    mongoose.connection.close(false, () => {
+      console.log('🛑 MongoDB connection closed safely.');
+      process.exit(0);
+    });
+  });
+
+  // Force close after 10 seconds if hanging
+  setTimeout(() => {
+    console.error('🚨 Could not close connections in time, forcefully shutting down');
+    process.exit(1);
+  }, 10000);
+};
+
+process.on('SIGTERM', shutdownHandler);
+process.on('SIGINT', shutdownHandler);
+
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Jack Essentials Backend running smoothly on port ${PORT}`);
 });

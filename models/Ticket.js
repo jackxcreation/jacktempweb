@@ -12,4 +12,5 @@ const ticketSchema = new mongoose.Schema({
   }]
 }, { timestamps: true });
 
-module.exports = mongoose.model('Ticket', ticketSchema);
+// YAHAN CHANGE KIYA HAI 🔥 - Ticket model ko overwrite hone se bachane ke liye
+module.exports = mongoose.models.Ticket || mongoose.model('Ticket', ticketSchema);

@@ -6,6 +6,10 @@ import { motion } from 'framer-motion';
 import { SpeedInsights } from "@vercel/speed-insights/react";
 import { Analytics } from "@vercel/analytics/react";
 
+// 🔥 PHASE 8: TANSTACK QUERY FOR CACHING & STALE TIME
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { API_URL } from './config'; // Needed for real session verification
+
 // Providers
 import { CartProvider } from './context/CartContext';
 import { UserProvider } from './context/UserContext';
@@ -35,6 +39,17 @@ const AboutUs = lazy(() => import('./pages/AboutUs'));
 const TermsOfService = lazy(() => import('./pages/TermsOfService'));
 const ContactUs = lazy(() => import('./pages/ContactUs'));
 const TrackOrder = lazy(() => import('./pages/TrackOrder'));
+
+// --- Phase 8: TanStack Query Setup ---
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 1000 * 60 * 5, // 5 minutes caching before background refetch
+      refetchOnWindowFocus: false, // Prevents excessive API calls
+      retry: 1, // Only retry once on failure
+    },
+  },
+});
 
 // --- Enterprise Core Utilities ---
 
@@ -69,6 +84,7 @@ const storage = {
   }
 };
 
+// Quick synchronous check
 const validateSession = () => {
   const token = storage.get('token');
   const user = storage.get('jack_user');
@@ -76,9 +92,7 @@ const validateSession = () => {
   if (!token || !user) return false;
   
   try {
-    // Attempt to parse user to ensure JSON is not corrupted
     JSON.parse(user);
-    // Basic JWT shape validation without decoding (Header.Payload.Signature)
     if (token.split('.').length !== 3 && token.length < 20) {
       return false; 
     }
@@ -206,7 +220,6 @@ const EnterpriseAnalyticsManager = () => {
           ...payload
         };
         window.EnterpriseDataLayer.push(eventContext);
-        // Fallback logging in dev environments
         if (process.env.NODE_ENV !== 'production') {
           console.debug(`[Analytics Event]: ${eventName}`, eventContext);
         }
@@ -217,7 +230,6 @@ const EnterpriseAnalyticsManager = () => {
       purchase: (orderData) => window.EnterpriseAnalytics.trackEvent('PurchaseCompleted', orderData),
     };
 
-    // Track Page View automatically
     window.EnterpriseAnalytics.trackEvent('PageView', { title: document.title });
 
   }, [location]);
@@ -229,7 +241,6 @@ const SEOManager = () => {
   const location = useLocation();
   
   useEffect(() => {
-    // Foundation for future Dynamic Canonical & OG tag injection
     let canonicalLink = document.querySelector("link[rel='canonical']");
     if (!canonicalLink) {
       canonicalLink = document.createElement('link');
@@ -298,94 +309,114 @@ const NotFound = () => (
 const App = () => {
   const [isLoggedIn, setIsLoggedIn] = useState(validateSession);
 
-  // Cross-tab authentication synchronization & auto-logout on corruption
   useEffect(() => {
-    const syncAuthState = () => {
-      const isValid = validateSession();
+    const syncAuthState = async () => {
+      let isValid = validateSession();
+      
+      // 🔥 PHASE 8 SECURITY: Async Backend Validation (Clear token on 401)
+      if (isValid) {
+        try {
+          const user = JSON.parse(storage.get('jack_user'));
+          const token = storage.get('token');
+          const userId = user.id || user._id;
+          
+          // Dummy lightweight fetch to verify JWT signature & expiry securely
+          const res = await fetch(`${API_URL}/orders/user/${userId}?limit=1`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          
+          if (res.status === 401 || res.status === 403) {
+            console.warn("Session expired or invalid token. Forcing logout.");
+            isValid = false;
+          }
+        } catch (e) {
+          // Keep local validity if network fails (prevent random logouts offline)
+          console.warn("Could not reach server for session validation", e);
+        }
+      }
+
       setIsLoggedIn(isValid);
       
-      // Cleanup corrupted state actively
+      // Cleanup corrupted or expired state actively
       if (!isValid && storage.get('token')) {
         storage.remove('token');
         storage.remove('jack_user');
       }
     };
 
+    // Run async validation on mount
     syncAuthState();
-    window.addEventListener('storage', syncAuthState);
-    return () => window.removeEventListener('storage', syncAuthState);
+
+    const handleStorageChange = () => syncAuthState();
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
-  // Utility to cleanly pass prop-drilled requirements without redundant JSX mapping
   const withAuth = (Component) => <Component isLoggedIn={isLoggedIn} setIsLoggedIn={setIsLoggedIn} />;
 
   return (
     <GlobalErrorBoundary>
-      <ProductProvider>
-        <UserProvider>
-          <CartProvider>
-            <SettingsProvider>
-              <Router>
-                <ScrollManager /> 
-                <EnterpriseAnalyticsManager /> 
-                <SEOManager />
-                
-                <Routes>
-                  {/* Storefront Architecture Pipeline */}
-                  <Route element={<StoreLayout />}>
-                    
-                    {/* Public Shopping Routes */}
-                    <Route path="/" element={withAuth(Home)} />
-                    <Route path="/shop" element={withAuth(Shop)} />
-                    <Route path="/product/:id" element={withAuth(ProductDetails)} />
-                    <Route path="/cart" element={withAuth(Cart)} />
-                    
-                    {/* Public Information Routes */}
-                    <Route path="/help-center" element={<HelpCenter />} />
-                    <Route path="/returns" element={<ReturnsPage />} />
-                    <Route path="/privacy-policy" element={<PrivacyPolicy />} />
-                    <Route path="/terms" element={<TermsOfService />} />
-                    <Route path="/about" element={<AboutUs />} />
-                    <Route path="/contact" element={<ContactUs />} />
-                    <Route path="/track-order" element={<TrackOrder />} />
+      {/* 🔥 PHASE 8: Wrapped App in QueryClientProvider */}
+      <QueryClientProvider client={queryClient}>
+        <ProductProvider>
+          <UserProvider>
+            <CartProvider>
+              <SettingsProvider>
+                <Router>
+                  <ScrollManager /> 
+                  <EnterpriseAnalyticsManager /> 
+                  <SEOManager />
+                  
+                  <Routes>
+                    <Route element={<StoreLayout />}>
+                      
+                      <Route path="/" element={withAuth(Home)} />
+                      <Route path="/shop" element={withAuth(Shop)} />
+                      <Route path="/product/:id" element={withAuth(ProductDetails)} />
+                      <Route path="/cart" element={withAuth(Cart)} />
+                      
+                      <Route path="/help-center" element={<HelpCenter />} />
+                      <Route path="/returns" element={<ReturnsPage />} />
+                      <Route path="/privacy-policy" element={<PrivacyPolicy />} />
+                      <Route path="/terms" element={<TermsOfService />} />
+                      <Route path="/about" element={<AboutUs />} />
+                      <Route path="/contact" element={<ContactUs />} />
+                      <Route path="/track-order" element={<TrackOrder />} />
 
-                    {/* Public Authentication Routes */}
-                    <Route path="/login" element={withAuth(Login)} />
-                    <Route path="/register" element={withAuth(Register)} />
-                    <Route path="/forgot-password" element={<ForgotPassword />} /> 
-                    <Route path="/secure-account" element={<SecureAccount />} />
-                    <Route path="/unlock-account" element={<UnlockAccount />} />
-                    
-                    {/* Protected Customer Routes */}
-                    <Route path="/checkout" element={
-                      <RequireAuth isLoggedIn={isLoggedIn}>
-                        {withAuth(Checkout)}
-                      </RequireAuth>
-                    } />
-                    <Route path="/profile" element={
-                      <RequireAuth isLoggedIn={isLoggedIn}>
-                        {withAuth(Profile)}
-                      </RequireAuth>
-                    } />
-                    <Route path="/order/:id" element={
-                      <RequireAuth isLoggedIn={isLoggedIn}>
-                        {withAuth(OrderDetails)}
-                      </RequireAuth>
-                    } />
-                    
-                    {/* Fallback Route */}
-                    <Route path="*" element={<NotFound />} />
-                  </Route>
-                </Routes>
+                      <Route path="/login" element={withAuth(Login)} />
+                      <Route path="/register" element={withAuth(Register)} />
+                      <Route path="/forgot-password" element={<ForgotPassword />} /> 
+                      <Route path="/secure-account" element={<SecureAccount />} />
+                      <Route path="/unlock-account" element={<UnlockAccount />} />
+                      
+                      <Route path="/checkout" element={
+                        <RequireAuth isLoggedIn={isLoggedIn}>
+                          {withAuth(Checkout)}
+                        </RequireAuth>
+                      } />
+                      <Route path="/profile" element={
+                        <RequireAuth isLoggedIn={isLoggedIn}>
+                          {withAuth(Profile)}
+                        </RequireAuth>
+                      } />
+                      <Route path="/order/:id" element={
+                        <RequireAuth isLoggedIn={isLoggedIn}>
+                          {withAuth(OrderDetails)}
+                        </RequireAuth>
+                      } />
+                      
+                      <Route path="*" element={<NotFound />} />
+                    </Route>
+                  </Routes>
 
-                {/* Vercel Infrastructure Telemetry */}
-                <SpeedInsights />
-                <Analytics />
-              </Router>
-            </SettingsProvider>
-          </CartProvider>
-        </UserProvider>
-      </ProductProvider>
+                  <SpeedInsights />
+                  <Analytics />
+                </Router>
+              </SettingsProvider>
+            </CartProvider>
+          </UserProvider>
+        </ProductProvider>
+      </QueryClientProvider>
     </GlobalErrorBoundary>
   );
 };

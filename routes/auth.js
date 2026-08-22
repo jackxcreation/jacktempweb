@@ -2,8 +2,8 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const crypto = require('crypto'); // 🔥 ADDED FOR SECURE OTP & TOKENS
-const rateLimit = require('express-rate-limit'); // 🔥 ADDED FOR BRUTE FORCE PROTECTION
+const crypto = require('crypto'); 
+const rateLimit = require('express-rate-limit'); 
 const User = require('../models/User');
 
 const { Resend } = require('resend');
@@ -16,12 +16,30 @@ const {
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 // ==================================================
-// 🛡️ SECURITY: RATE LIMITERS (Brute-Force Protection)
+// 🛡️ PHASE 9: ENDPOINT-SPECIFIC RATE LIMITERS
 // ==================================================
-const authLimiter = rateLimit({
+const loginLimiter = rateLimit({
   windowMs: 5 * 60 * 1000, // 5 minutes
-  max: 10, // Limit each IP to 10 login/OTP requests per window
-  message: { error: "Too many attempts from this IP. Please wait 5 minutes." }
+  max: 5, // Max 5 login attempts per 5 minutes
+  message: { error: "Too many login attempts. Please try again after 5 minutes." }
+});
+
+const otpLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000, // 10 minutes
+  max: 3, // Max 3 OTP requests per 10 minutes per IP
+  message: { error: "Too many OTP requests. Please wait before trying again." }
+});
+
+const resetLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // Max 5 attempts for password reset/verify
+  message: { error: "Too many password reset attempts. Please try later." }
+});
+
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5, // Max 5 account creations per IP per hour
+  message: { error: "Too many accounts created from this IP. Please try later." }
 });
 
 // 🔥 Helper Function to Generate JWT Safely
@@ -40,7 +58,7 @@ const generateSecureToken = (user) => {
 // ==================================================
 // 1. PUBLIC REGISTRATION (Customers)
 // ==================================================
-router.post('/register', authLimiter, async (req, res) => {
+router.post('/register', registerLimiter, async (req, res) => {
   try {
     const { name, email, password } = req.body;
     const cleanEmail = email.toLowerCase().trim();
@@ -72,7 +90,7 @@ router.post('/register', authLimiter, async (req, res) => {
 // ==================================================
 // 2. USER / ADMIN LOGIN (WITH SECURITY ALERT & LOCK CHECK) 🔥
 // ==================================================
-router.post('/login', authLimiter, async (req, res) => {
+router.post('/login', loginLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
     const cleanEmail = email.toLowerCase().trim();
@@ -95,21 +113,17 @@ router.post('/login', authLimiter, async (req, res) => {
       return res.status(400).json({ error: "Invalid credentials. Please check your password." });
     }
 
-    // 🔥 MAIN FIX: Secure Token Generation without Fallback
     const token = generateSecureToken(user);
 
-    // 🔥 GENERATE SECURE LOCK TOKEN (To prevent IDOR on /lock-account)
     const lockToken = crypto.randomBytes(32).toString('hex');
     user.resetPasswordToken = lockToken;
     user.resetPasswordExpire = Date.now() + 3000000; // 50 Mins
     await user.save();
 
-    // 🔥 SECURITY ALERT EMAIL LOGIC
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'Unknown Location';
     const userAgent = req.headers['user-agent'] || 'Unknown Device';
     const time = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
     
-    // 🔥 FIX: Send Secure Token in URL instead of just the email
     const lockLink = `https://thejackessentials.com/secure-account?token=${lockToken}`;
     
     const accountAgeInMinutes = (Date.now() - new Date(user.createdAt || Date.now()).getTime()) / 60000;
@@ -137,7 +151,7 @@ router.post('/login', authLimiter, async (req, res) => {
 // ==================================================
 // 3. SOCIAL LOGIN (WITH ALERT & LOCK CHECK) 🔥
 // ==================================================
-router.post('/social-login', authLimiter, async (req, res) => {
+router.post('/social-login', loginLimiter, async (req, res) => {
   try {
     const { name, email, googleId } = req.body;
     const cleanEmail = email.toLowerCase().trim();
@@ -190,7 +204,7 @@ router.post('/social-login', authLimiter, async (req, res) => {
 // ==================================================
 // 4. 🔥 PASSWORD RESET: SEND SECURE OTP
 // ==================================================
-router.post('/send-otp', authLimiter, async (req, res) => {
+router.post('/send-otp', otpLimiter, async (req, res) => {
   try {
     const emailInput = req.body.email.trim();
     const emailRegex = new RegExp(`^${emailInput}$`, 'i');
@@ -198,7 +212,6 @@ router.post('/send-otp', authLimiter, async (req, res) => {
     const userExists = await User.findOne({ email: emailRegex });
     if (!userExists) return res.status(404).json({ error: "Account not found." });
 
-    // 🔥 SECURITY FIX: Use Crypto instead of Math.random
     const otp = crypto.randomInt(100000, 999999).toString();
     const salt = await bcrypt.genSalt(10);
     const hashedOTP = await bcrypt.hash(otp, salt);
@@ -229,7 +242,7 @@ router.post('/send-otp', authLimiter, async (req, res) => {
 // ==================================================
 // 5. 🔥 PASSWORD RESET: VERIFY OTP
 // ==================================================
-router.post('/verify-otp', authLimiter, async (req, res) => {
+router.post('/verify-otp', resetLimiter, async (req, res) => {
   try {
     const emailInput = req.body.email.trim();
     const otp = String(req.body.otp).trim();
@@ -264,7 +277,7 @@ router.post('/verify-otp', authLimiter, async (req, res) => {
 // ==================================================
 // 6. 🔥 RESET PASSWORD
 // ==================================================
-router.post('/reset-password', authLimiter, async (req, res) => {
+router.post('/reset-password', resetLimiter, async (req, res) => {
   try {
     const emailInput = req.body.email.trim();
     const otp = String(req.body.otp).trim();
@@ -317,7 +330,6 @@ router.post('/reset-password', authLimiter, async (req, res) => {
 // ==================================================
 router.post('/lock-account', async (req, res) => {
   try {
-    // 🔥 SECURITY FIX: Require the secret Token generated during login to lock account
     const { token, newSecurityCode } = req.body;
     if (!token || !newSecurityCode) return res.status(400).json({ error: "Token and PIN are required." });
 
@@ -331,7 +343,7 @@ router.post('/lock-account', async (req, res) => {
 
     user.isLocked = true;
     user.securityCode = hashedPin;
-    user.resetPasswordToken = undefined; // Invalidate the token so it can't be reused
+    user.resetPasswordToken = undefined; 
     user.resetPasswordExpire = undefined;
     await user.save();
     
@@ -345,7 +357,7 @@ router.post('/lock-account', async (req, res) => {
 // ==================================================
 // 8. 🔥 UNLOCK ACCOUNT API 🔥
 // ==================================================
-router.post('/unlock-account', authLimiter, async (req, res) => {
+router.post('/unlock-account', loginLimiter, async (req, res) => {
   try {
     const { email, pin } = req.body;
     const cleanEmail = email.toLowerCase().trim();

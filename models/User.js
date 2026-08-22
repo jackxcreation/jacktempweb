@@ -75,4 +75,5 @@ const userSchema = new mongoose.Schema({
   timestamps: true 
 });
 
-module.exports = mongoose.model('User', userSchema);
+// YAHAN CHANGE KIYA HAI 🔥 - Ab error nahi aayega!
+module.exports = mongoose.models.User || mongoose.model('User', userSchema);

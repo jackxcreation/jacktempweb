@@ -22,27 +22,27 @@ export const CartProvider = ({ children }) => {
   const [toastMessage, setToastMessage] = useState('');
 
   // ✅ NAYA BULLETPROOF CODE (Cloudinary URL ko allow karega)
-useEffect(() => {
-  const optimizedCart = cart.map(item => {
-    // Agar image ka data Base64 hai, sirf tabhi delete karo memory bachane ke liye
-    if (item.image && String(item.image).startsWith('data:image')) {
-      const { image, images, ...rest } = item; 
-      return rest;
-    }
-    // Agar Cloudinary URL ya normal link hai, toh rehne do
-    return item;
-  });
-
-  try {
-    localStorage.setItem(getCartKey(), JSON.stringify(optimizedCart));
-  } catch (error) {
-    console.error("Cart storage limit exceeded!", error);
-  }
-}, [cart]);
-
-  // 🔥 FIX 3: THE MAGIC OBSERVER (Login/Logout detect karke cart switch karega)
   useEffect(() => {
-    const checkAuthInterval = setInterval(() => {
+    const optimizedCart = cart.map(item => {
+      // Agar image ka data Base64 hai, sirf tabhi delete karo memory bachane ke liye
+      if (item.image && String(item.image).startsWith('data:image')) {
+        const { image, images, ...rest } = item; 
+        return rest;
+      }
+      // Agar Cloudinary URL ya normal link hai, toh rehne do
+      return item;
+    });
+
+    try {
+      localStorage.setItem(getCartKey(), JSON.stringify(optimizedCart));
+    } catch (error) {
+      console.error("Cart storage limit exceeded!", error);
+    }
+  }, [cart]);
+
+  // 🔥 PHASE 8 FIX: Removed 500ms polling interval. Using secure Auth State Event Listeners instead.
+  useEffect(() => {
+    const handleAuthChange = () => {
       const currentKey = getCartKey();
       const activeKey = localStorage.getItem('active_cart_key') || 'jack_cart_guest';
 
@@ -52,30 +52,44 @@ useEffect(() => {
         const savedCart = localStorage.getItem(currentKey);
         setCart(savedCart ? JSON.parse(savedCart) : []); // Naye user ka cart load karo
       }
-    }, 500); // Har half-second mein check karega (invisible to the user)
+    };
 
-    return () => clearInterval(checkAuthInterval);
+    // Listeners directly catch login/logout instead of wasting CPU every 500ms
+    window.addEventListener('storage', handleAuthChange);
+    // Custom event dispatch if login happens in same tab
+    window.addEventListener('jack_auth_change', handleAuthChange); 
+    
+    handleAuthChange(); // Initial check
+
+    return () => {
+      window.removeEventListener('storage', handleAuthChange);
+      window.removeEventListener('jack_auth_change', handleAuthChange);
+    };
   }, []);
 
-  // 🔥 Backend Sync Logic (As it was, but safer)
+  // 🔥 PHASE 8 FIX: Backend Sync Logic (Added Headers, Removed Full User Object, Sent only ID & QTY)
   useEffect(() => {
     const syncCartToBackend = async () => {
       const storedUser = JSON.parse(localStorage.getItem('jack_user'));
+      const token = localStorage.getItem('token');
       
-      const currentCartTotal = cart.reduce((total, item) => {
-        const priceString = String(item.price).replace(/[^0-9]/g, '');
-        return total + (parseInt(priceString, 10) * item.quantity);
-      }, 0);
-
-      if (storedUser && storedUser.id) {
+      if (storedUser && storedUser.id && token) {
         try {
+          // PHASE 8: Send product IDs and quantities only to backend (Save bandwidth & DB space)
+          const optimizedPayloadItems = cart.map(item => ({
+            productId: item.id || item._id,
+            quantity: item.quantity
+          }));
+
           await fetch(`${API_URL}/sync-cart`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}` // 🔥 PHASE 8: Add Authorization header to cart sync
+            },
             body: JSON.stringify({
-              user: storedUser,
-              items: cart, 
-              totalValue: currentCartTotal
+              userId: storedUser.id, // 🔥 PHASE 8: Do not send complete user object
+              items: optimizedPayloadItems 
             })
           });
         } catch (error) {
@@ -84,7 +98,12 @@ useEffect(() => {
       }
     };
 
-    syncCartToBackend();
+    // Debounce to prevent API spamming if user clicks "+/-" multiple times quickly
+    const syncTimeout = setTimeout(() => {
+      syncCartToBackend();
+    }, 1000);
+
+    return () => clearTimeout(syncTimeout);
   }, [cart]);
 
   // Calculations

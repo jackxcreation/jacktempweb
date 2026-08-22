@@ -5,4 +5,5 @@ const subscriberSchema = new mongoose.Schema({
   subscribedAt: { type: Date, default: Date.now }
 });
 
-module.exports = mongoose.model('Subscriber', subscriberSchema);
+// YAHAN CHANGE KIYA HAI 🔥 - Subscriber model ko overwrite hone se bachane ke liye
+module.exports = mongoose.models.Subscriber || mongoose.model('Subscriber', subscriberSchema);

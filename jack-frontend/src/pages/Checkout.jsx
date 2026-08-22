@@ -147,7 +147,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
     });
   }, []);
 
-  // FINAL ORDER SUBMISSION
+  // FINAL ORDER SUBMISSION (Used for COD or manual flow)
   const handleFinalOrderSubmission = useCallback(async (finalPaymentMethod, gatewayOrderId) => {
     setIsProcessing(true);
     const savedTraffic = localStorage.getItem('jack_traffic_source');
@@ -187,7 +187,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
     }
   }, [user, cart, finalTotal, selectedAddress, placeOrder, clearCart, navigate]);
 
-  // RAZORPAY PAYMENT INITIATION
+  // RAZORPAY PAYMENT INITIATION (🔥 100% SECURE BACKEND FLOW)
   const initiateRazorpayPayment = useCallback(async () => {
     setIsProcessing(true);
     const isLoaded = await loadRazorpayScript();
@@ -199,27 +199,58 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
     }
 
     try {
+      const token = localStorage.getItem("token");
+      const savedTraffic = localStorage.getItem('jack_traffic_source');
+      const trafficSource = savedTraffic ? JSON.parse(savedTraffic) : { source: 'Direct/Unknown', medium: 'organic', campaign: 'none' };
+
+      // 🔥 STEP 1: FRONTEND SIRF EK PENDING ORDER CREATE KAREGA
+      const orderRes = await fetch(`${API_URL}/orders`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}` 
+        },
+        body: JSON.stringify({
+          items: cart,
+          totalAmount: finalTotal, // Backend isko verify karega DB prices ke sath
+          address: selectedAddress,
+          paymentMethod: 'Razorpay Online',
+          trafficSource: trafficSource
+        })
+      });
+
+      const pendingOrder = await orderRes.json();
+      const pendingOrderId = pendingOrder._id || pendingOrder.id;
+
+      if (!pendingOrderId) {
+        alert("Failed to generate secure order ID from server.");
+        setIsProcessing(false);
+        return;
+      }
+
+      // 🔥 STEP 2: AB BACKEND KO ORDER ID BHEJO TAAKI WO REAL PRICE CALCULATE KARE
       const res = await fetch(`${API_URL}/payment/create-order`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({
-          amount: finalTotal * 100, 
-          currency: "INR",
-          receipt: `JACK_${Date.now()}`
+          orderId: pendingOrderId // 👈 Backend iski hi demand kar raha tha!
         })
       });
 
       const orderData = await res.json();
 
       if (!orderData.success || !orderData.order_id) {
-        alert("Backend Error: Could not create Razorpay Order.");
+        alert("Backend Error: " + (orderData.error || "Could not create Razorpay Order."));
         setIsProcessing(false);
         return;
       }
 
       const options = {
         key: import.meta.env.VITE_RAZORPAY_KEY_ID || process.env.REACT_APP_RAZORPAY_KEY_ID || "rzp_test_Sx5dYj7qO20PEX",
-        amount: orderData.amount,
+        amount: orderData.amount, // 🔥 Backend se aayi hui real securely calculated amount
         currency: orderData.currency,
         name: STORE_NAME,
         description: "Order Payment",
@@ -227,9 +258,14 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
         handler: async function (response) {
           try {
             setIsProcessing(true);
+            
+            // 🔥 STEP 3: PAYMENT VERIFY KARO
             const verifyRes = await fetch(`${API_URL}/payment/verify`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}` 
+              },
               body: JSON.stringify({
                 razorpay_payment_id: response.razorpay_payment_id,
                 razorpay_order_id: response.razorpay_order_id,
@@ -240,7 +276,15 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
             const verifyData = await verifyRes.json();
             
             if (verifyData.success) {
-              handleFinalOrderSubmission('Razorpay Online', response.razorpay_order_id);
+              // ✅ Success! (Backend webhook background mein status paid kar dega)
+              localStorage.removeItem('jack_traffic_source');
+              setStep(3); 
+              clearCart();
+              setIsProcessing(false);
+
+              setTimeout(() => {
+                navigate(`/order/${pendingOrderId}`); 
+              }, 2000);
             } else {
               alert("Payment verification failed! If money was deducted, it will be refunded.");
               setIsProcessing(false);
@@ -278,14 +322,13 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
       alert("Something went wrong initializing the payment gateway.");
       setIsProcessing(false);
     }
-  }, [finalTotal, loadRazorpayScript, newAddress, user, handleFinalOrderSubmission]);
+  }, [cart, finalTotal, selectedAddress, user, clearCart, navigate, loadRazorpayScript]);
 
   const handlePreCheckout = useCallback((e) => {
     e.preventDefault();
     if (!selectedAddress && !isAddingNew) return alert("Please select or add a delivery address first!");
 
     if (paymentMethod === 'online') {
-      // 🔥 FIX: Spelling theek kar di hai - ab initiateRazorpayPayment(); call hoga
       initiateRazorpayPayment(); 
     } else if (paymentMethod === 'cod') {
       handleFinalOrderSubmission('Cash on Delivery', `COD_${Date.now()}`); 
@@ -406,7 +449,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                         {user?.addresses && user.addresses.length > 0 && !isAddingNew ? (
                           <div className="space-y-4">
                             {user.addresses.map((addr, idx) => (
-    <label key={addr.id || addr._id || idx}
+                              <label key={addr.id || addr._id || idx}
                                 className={`flex items-start p-5 border-2 rounded-2xl cursor-pointer transition-all duration-200 outline-none focus-within:ring-4 focus-within:ring-[#FF4500]/20 ${
                                   selectedAddress?.id === addr.id 
                                     ? 'border-[#FF4500] bg-[#FF4500]/5 shadow-sm' 

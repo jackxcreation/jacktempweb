@@ -33,4 +33,5 @@ const settingSchema = new mongoose.Schema({
   timestamps: true 
 });
 
-module.exports = mongoose.model('Setting', settingSchema);
+// YAHAN CHANGE KIYA HAI 🔥 - Setting model ko overwrite hone se bachane ke liye
+module.exports = mongoose.models.Setting || mongoose.model('Setting', settingSchema);

@@ -5,7 +5,8 @@ import { io } from 'socket.io-client';
 const UserContext = createContext();
 export const useUser = () => useContext(UserContext);
 
-const socket = io(API_URL.replace('/api', ''));
+// 🔥 FIX: Initialize socket without auto-connecting so we can inject JWT token later
+const socket = io(API_URL.replace('/api', ''), { autoConnect: false });
 
 export const UserProvider = ({ children }) => {
   const [user, setUser] = useState(() => {
@@ -20,6 +21,9 @@ export const UserProvider = ({ children }) => {
 
   const [orders, setOrders] = useState([]);
 
+  // Helper function to safely get Token
+  const getToken = () => localStorage.getItem('token');
+
   // 🔥 FIX: Safe ID getter for all useEffects
   useEffect(() => {
     const userId = user?.id || user?._id;
@@ -31,7 +35,12 @@ export const UserProvider = ({ children }) => {
 
   const syncRecentlyViewed = async (userId) => {
     try {
-      const res = await fetch(`${API_URL}/users/get-valid-recently-viewed/${userId}`);
+      const res = await fetch(`${API_URL}/users/get-valid-recently-viewed/${userId}`, {
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${getToken()}` // 🔥 ADDED TOKEN
+        }
+      });
       if (res.ok) {
         const validProducts = await res.json();
         setRecentlyViewed(validProducts);
@@ -39,6 +48,15 @@ export const UserProvider = ({ children }) => {
         localStorage.setItem('jack_user', JSON.stringify(updatedUser));
       }
     } catch (error) { console.error("Sync Recently Viewed Error:", error); }
+  };
+
+  // HELPER: Connect socket with auth token
+  const connectSecureSocket = () => {
+    const token = getToken();
+    if (token) {
+      socket.auth = { token }; // 🔥 PASS JWT TO SOCKET
+      socket.connect();
+    }
   };
 
   const loginUser = async (email, password) => {
@@ -53,12 +71,15 @@ export const UserProvider = ({ children }) => {
         setUser(data.user);
         setRecentlyViewed(data.user.recentlyViewed || []);
         localStorage.setItem('jack_user', JSON.stringify(data.user));
-        localStorage.setItem('token', data.token || 'real_user_token'); 
+        localStorage.setItem('token', data.token); 
         
         // 🔥 FIX: Safe ID fallback
         const validId = data.user.id || data.user._id;
         fetchUserOrders(validId);
         
+        // Connect socket after successful login
+        connectSecureSocket();
+
         return { success: true };
       }
       return { success: false, message: data.error || data.message || "Login failed" }; 
@@ -77,12 +98,14 @@ export const UserProvider = ({ children }) => {
         setUser(data.user);
         setRecentlyViewed(data.user.recentlyViewed || []);
         localStorage.setItem('jack_user', JSON.stringify(data.user));
-        localStorage.setItem('token', data.token || 'oauth_token');
+        localStorage.setItem('token', data.token);
         
         // 🔥 FIX: Safe ID fallback
         const validId = data.user.id || data.user._id;
         fetchUserOrders(validId);
         
+        connectSecureSocket();
+
         return { success: true, isNewUser: data.isNewUser }; 
       }
       return { success: false };
@@ -95,11 +118,17 @@ export const UserProvider = ({ children }) => {
     setRecentlyViewed([]);
     localStorage.removeItem('jack_user');
     localStorage.removeItem('token');
+    socket.disconnect(); // 🔥 DISCONNECT SOCKET ON LOGOUT
   };
 
   const fetchUserOrders = async (userId) => {
     try {
-      const res = await fetch(`${API_URL}/orders/user/${userId}`);
+      const res = await fetch(`${API_URL}/orders/user/${userId}`, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${getToken()}` // 🔥 ADDED TOKEN
+        }
+      });
       if (!res.ok) throw new Error("Fetch failed");
       const data = await res.json();
       setOrders(data);
@@ -109,25 +138,24 @@ export const UserProvider = ({ children }) => {
   // 🔥 BULLETPROOF PLACE ORDER 🔥
   const placeOrder = async (items, totalAmount, address, paymentMethod, trafficSource) => {
     if (!user) return { success: false, error: "Please login first" };
-    
-    // Defensive ID check
-    const userId = user.id || user._id;
 
     const orderData = { 
-      userId, 
       items, 
       totalAmount: totalAmount.toString(), 
-      status: "Processing",
       address,
       paymentMethod,
       userDetails: { name: user.name, email: user.email },
       trafficSource 
+      // Removed userId and status; backend handles this securely via JWT now
     };
 
     try {
       const res = await fetch(`${API_URL}/orders`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${getToken()}` // 🔥 ADDED TOKEN
+        },
         body: JSON.stringify(orderData)
       });
       
@@ -155,11 +183,13 @@ export const UserProvider = ({ children }) => {
     
     setRecentlyViewed(newHistory);
     try {
-      // 🔥 FIX: Safe ID fallback
       const userId = user.id || user._id;
       await fetch(`${API_URL}/users/${userId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${getToken()}` // 🔥 ADDED TOKEN
+        },
         body: JSON.stringify({ recentlyViewed: newHistory })
       });
       const updatedUser = { ...user, recentlyViewed: newHistory };
@@ -171,12 +201,14 @@ export const UserProvider = ({ children }) => {
   const updateUserProfile = async (updatedData) => {
     if (!user) return false;
     try {
-      // 🔥 FIX: MAIN ISSUE RESOLVED HERE 🔥
       const userId = user.id || user._id;
       
       const res = await fetch(`${API_URL}/users/${userId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${getToken()}` // 🔥 ADDED TOKEN
+        },
         body: JSON.stringify(updatedData)
       });
       const data = await res.json();
@@ -197,7 +229,9 @@ export const UserProvider = ({ children }) => {
   useEffect(() => {
     const userId = user?.id || user?._id;
     if (userId) {
+      connectSecureSocket(); // Securely connect
       socket.emit('join_user_room', userId);
+      
       socket.on('force_logout', () => {
         logoutUser();
         alert("Your session was terminated for security.");
@@ -211,7 +245,7 @@ export const UserProvider = ({ children }) => {
     <UserContext.Provider value={{ 
       user, orders, recentlyViewed, 
       loginUser, socialLoginUser, logoutUser, placeOrder, cancelOrder, addRecentlyViewed, 
-      updateUserProfile, syncRecentlyViewed 
+      updateUserProfile, syncRecentlyViewed, socket
     }}>
       {children}
     </UserContext.Provider>
