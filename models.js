@@ -4,23 +4,40 @@ const mongoose = require('mongoose');
 // 1. PRODUCT SCHEMA
 // ==========================================
 const productSchema = new mongoose.Schema({
-  title: String, price: String, mrp: String, category: { type: String, index: true }, 
+  title: String, 
+  price: String, // Kept for legacy display compatibility if needed
+  mrp: String,   // Kept for legacy display compatibility if needed
   
-  // 🔥 AI & RECOMMENDATION FIELDS (NEW) 🔥
-  tags: [{ type: String, trim: true, lowercase: true }], // Tags like ["laptop", "gaming"] for Similar Products
-  views: { type: Number, default: 0, index: true },      // View tracking for Trending Badge
-  sales: { type: Number, default: 0, index: true },      // Sales tracking
-  isTrending: { type: Boolean, default: false },         // Manual override or automated badge
+  // 🔥 AUDIT FIX: Integer paise fields and numeric inventory for strict validation & sorting
+  pricePaise: { type: Number, default: 0, index: true }, 
+  mrpPaise: { type: Number, default: 0 }, 
+  inventory: { type: Number, default: 0, min: 0 },
+
+  category: { type: String, index: true }, 
   
-  image: String, images: [String], brand: String, description: String, 
-  weight: String, size: String, sku: String, inventory: String, 
-  color: String, material: String, manufacturerName: String,
+  // 🔥 AI & RECOMMENDATION FIELDS 🔥
+  tags: [{ type: String, trim: true, lowercase: true }], 
+  views: { type: Number, default: 0, index: true },      
+  sales: { type: Number, default: 0, index: true },      
+  isTrending: { type: Boolean, default: false },         
   
-  // 🔥 FIX: String type with default null and indexed for superfast filtering
+  image: String, 
+  images: [String], 
+  brand: String, 
+  description: String, 
+  weight: String, 
+  size: String, 
+  sku: String, 
+  color: String, 
+  material: String, 
+  manufacturerName: String,
+  
   warehouseId: { type: String, default: null, index: true }, 
   
-  rating: { type: Number, default: 4.5 }, reviews: { type: Number, default: 120 },
-  discount: String, createdAt: { type: Date, default: Date.now, index: true }
+  rating: { type: Number, default: 4.5 }, 
+  reviews: { type: Number, default: 120 },
+  discount: String, 
+  createdAt: { type: Date, default: Date.now, index: true }
 });
 
 // ==========================================
@@ -42,9 +59,9 @@ const addressSchema = new mongoose.Schema({
 const userSchema = new mongoose.Schema({
   name: { type: String, required: [true, "Full name is required"], trim: true },
   email: { type: String, required: [true, "Email address is required"], unique: true, lowercase: true, trim: true, index: true },
-  phone: { type: String, trim: true, },
+  phone: { type: String, trim: true },
   password: { type: String, select: false }, 
-  googleId: { type: String, },
+  googleId: { type: String },
   role: { type: String, enum: ['admin', 'manager', 'catalog', 'support', 'customer'], default: 'customer' },
   addresses: [addressSchema], 
   wishlist: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Product' }],
@@ -61,13 +78,32 @@ const userSchema = new mongoose.Schema({
 // ==========================================
 const orderSchema = new mongoose.Schema({
   userId: { type: String, required: true, index: true },
-  items: Array, totalAmount: String, status: { type: String, default: "Processing", index: true },
+  items: Array, 
+  totalAmount: String, // Kept for backward compatibility
+  
+  // 🔥 AUDIT FIX: Integer paise total field for strict financial reconciliation
+  totalPaise: { type: Number, default: 0 },
+
+  status: { 
+    type: String, 
+    enum: ['Pending', 'Paid', 'Processing', 'Shipped', 'Delivered', 'Cancelled', 'Refunded'], 
+    default: "Pending", 
+    index: true 
+  },
   date: { type: String, default: () => new Date().toLocaleDateString('en-IN') },
   time: { type: String, default: () => new Date().toLocaleTimeString('en-IN') }, 
   createdAt: { type: Date, default: Date.now, index: true },
-  shiprocketOrderId: { type: String, default: "" }, paymentMethod: { type: String, default: "" },
-  address: { type: Object, default: {} }, userDetails: { type: Object, default: {} },
-  adminNotes: { type: String, default: "" }, refundStatus: { type: String, default: "N/A" },
+  shiprocketOrderId: { type: String, default: "" }, 
+  paymentMethod: { type: String, default: "" },
+  paymentDetails: {
+    gatewayOrderId: { type: String, default: "" },
+    gatewayPaymentId: { type: String, default: "" },
+    eventId: { type: String, default: "" }
+  },
+  address: { type: Object, default: {} }, 
+  userDetails: { type: Object, default: {} },
+  adminNotes: { type: String, default: "" }, 
+  refundStatus: { type: String, default: "N/A" },
   deviceInfo: { type: String, default: "Web Browser" },
   trafficSource: { type: Object, default: { source: 'Direct/Unknown', medium: 'organic', campaign: 'none' } }
 });
@@ -120,7 +156,7 @@ const abandonedCartSchema = new mongoose.Schema({
 });
 
 // ==========================================
-// 🔥 9. WAREHOUSE SCHEMA (NEW) 🔥
+// 9. WAREHOUSE SCHEMA
 // ==========================================
 const warehouseSchema = new mongoose.Schema({
   name: { type: String, required: true },

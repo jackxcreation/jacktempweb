@@ -8,15 +8,16 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit'); 
 const jwt = require('jsonwebtoken');
 
+// 🔥 SINGLE SOURCE OF TRUTH: Import Models cleanly to prevent OverwriteModelError & duplicate schema warnings
+const { User, Ticket, Warehouse, Order, Product } = require('./models');
+
 // 🔥 IMPORT YOUR SECURE MIDDLEWARES
 const { protect, admin } = require('./middleware/authMiddleware');
 
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const User = require('./models/User');
-const Ticket = require('./models/Ticket');
-const Warehouse = require('./models/Warehouse'); 
 
 dotenv.config();
+
 
 function getGeminiKeys() {
   const keys = [];
@@ -54,6 +55,12 @@ const apiLimiter = rateLimit({
 app.use(apiLimiter);
 
 // ==========================================
+// 🔥 CRITICAL AUDIT FIX: WEBHOOK RAW PARSER MOUNT
+// Webhook route MUST be mounted BEFORE express.json() so signature verification receives raw body bytes correctly.
+// ==========================================
+app.use('/api', require('./routes/payment')); 
+
+// ==========================================
 // 🔥 PHASE 9: STRICT PAYLOAD LIMITS
 // ==========================================
 // 1. Separate High Limit for AI/Upload Endpoint ONLY
@@ -79,15 +86,24 @@ app.use(cors({
 }));
 
 // ==========================================
-// 🏥 HEALTH CHECK & MONITORING (Liveness/Readiness)
+// 🏥 HEALTH CHECK & READINESS ENDPOINTS (Audit Requirement #8)
 // ==========================================
+// Liveness endpoint (Process status only)
 app.get('/health', (req, res) => {
   res.status(200).json({ 
     status: 'OK', 
     uptime: process.uptime(),
-    dbState: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected',
     timestamp: new Date().toISOString()
   });
+});
+
+// Readiness endpoint (Strict DB check for Render/K8s load balancers)
+app.get('/health/ready', (req, res) => {
+  const dbState = mongoose.connection.readyState;
+  if (dbState === 1) {
+    return res.status(200).json({ status: 'READY', dbState: 'Connected' });
+  }
+  return res.status(503).json({ status: 'NOT_READY', dbState: 'Disconnected' });
 });
 
 const checkAccountStatus = async (req, res, next) => {
@@ -108,9 +124,13 @@ const io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] } 
 
 app.set("io", io);
 
-mongoose.connect(process.env.MONGO_URI)
+mongoose.connect(process.env.MONGO_URI, { serverSelectionTimeoutMS: 5000 })
   .then(() => console.log('✅ Jack Essentials Database Connected!'))
-  .catch((err) => console.log('❌ Database Connection Failed:', err));
+  .catch((err) => {
+    console.log('❌ Database Connection Failed:', err);
+    // Exit process so container orchestrator can restart cleanly on database failure
+    process.exit(1);
+  });
 
 app.use('/', require('./routes/products'));
 app.use('/', require('./routes/users'));
@@ -119,9 +139,6 @@ app.use('/', require('./routes/admin'));
 app.use('/api/auth', require('./routes/auth'));
 app.use('/', require('./routes/warehouse'));
 app.use('/api', require('./routes/deliveryCheck'));
-
-// Webhook bypass handled in your payment route natively
-app.use('/api', require('./routes/payment')); 
 
 // ==========================================
 // 🔥 SECURED: AI CATALOG GENERATOR (ADMIN ONLY) 🔥
@@ -206,7 +223,7 @@ io.use(async (socket, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const user = await User.findById(decoded.id).select('-password');
     
-    if (!user) return next(new Error('Authentication Error: User not found'));
+    if (!user || user.isLocked) return next(new Error('Authentication Error: User not found or locked'));
     
     socket.user = user; 
     next();
@@ -231,10 +248,10 @@ io.on('connection', (socket) => {
       if (!ticket) {
         ticket = new Ticket({
           userId: secureUserId, userName: socket.user.name || 'Guest', orderId: data.orderId,
-          messages: data.history.map(msg => ({ sender: msg.sender, text: msg.text }))
+          messages: (data.history || []).map(msg => ({ sender: msg.sender, text: msg.text }))
         });
       } else {
-          data.history.forEach(msg => { ticket.messages.push({ sender: msg.sender, text: msg.text }); });
+          (data.history || []).forEach(msg => { ticket.messages.push({ sender: msg.sender, text: msg.text }); });
       }
       await ticket.save();
       io.emit('new_ticket_alert', ticket);
@@ -261,6 +278,11 @@ io.on('connection', (socket) => {
   });
 
   socket.on('join_product_page', (data) => {
+    if (activeVisitors.size > 5000) {
+      // Prevent memory overflow/DoS attacks from unbounded maps
+      const oldestKey = activeVisitors.keys().next().value;
+      activeVisitors.delete(oldestKey);
+    }
     activeVisitors.set(socket.id, {
       socketId: socket.id,
       productId: data.productId,
@@ -325,7 +347,6 @@ const shutdownHandler = () => {
     });
   });
 
-  // Force close after 10 seconds if hanging
   setTimeout(() => {
     console.error('🚨 Could not close connections in time, forcefully shutting down');
     process.exit(1);

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const mongoose = require('mongoose'); // 🔥 ADDED FOR TRANSACTIONS
-const { Order, Product } = require('../models'); // 🔥 Added Product model
+const mongoose = require('mongoose'); 
+const { Order, Product } = require('../models'); 
 
 // 🚨 IMPORT AUTH MIDDLEWARES
 const { protect, admin } = require('../middleware/authMiddleware');
@@ -26,7 +26,7 @@ router.post('/api/orders/:id/generate-awb', protect, admin, async (req, res) => 
 });
 
 // ==========================================
-// 🖨️ FETCH DELHIIVERY LABEL - STRICTLY ADMIN ONLY
+// 🖨️ FETCH DELIVERY LABEL - STRICTLY ADMIN ONLY
 // ==========================================
 router.get('/api/orders/label/:awb', protect, admin, async (req, res) => {
   try {
@@ -121,60 +121,72 @@ router.post('/api/orders/:id/cancel-shipment', protect, admin, async (req, res) 
 });
 
 // ==========================================
-// 🛒 MAIN ORDER CREATION ROUTE - WITH INVENTORY TRANSACTION FLOW 🔥
+// 🛒 MAIN ORDER CREATION ROUTE - SERVER-SIDE PRICING & ATOMIC INVENTORY RESERVATION 🔥
 // ==========================================
 router.post('/api/orders', protect, async (req, res) => {
-  // Start a Mongoose Session for ACID Transaction
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const { items, totalAmount, address, paymentMethod, userDetails, trafficSource } = req.body;
+    const { items, address, paymentMethod, userDetails, trafficSource } = req.body;
     
     if (!items || !Array.isArray(items) || items.length === 0) {
-      await session.endSession();
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({ message: "Order must contain items" });
     }
 
     const secureUserId = req.user._id; 
     const safeStatus = 'Pending'; 
 
-    // 🔥 INVENTORY RESERVATION CHECK & DECREMENT 🔥
-    for (const item of items) {
-      const productId = item.productId || item._id;
-      const orderQty = Number(item.quantity) || 1;
+    let calculatedServerTotalPaise = 0;
+    const verifiedOrderItems = [];
 
-      const product = await Product.findById(productId).session(session);
-      if (!product) {
+    // 🔥 AUDIT FIX: Normalize items and perform strict atomic reservation using findOneAndUpdate
+    for (const rawItem of items) {
+      const productId = rawItem.productId || rawItem._id;
+      const orderQty = Number(rawItem.quantity) || 1;
+
+      if (orderQty <= 0) {
         await session.abortTransaction();
         session.endSession();
-        return res.status(404).json({ message: `Product not found: ${item.title || productId}` });
+        return res.status(400).json({ message: "Invalid product quantity" });
       }
 
-      // Check stock (assuming field name is 'stock' or 'inventory')
-      const currentStock = product.stock !== undefined ? product.stock : (product.inventory || 0);
-      if (currentStock < orderQty) {
+      // Strict Atomic Condition Check & Decrement ($gte inventory check + $inc decrement)
+      const updatedProduct = await Product.findOneAndUpdate(
+        { _id: productId, inventory: { $gte: orderQty } },
+        { $inc: { inventory: -orderQty } },
+        { new: true, session }
+      );
+
+      if (!updatedProduct) {
         await session.abortTransaction();
         session.endSession();
-        return res.status(400).json({ message: `Insufficient stock for product: ${product.title || productId}. Available: ${currentStock}` });
+        return res.status(400).json({ message: `Insufficient stock or product not found for ID: ${productId}` });
       }
 
-      // Decrement stock safely within transaction
-      if (product.stock !== undefined) {
-        product.stock -= orderQty;
-      } else {
-        product.inventory -= orderQty;
-      }
-      await product.save({ session });
+      const unitPricePaise = updatedProduct.pricePaise || Math.round(parseFloat(updatedProduct.price || 0) * 100);
+      calculatedServerTotalPaise += unitPricePaise * orderQty;
+
+      verifiedOrderItems.push({
+        productId: updatedProduct._id,
+        title: updatedProduct.title,
+        pricePaise: unitPricePaise,
+        quantity: orderQty,
+        image: updatedProduct.image || (updatedProduct.images ? updatedProduct.images[0] : '')
+      });
     }
 
     const deviceInfo = req.headers['user-agent']?.includes('Mobile') ? 'Mobile Device' : 'Desktop / PC';
     const io = req.app.get("io"); 
 
+    // 🔥 CREATE ORDER USING AUTHORITATIVE SERVER-CALCULATED PAISE TOTAL
     const newOrder = new Order({ 
       userId: secureUserId, 
-      items, 
-      totalAmount, 
+      items: verifiedOrderItems, 
+      totalPaise: calculatedServerTotalPaise,
+      totalAmount: (calculatedServerTotalPaise / 100).toFixed(2), // Backward compatibility 
       status: safeStatus, 
       address, 
       paymentMethod, 
@@ -185,7 +197,6 @@ router.post('/api/orders', protect, async (req, res) => {
     
     const savedOrder = await newOrder.save({ session });
     
-    // Commit Transaction (Sab kuch successful raha toh save ho gaya)
     await session.commitTransaction();
     session.endSession();
 
@@ -207,22 +218,18 @@ router.post('/api/orders', protect, async (req, res) => {
             if (cleanPhone.length > 10) cleanPhone = cleanPhone.slice(-10);
             let cleanPincode = (address.pincode || "110001").replace(/[^0-9]/g, '');
 
-            const rawAmount = parseFloat(String(totalAmount).replace(/[^0-9.]/g, '')) || 0;
-            const finalNumericAmount = Math.round(rawAmount);
+            const finalNumericAmount = Math.round(calculatedServerTotalPaise / 100);
 
             const payString = String(paymentMethod || '').toLowerCase();
             const isCod = payString.includes('cod') || payString.includes('cash');
 
-            let productsDescription = items.map(i => i.title || i.name || i.productName || "Product").join(", ");
-            let totalQuantity = items.reduce((sum, item) => sum + (Number(item.quantity) || 1), 0);
+            let productsDescription = verifiedOrderItems.map(i => i.title || "Product").join(", ");
+            let totalQuantity = verifiedOrderItems.reduce((sum, item) => sum + item.quantity, 0);
 
             let totalWeight = 0, maxL = 15, maxB = 15, totalH = 10;
-            items.forEach(item => {
-                const qty = Number(item.quantity) || 1;
-                totalWeight += (Number(item.weight) || 500) * qty;
-                maxL = Math.max(maxL, Number(item.length) || 15);
-                maxB = Math.max(maxB, Number(item.breadth) || 15);
-                totalH += (Number(item.height) || 10) * qty;
+            verifiedOrderItems.forEach(item => {
+                const qty = item.quantity;
+                totalWeight += 500 * qty; 
             });
 
             const payloadData = {
@@ -277,8 +284,9 @@ router.post('/api/orders', protect, async (req, res) => {
 
     res.status(201).json(orderResponse);
   } catch (error) { 
-    // Rollback transaction if any error occurs
-    await session.abortTransaction();
+    if (session.inTransaction()) {
+      await session.abortTransaction();
+    }
     session.endSession();
     console.error("Order Creation Error & Inventory Rollback:", error);
     res.status(500).json({ message: "Order failed", error: error.message }); 
@@ -286,18 +294,31 @@ router.post('/api/orders', protect, async (req, res) => {
 });
 
 // ==========================================
-// ✏️ UPDATE ORDER STATUS - STRICTLY ADMIN ONLY
+// ✏️ UPDATE ORDER STATUS - STRICTLY ADMIN ONLY (WITH STATE ENUM VALIDATION)
 // ==========================================
 router.put('/api/orders/:id', protect, admin, async (req, res) => {
   try {
     const { status, adminNotes, refundStatus } = req.body;
+    const allowedStatuses = ['Pending', 'Paid', 'Processing', 'Shipped', 'Delivered', 'Cancelled', 'Refunded'];
+    
+    if (status && !allowedStatuses.includes(status)) {
+      return res.status(400).json({ message: "Invalid order lifecycle state transition" });
+    }
+
     const io = req.app.get("io"); 
+
+    const updateFields = {};
+    if (status) updateFields.status = status;
+    if (adminNotes !== undefined) updateFields.adminNotes = adminNotes;
+    if (refundStatus !== undefined) updateFields.refundStatus = refundStatus;
 
     const updatedOrder = await Order.findByIdAndUpdate(
         req.params.id, 
-        { status, adminNotes, refundStatus }, 
+        updateFields, 
         { returnDocument: 'after' }
     );
+
+    if (!updatedOrder) return res.status(404).json({ message: "Order not found" });
 
     const orderResponse = { ...updatedOrder._doc, id: updatedOrder._id.toString() };
     if(io) { try { io.emit("order_status_updated", orderResponse); } catch(e){} }
@@ -309,7 +330,7 @@ router.put('/api/orders/:id', protect, admin, async (req, res) => {
 });
 
 // ==========================================
-// 👤 GET USER ORDERS - IDOR FIXED
+// 👤 GET USER ORDERS - IDOR FIXED & PAGINATED
 // ==========================================
 router.get('/api/orders/user/:userId', protect, async (req, res) => {
   try {
@@ -317,17 +338,35 @@ router.get('/api/orders/user/:userId', protect, async (req, res) => {
        return res.status(403).json({ message: "Access Denied: You can only view your own orders." });
     }
 
-    const orders = await Order.find({ userId: req.params.userId }).sort({ createdAt: -1 }).lean();
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(50, parseInt(req.query.limit) || 10);
+    const skip = (page - 1) * limit;
+
+    const orders = await Order.find({ userId: req.params.userId })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
     res.json(orders.map(o => ({ ...o, id: o._id.toString() })));
   } catch (error) { res.status(500).json({ message: "Failed to fetch orders" }); }
 });
 
 // ==========================================
-// 📦 GET ALL ORDERS - STRICTLY ADMIN ONLY
+// 📦 GET ALL ORDERS - STRICTLY ADMIN ONLY & PAGINATED
 // ==========================================
 router.get('/api/orders', protect, admin, async (req, res) => {
   try {
-    const orders = await Order.find().sort({ createdAt: -1 }).lean();
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, parseInt(req.query.limit) || 20);
+    const skip = (page - 1) * limit;
+
+    const orders = await Order.find()
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
     res.json(orders.map(o => ({ ...o, id: o._id.toString() })));
   } catch (error) { res.status(500).json({ message: "Failed to fetch orders" }); }
 });
