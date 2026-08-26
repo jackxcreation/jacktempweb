@@ -1,5 +1,5 @@
 import React, { useState, useMemo, memo } from 'react';
-import { Link, useNavigate, useLocation } from 'react-router-dom'; // 🔥 FIX: useNavigate aur useLocation add kiya
+import { Link, useNavigate, useLocation } from 'react-router-dom'; 
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   FiTrash2, FiMinus, FiPlus, FiArrowRight, FiShoppingBag, 
@@ -7,7 +7,14 @@ import {
 } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
 import { useCart } from '../context/CartContext';
-import { useUser } from '../context/UserContext'; // 🔥 FIX: User context import kiya auth check ke liye
+import { useUser } from '../context/UserContext'; 
+import { getOptimizedImageUrl } from '../utils/imageOptimizer';
+
+// 🔥 CANONICAL CURRENCY FORMATTER UTILITY
+const formatCurrency = (paise) => {
+  if (typeof paise !== 'number') return '₹0.00';
+  return `₹${(paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
 
 // Reusable Fallback Image Wrapper to prevent layout shifts and handle error metrics
 const CartItemImage = memo(({ src, alt, discount }) => {
@@ -17,7 +24,7 @@ const CartItemImage = memo(({ src, alt, discount }) => {
   return (
     <div className="w-24 h-24 sm:w-36 sm:h-36 bg-slate-50 rounded-2xl overflow-hidden flex-shrink-0 p-2.5 border border-slate-100 flex items-center justify-center relative mix-blend-multiply select-none">
       <img 
-        src={imgError ? fallbackSvg : src} 
+        src={imgError ? fallbackSvg : getOptimizedImageUrl(src, 200)} 
         alt={alt || "Product Image"} 
         loading="lazy"
         decoding="async"
@@ -37,6 +44,10 @@ CartItemImage.displayName = 'CartItemImage';
 // Optimized Cart Item Component
 const CartItemRow = memo(({ item, onRemove, onUpdateQuantity }) => {
   const itemImage = item.image || (item.images && item.images[0]);
+  
+  // Canonical amount extraction (fallback to 0 if missing)
+  const itemPricePaise = item.pricePaise || 0;
+  const itemMrpPaise = item.mrpPaise || 0;
 
   return (
     <motion.div 
@@ -86,11 +97,11 @@ const CartItemRow = memo(({ item, onRemove, onUpdateQuantity }) => {
         <div className="flex items-center justify-between mt-4 sm:mt-6 pt-3 border-t border-slate-50 gap-4">
           <div className="flex items-baseline gap-1.5">
             <span className="text-base sm:text-2xl font-black text-slate-950">
-              ₹{Number(item.price).toLocaleString('en-IN')}
+              {formatCurrency(itemPricePaise)}
             </span>
-            {item.mrp && Number(item.mrp) > Number(item.price) && (
+            {itemMrpPaise > itemPricePaise && (
               <span className="text-xs text-slate-400 font-bold line-through">
-                ₹{Number(item.mrp).toLocaleString('en-IN')}
+                {formatCurrency(itemMrpPaise)}
               </span>
             )}
           </div>
@@ -124,30 +135,32 @@ CartItemRow.displayName = 'CartItemRow';
 
 // Core Application Interface Pipeline
 const Cart = ({ isLoggedIn, setIsLoggedIn }) => {
-  const { cart, removeFromCart, updateQuantity, cartTotal, cartCount } = useCart();
-  const { user } = useUser(); // 🔥 FIX: User data le aao context se
-  const navigate = useNavigate(); // 🔥 FIX: Navigation function
+  const { cart, removeFromCart, updateQuantity, cartTotalPaise, cartCount } = useCart();
+  const { user } = useUser(); 
+  const navigate = useNavigate(); 
+  const location = useLocation();
   
   const [couponCode, setCouponCode] = useState('');
   const [isCouponApplied, setIsCouponApplied] = useState(false);
   const [couponFeedback, setCouponFeedback] = useState({ message: '', isError: false });
   const [isCheckoutLoading, setIsCheckoutLoading] = useState(false);
 
-  // Memoized Advanced Financial Matrix
+  // Memoized Advanced Financial Matrix (Working purely with Paise integers)
   const financialMetrics = useMemo(() => {
-    const total = Number(cartTotal) || 0;
-    const baseDiscount = total * 0.10; 
-    const extraCouponDiscount = isCouponApplied ? 150 : 0; 
-    const totalDiscount = baseDiscount + extraCouponDiscount;
-    const finalTotal = Math.max(total - totalDiscount, 0);
+    const totalPaise = Number(cartTotalPaise) || 0;
+    const baseDiscountPaise = Math.round(totalPaise * 0.10); 
+    const extraCouponDiscountPaise = isCouponApplied ? 15000 : 0; // ₹150 in paise
+    const totalDiscountPaise = baseDiscountPaise + extraCouponDiscountPaise;
+    const finalTotalPaise = Math.max(totalPaise - totalDiscountPaise, 0);
 
     return {
-      baseDiscount,
-      extraCouponDiscount,
-      totalDiscount,
-      finalTotal
+      baseDiscountPaise,
+      extraCouponDiscountPaise,
+      totalDiscountPaise,
+      finalTotalPaise,
+      subtotalPaise: totalPaise
     };
-  }, [cartTotal, isCouponApplied]);
+  }, [cartTotalPaise, isCouponApplied]);
 
   const handleApplyCoupon = (e) => {
     e.preventDefault();
@@ -162,20 +175,16 @@ const Cart = ({ isLoggedIn, setIsLoggedIn }) => {
     }
   };
 
-  // 🔥 MAGIC LOGIC: Smart redirect checkout handle
   const handleCheckoutSubmission = (e) => {
     e.preventDefault();
     setIsCheckoutLoading(true);
     
-    // Thoda delay UX (loading spinner) dikhane ke liye
     setTimeout(() => {
       setIsCheckoutLoading(false);
       
       if (!user) {
-        // Agar user login nahi hai, bhej do login page pe aur batao ki '/checkout' jana tha
         navigate('/login', { state: { from: '/checkout' } });
       } else {
-        // Agar user login hai, toh direct checkout page pe le jao
         navigate('/checkout');
       }
     }, 500); 
@@ -200,7 +209,6 @@ const Cart = ({ isLoggedIn, setIsLoggedIn }) => {
         </div>
 
         {cart.length === 0 ? (
-          /* Empty Pipeline Vector Frame Layout */
           <motion.section 
             initial={{ opacity: 0, y: 15 }} 
             animate={{ opacity: 1, y: 0 }}
@@ -293,18 +301,18 @@ const Cart = ({ isLoggedIn, setIsLoggedIn }) => {
                 <div className="space-y-3.5 mb-5 text-xs sm:text-sm font-medium">
                   <div className="flex justify-between text-slate-500">
                     <span>Subtotal ({cartCount} {cartCount === 1 ? 'item' : 'items'})</span>
-                    <span className="font-bold text-slate-900">₹{cartTotal.toLocaleString('en-IN')}</span>
+                    <span className="font-bold text-slate-900">{formatCurrency(financialMetrics.subtotalPaise)}</span>
                   </div>
                   
                   <div className="flex justify-between text-emerald-600 font-bold bg-emerald-50/40 px-3 py-2 rounded-xl border border-emerald-100/30">
                     <span className="flex items-center gap-1"><FiCheckCircle size={13} /> Seasonal Promo (10% Off)</span>
-                    <span>- ₹{financialMetrics.baseDiscount.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+                    <span>- {formatCurrency(financialMetrics.baseDiscountPaise)}</span>
                   </div>
 
                   {isCouponApplied && (
                     <div className="flex justify-between text-indigo-600 font-bold bg-indigo-50/40 px-3 py-2 rounded-xl border border-indigo-100/30">
                       <span className="flex items-center gap-1"><FiTag size={13} /> Coupon Code Applied</span>
-                      <span>- ₹{financialMetrics.extraCouponDiscount.toLocaleString('en-IN')}</span>
+                      <span>- {formatCurrency(financialMetrics.extraCouponDiscountPaise)}</span>
                     </div>
                   )}
 
@@ -319,7 +327,7 @@ const Cart = ({ isLoggedIn, setIsLoggedIn }) => {
                       <FiInfo size={12} /> You Saved
                     </span>
                     <span className="text-sm sm:text-base text-[#FF4500]">
-                      ₹{financialMetrics.totalDiscount.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                      {formatCurrency(financialMetrics.totalDiscountPaise)}
                     </span>
                   </div>
                 </div>
@@ -332,11 +340,10 @@ const Cart = ({ isLoggedIn, setIsLoggedIn }) => {
                     <span className="text-[10px] text-slate-400 font-medium">Inclusive of all local taxes</span>
                   </div>
                   <span className="text-2xl sm:text-3xl font-black text-slate-950 tracking-tight">
-                    ₹{financialMetrics.finalTotal.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                    {formatCurrency(financialMetrics.finalTotalPaise)}
                   </span>
                 </div>
 
-                {/* 🔥 FIX: <Link> ki jagah <button> use kiya taaki smart logic chal sake */}
                 <button 
                   onClick={handleCheckoutSubmission}
                   disabled={isCheckoutLoading}

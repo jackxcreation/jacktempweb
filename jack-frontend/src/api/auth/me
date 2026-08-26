@@ -1,0 +1,23 @@
+// backend/routes/authRoutes.js (ya jahan bhi auth routes hain)
+const verifyToken = require('../middleware/verifyToken'); // Tera auth middleware
+
+router.get('/me', verifyToken, async (req, res) => {
+  try {
+    // req.user token se decode hokar middleware se aaya hai
+    const user = await User.findById(req.user.id).select('-password');
+    if (!user || !user.isActive) {
+      return res.status(401).json({ success: false, message: 'User not found or inactive' });
+    }
+
+    res.status(200).json({
+      id: user._id || user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role || 'customer',
+      isActive: user.isActive,
+      addresses: user.addresses || []
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error during session validation' });
+  }
+});

@@ -1,27 +1,206 @@
 const express = require('express');
 const router = express.Router();
-const { Product } = require('../models');
+const { Product, User } = require('../models');
+const { z } = require('zod'); // 🔥 Zod for strict input validation
 
-// 🚨 IMPORT SECURE MIDDLEWARES
-const { protect, admin } = require('../middleware/authMiddleware');
+// 🚨 IMPORT SECURE MIDDLEWARES & RBAC
+const { protect } = require('../middleware/authMiddleware');
+const { checkPermission } = require('../middleware/rbacMiddleware');
+
+// ==========================================
+// 🛡️ ZOD VALIDATION SCHEMA FOR PRODUCTS
+// ==========================================
+const productValidationSchema = z.object({
+  title: z.string().min(2, "Title is required").max(200, "Title is too long"),
+  description: z.string().max(2000, "Description is too long").optional(),
+  pricePaise: z.number().int().nonnegative("Price must be a positive number"),
+  mrpPaise: z.number().int().nonnegative("MRP must be a positive number").optional(),
+  category: z.string().min(1, "Category is required"),
+  brand: z.string().optional(),
+  inventory: z.number().int().nonnegative().default(0),
+  image: z.string().url("Must be a valid image URL").optional(),
+  images: z.array(z.string().url()).optional(),
+  sku: z.string().optional(),
+  weight: z.string().optional(),
+  color: z.string().optional(),
+  size: z.string().optional(),
+  material: z.string().optional(),
+  manufacturerName: z.string().optional(),
+  warehouseId: z.string().optional(),
+  discount: z.string().optional()
+});
+
+// ==========================================
+// 🛡️ IN-MEMORY VIEW RATE LIMITER CACHE (Cooldown protection against view spam)
+// ==========================================
+const recentViewsTracker = new Map();
+
+// Clean up old memory entries every 1 hour to prevent memory leaks
+setInterval(() => {
+  const oneHourAgo = Date.now() - 3600000;
+  for (const [key, timestamp] of recentViewsTracker.entries()) {
+    if (timestamp < oneHourAgo) recentViewsTracker.delete(key);
+  }
+}, 3600000);
 
 // ==========================================
 // 📦 1. PRODUCT APIs
 // ==========================================
 
-// 1. Get All Products (🔥 SECURITY: Added limit to prevent Server Crash/DOS)
+// 1. Get All Products (🔥 Flipkart-scale Server-side Atlas Search, Powerful Multi-Facet Filtering, Pagination & Sorting)
 router.get('/api/products', async (req, res) => {
   try {
-    const query = req.query.warehouseId ? { warehouseId: req.query.warehouseId } : {};
+    let { category, brand, minPrice, maxPrice, sort, search, warehouseId, rating, availability, color, size } = req.query;
     
-    // Optional: Frontend se limit pass kar sakte ho, default 100 rakha hai load bachane ke liye
-    const limit = parseInt(req.query.limit) || 100;
-    
-    const products = await Product.find(query)
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .lean();
-      
+    // ==========================================
+    // 🧠 NATURAL LANGUAGE SMART SEARCH PARSER (e.g. "best phone under 20k")
+    // ==========================================
+    let cleanSearchQuery = search ? search.trim() : "";
+    let extractedMaxPrice = maxPrice ? Number(maxPrice) : null;
+    let dynamicSort = sort;
+
+    if (cleanSearchQuery) {
+      const lowerQuery = cleanSearchQuery.toLowerCase();
+
+      // 1. Detect "under X" or "below X" (e.g. "under 20k", "under 50000")
+      const underPriceMatch = lowerQuery.match(/(?:under|below|less than)\s*(?:rs\.?|₹)?\s*(\d+)\s*(k)?/i);
+      if (underPriceMatch) {
+        let amount = parseInt(underPriceMatch[1], 10);
+        if (underPriceMatch[2]) amount *= 1000; // Convert '20k' to '20000'
+        extractedMaxPrice = amount * 100; // Convert to paise
+        
+        // Strip price text so Atlas Search focuses strictly on product keywords
+        cleanSearchQuery = cleanSearchQuery.replace(underPriceMatch[0], "").trim();
+      }
+
+      // 2. Detect Intent Keywords for Ranking/Sorting ("best", "top", "cheapest")
+      if (lowerQuery.includes('best') || lowerQuery.includes('top')) {
+        if (!sort || sort === 'popular') dynamicSort = 'rating';
+      } else if (lowerQuery.includes('cheapest') || lowerQuery.includes('low price')) {
+        dynamicSort = 'price-low';
+      }
+    }
+
+    // 🔥 OWASP Hard Cap & Pagination Setup
+    const limit = Math.min(
+      Math.max(parseInt(req.query.limit) || 24, 1),
+      100 // Maximum 100 items per request
+    );
+    const page = Math.max(parseInt(req.query.page) || 1, 1);
+    const skip = (page - 1) * limit;
+
+    // 3. Dynamic Sorting Matrix
+    let sortCriteria = { createdAt: -1 }; // Default newest
+    if (dynamicSort === 'price-low') sortCriteria = { pricePaise: 1 };
+    else if (dynamicSort === 'price-high') sortCriteria = { pricePaise: -1 };
+    else if (dynamicSort === 'rating') sortCriteria = { rating: -1 };
+    else if (dynamicSort === 'popular') sortCriteria = { views: -1 };
+
+    let products = [];
+    let totalCount = 0;
+
+    // Build filter array for Atlas Search & Mongoose Query
+    const finalMaxPrice = extractedMaxPrice || maxPrice;
+
+    // Attempt MongoDB Atlas Search if clean search query is provided
+    if (cleanSearchQuery && cleanSearchQuery.length > 0) {
+      try {
+        const atlasFilters = [
+          ...(warehouseId ? [{ text: { query: warehouseId, path: "warehouseId" } }] : []),
+          ...(category && category !== 'All' ? [{ text: { query: category, path: "category" } }] : []),
+          ...(brand ? [{ text: { query: brand, path: "brand" } }] : []),
+          ...(color ? [{ text: { query: color, path: "color" } }] : []),
+          ...(size ? [{ text: { query: size, path: "size" } }] : []),
+          ...(rating ? [{ range: { path: "rating", gte: Number(rating) } }] : []),
+          ...(availability === 'in-stock' ? [{ range: { path: "inventory", gt: 0 } }] : []),
+          ...(((minPrice || finalMaxPrice) ? [{
+            range: {
+              path: "pricePaise",
+              ...(minPrice ? { gte: Number(minPrice) } : {}),
+              ...(finalMaxPrice ? { lte: Number(finalMaxPrice) } : {})
+            }
+          }] : []))
+        ];
+
+        const pipeline = [
+          {
+            $search: {
+              index: "default", // Name of your Atlas Search index
+              compound: {
+                must: [
+                  {
+                    text: {
+                      query: cleanSearchQuery,
+                      path: ["title", "description", "brand", "category"],
+                      fuzzy: { maxEdits: 1, prefixLength: 2 } // Typo tolerance enabled
+                    }
+                  }
+                ],
+                filter: atlasFilters
+              }
+            }
+          },
+          { $sort: sortCriteria },
+          {
+            $facet: {
+              metadata: [{ $count: "total" }],
+              data: [{ $skip: skip }, { $limit: limit }]
+            }
+          }
+        ];
+
+        const searchResult = await Product.aggregate(pipeline);
+        if (searchResult && searchResult.length > 0) {
+          totalCount = searchResult[0].metadata[0]?.total || 0;
+          products = searchResult[0].data || [];
+        }
+      } catch (atlasErr) {
+        console.warn("Atlas Search fallback triggered due to index state:", atlasErr.message);
+      }
+    }
+
+    // Fallback standard Mongoose query if Atlas Search didn't execute or return data
+    if (!products || products.length === 0 && !cleanSearchQuery) {
+      const query = {};
+      if (warehouseId) query.warehouseId = warehouseId;
+      if (category && category !== 'All') query.category = category;
+      if (brand) query.brand = new RegExp(brand, 'i');
+      if (color) query.color = new RegExp(color, 'i');
+      if (size) query.size = new RegExp(size, 'i');
+      if (rating) query.rating = { $gte: Number(rating) };
+      if (availability === 'in-stock') query.inventory = { $gt: 0 };
+
+      if (minPrice || finalMaxPrice) {
+        query.pricePaise = {};
+        if (minPrice) query.pricePaise.$gte = Number(minPrice);
+        if (finalMaxPrice) query.pricePaise.$lte = Number(finalMaxPrice);
+      }
+
+      if (cleanSearchQuery) {
+        query.$or = [
+          { title: new RegExp(cleanSearchQuery, 'i') },
+          { description: new RegExp(cleanSearchQuery, 'i') }
+        ];
+      }
+
+      [products, totalCount] = await Promise.all([
+        Product.find(query).sort(sortCriteria).skip(skip).limit(limit).lean(),
+        Product.countDocuments(query)
+      ]);
+    }
+
+    // Check if client expects paginated meta structure or array based on headers/query
+    if (req.query.paginated === 'true' || category || search || sort || req.query.page) {
+      return res.json({
+        success: true,
+        total: totalCount,
+        page,
+        pages: Math.ceil(totalCount / limit) || 1,
+        products: products.map(p => ({ ...p, id: p._id.toString() }))
+      });
+    }
+
+    // Fallback array format for standard backward compatibility
     res.json(products.map(p => ({ ...p, id: p._id.toString() })));
   } catch (error) { 
     console.error("Fetch Products Error:", error);
@@ -29,11 +208,11 @@ router.get('/api/products', async (req, res) => {
   }
 });
 
-// 🔥 2. Get Trending Products (Top 8)
+// 🔥 2. Get Trending Products (Top 8 using Precomputed Trending Score)
 router.get('/api/products/trending/top', async (req, res) => {
   try {
     const trendingProducts = await Product.find()
-      .sort({ views: -1, sales: -1 }) 
+      .sort({ trendingScore: -1 }) // Lightning-fast lookup via precomputed score index
       .limit(8)
       .lean();
       
@@ -62,14 +241,31 @@ router.get('/api/products/similar/:id', async (req, res) => {
   }
 });
 
-// 🔥 4. Get Single Product (And Auto-Increment Views)
+// 🔥 4. Get Single Product (And Rate-Limited Unique View Counter Cooldown)
 router.get('/api/products/:id', async (req, res) => {
   try {
-    const product = await Product.findByIdAndUpdate(
-      req.params.id,
-      { $inc: { views: 1 } }, 
-      { new: true }
-    ).lean();
+    const productId = req.params.id;
+    
+    // Generate a unique visitor key using IP and Product ID
+    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown_ip';
+    const viewKey = `${clientIp}_${productId}`;
+    const now = Date.now();
+    const cooldownPeriod = 30 * 60 * 1000; // 30 minutes cooldown per visitor per product
+
+    let productQuery = Product.findById(productId);
+
+    // Check cooldown status to prevent artificial view spamming
+    const lastViewedTime = recentViewsTracker.get(viewKey);
+    if (!lastViewedTime || (now - lastViewedTime) > cooldownPeriod) {
+      recentViewsTracker.set(viewKey, now);
+      productQuery = Product.findByIdAndUpdate(
+        productId,
+        { $inc: { views: 1 } }, 
+        { new: true }
+      );
+    }
+
+    const product = await productQuery.lean();
 
     if (!product) return res.status(404).json({ message: "Product not found" });
     
@@ -81,13 +277,97 @@ router.get('/api/products/:id', async (req, res) => {
 });
 
 // ==========================================
-// 🛡️ ADMIN ONLY ROUTES (STRICTLY PROTECTED)
+// 🔥 ADVANCED RECOMMENDATION ENGINE APIS
 // ==========================================
 
-// 5. Create New Product - 🔥 ADMIN ONLY
-router.post('/api/products', protect, admin, async (req, res) => {
+// Frequently Bought Together
+router.get('/api/recommendations/frequently-bought/:id', async (req, res) => {
   try {
-    const newProduct = new Product(req.body);
+    const product = await Product.findById(req.params.id);
+    if (!product) return res.status(404).json({ message: "Product not found" });
+
+    const bundle = await Product.find({
+      _id: { $ne: product._id },
+      category: product.category,
+      tags: { $in: product.tags || [] }
+    }).limit(3).lean();
+
+    res.json(bundle.map(p => ({ ...p, id: p._id.toString() })));
+  } catch (err) {
+    res.status(500).json({ message: "Error fetching bundle recommendations" });
+  }
+});
+
+// Customers Also Viewed
+router.get('/api/recommendations/also-viewed/:id', async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id);
+    if (!product) return res.status(404).json({ message: "Product not found" });
+
+    const similar = await Product.find({
+      _id: { $ne: product._id },
+      brand: product.brand,
+      rating: { $gte: 4.0 }
+    }).sort({ views: -1 }).limit(4).lean();
+
+    res.json(similar.map(p => ({ ...p, id: p._id.toString() })));
+  } catch (err) {
+    res.status(500).json({ message: "Error fetching viewed recommendations" });
+  }
+});
+
+// Trending Near You
+router.get('/api/recommendations/trending', async (req, res) => {
+  try {
+    const trending = await Product.find({ isTrending: true })
+      .sort({ views: -1, sales: -1 })
+      .limit(8)
+      .lean();
+
+    res.json(trending.map(p => ({ ...p, id: p._id.toString() })));
+  } catch (err) {
+    res.status(500).json({ message: "Error fetching trending products" });
+  }
+});
+
+// Because You Bought X (Personalized based on wishlist/history)
+router.get('/api/recommendations/because-you-bought/:userId', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.userId).populate('wishlist').lean();
+    if (!user || !user.wishlist || user.wishlist.length === 0) {
+      const topRated = await Product.find().sort({ rating: -1 }).limit(4).lean();
+      return res.json(topRated.map(p => ({ ...p, id: p._id.toString() })));
+    }
+
+    const lastWishCategory = user.wishlist[user.wishlist.length - 1].category;
+    const recommended = await Product.find({
+      category: lastWishCategory,
+      _id: { $nin: user.wishlist }
+    }).limit(4).lean();
+
+    res.json(recommended.map(p => ({ ...p, id: p._id.toString() })));
+  } catch (err) {
+    res.status(500).json({ message: "Error fetching personalized recommendations" });
+  }
+});
+
+// ==========================================
+// 🛡️ CATALOG & ADMIN PROTECTED ROUTES (RBAC ENFORCED & WHITELISTED)
+// ==========================================
+
+// 5. Create New Product - 🔥 CATALOG / ADMIN RBAC
+router.post('/api/products', protect, checkPermission('products:all'), async (req, res) => {
+  try {
+    const validationResult = productValidationSchema.safeParse(req.body);
+    if (!validationResult.success) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Validation failed", 
+        errors: validationResult.error.format() 
+      });
+    }
+
+    const newProduct = new Product(validationResult.data);
     const savedProduct = await newProduct.save();
     res.status(201).json({ ...savedProduct._doc, id: savedProduct._id.toString() });
   } catch (error) { 
@@ -96,13 +376,47 @@ router.post('/api/products', protect, admin, async (req, res) => {
   }
 });
 
-// 6. Update Existing Product - 🔥 ADMIN ONLY (Added for completeness)
-router.put('/api/products/:id', protect, admin, async (req, res) => {
+// 6. Update Existing Product - 🔥 EXPLICIT FIELD WHITELISTING (Mass-Assignment Prevention)
+router.put('/api/products/:id', protect, checkPermission('products:all'), async (req, res) => {
   try {
+    const validationResult = productValidationSchema.partial().safeParse(req.body);
+    if (!validationResult.success) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Validation failed", 
+        errors: validationResult.error.format() 
+      });
+    }
+
+    const { 
+      title, description, pricePaise, mrpPaise, category, 
+      brand, inventory, image, images, sku, weight, size, 
+      color, material, manufacturerName, warehouseId, discount 
+    } = validationResult.data;
+
+    const whitelistedUpdateData = {};
+    if (title !== undefined) whitelistedUpdateData.title = title;
+    if (description !== undefined) whitelistedUpdateData.description = description;
+    if (pricePaise !== undefined) whitelistedUpdateData.pricePaise = pricePaise;
+    if (mrpPaise !== undefined) whitelistedUpdateData.mrpPaise = mrpPaise;
+    if (category !== undefined) whitelistedUpdateData.category = category;
+    if (brand !== undefined) whitelistedUpdateData.brand = brand;
+    if (inventory !== undefined) whitelistedUpdateData.inventory = inventory;
+    if (image !== undefined) whitelistedUpdateData.image = image;
+    if (images !== undefined) whitelistedUpdateData.images = images;
+    if (sku !== undefined) whitelistedUpdateData.sku = sku;
+    if (weight !== undefined) whitelistedUpdateData.weight = weight;
+    if (size !== undefined) whitelistedUpdateData.size = size;
+    if (color !== undefined) whitelistedUpdateData.color = color;
+    if (material !== undefined) whitelistedUpdateData.material = material;
+    if (manufacturerName !== undefined) whitelistedUpdateData.manufacturerName = manufacturerName;
+    if (warehouseId !== undefined) whitelistedUpdateData.warehouseId = warehouseId;
+    if (discount !== undefined) whitelistedUpdateData.discount = discount;
+
     const updatedProduct = await Product.findByIdAndUpdate(
       req.params.id, 
-      req.body, 
-      { new: true, returnDocument: 'after' }
+      whitelistedUpdateData, 
+      { new: true, runValidators: true, returnDocument: 'after' }
     ).lean();
     
     if (!updatedProduct) return res.status(404).json({ message: "Product not found" });
@@ -113,8 +427,8 @@ router.put('/api/products/:id', protect, admin, async (req, res) => {
   }
 });
 
-// 7. Delete Product - 🔥 ADMIN ONLY
-router.delete('/api/products/:id', protect, admin, async (req, res) => {
+// 7. Delete Product - 🔥 CATALOG / ADMIN RBAC
+router.delete('/api/products/:id', protect, checkPermission('products:all'), async (req, res) => {
   try {
     await Product.findByIdAndDelete(req.params.id);
     res.json({ message: "Product deleted successfully" });

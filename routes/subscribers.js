@@ -1,11 +1,13 @@
+// routes/subscribers.js
 const express = require('express');
 const router = express.Router();
-const Subscriber = require('../models/Subscriber');
+const { Subscriber } = require('../models');
 const nodemailer = require('nodemailer');
-const rateLimit = require('express-rate-limit'); // 🔥 Anti-Spam protection
+const rateLimit = require('express-rate-limit');
 
-// 🚨 IMPORT AUTH MIDDLEWARES (Admin protection)
-const { protect, admin } = require('../middleware/authMiddleware');
+// 🚨 IMPORT AUTH & RBAC MIDDLEWARES
+const { protect } = require('../middleware/authMiddleware');
+const { checkPermission } = require('../middleware/rbacMiddleware');
 
 // ==========================================
 // 🛡️ SECURITY: Rate Limiter for Subscriptions
@@ -17,7 +19,7 @@ const subscribeLimiter = rateLimit({
 });
 
 // ==========================================
-// 📧 SECURE EMAIL TRANSPORTER (Using Env Variables)
+// 📧 SECURE EMAIL TRANSPORTER
 // ==========================================
 const transporter = nodemailer.createTransport({
     service: 'gmail',
@@ -28,9 +30,9 @@ const transporter = nodemailer.createTransport({
 });
 
 // ==========================================
-// 1. Subscribe API (Public with Rate Limit & Validation)
+// 1. PUBLIC SUBSCRIBE API (With Rate Limit & Validation)
 // ==========================================
-router.post('/subscribe', subscribeLimiter, async (req, res) => {
+router.post('/api/subscribe', subscribeLimiter, async (req, res) => {
   try {
     const { email } = req.body;
     
@@ -54,9 +56,9 @@ router.post('/subscribe', subscribeLimiter, async (req, res) => {
 });
 
 // ==========================================
-// 2. Fetch all subscribers for Admin - 🔥 ADMIN ONLY
+// 2. FETCH ALL SUBSCRIBERS - RBAC ENFORCED (settings:all)
 // ==========================================
-router.get('/subscribers', protect, admin, async (req, res) => {
+router.get('/api/subscribers', protect, checkPermission('settings:all'), async (req, res) => {
   try {
     const subs = await Subscriber.find().sort({ subscribedAt: -1 }).lean();
     res.json(subs);
@@ -66,9 +68,9 @@ router.get('/subscribers', protect, admin, async (req, res) => {
 });
 
 // ==========================================
-// 3. Send Bulk Email API - 🔥 ADMIN ONLY
+// 3. SEND BULK EMAIL API - RBAC ENFORCED (settings:all)
 // ==========================================
-router.post('/send-bulk-email', protect, admin, async (req, res) => {
+router.post('/api/send-bulk-email', protect, checkPermission('settings:all'), async (req, res) => {
   const { subject, message, emails } = req.body; 
 
   if (!emails || !Array.isArray(emails) || emails.length === 0) {
@@ -82,7 +84,7 @@ router.post('/send-bulk-email', protect, admin, async (req, res) => {
   try {
     await transporter.sendMail({
       from: `"Jack Essentials" <${process.env.EMAIL_USER}>`,
-      bcc: emails, // BCC ensures recipients don't see each other's emails
+      bcc: emails, // BCC ensures privacy
       subject: subject,
       html: message
     });

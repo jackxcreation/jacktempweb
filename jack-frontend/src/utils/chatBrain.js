@@ -28,11 +28,8 @@ export const predefinedOptions = [
   }
 ];
 
-
-
 // ✅ LANGUAGE DETECTOR
 export const detectLanguageStyle = (text = "") => {
-
   const lower = text.toLowerCase();
 
   const hinglishWords = [
@@ -64,16 +61,12 @@ export const detectLanguageStyle = (text = "") => {
     : "english";
 };
 
-
-
-
 // ✅ SYSTEM PROMPT
 export const createSystemPrompt = ({
   contextData,
   user,
   languageStyle
 }) => {
-
   return `
 
 You are "Jack", the official AI Support Agent & Smart ERP Manager for Jack Essentials.
@@ -215,33 +208,24 @@ Reply EXACTLY:
 `;
 };
 
-
-
-
 // ✅ AI RESPONSE FUNCTION
 export const fetchAIResponse = async ({
   userText,
   messages,
   contextData,
   user,
-  BACKEND_API_URL
+  BACKEND_API_URL,
+  token // 🔥 ADDED: Optional secure token support for authorized requests
 }) => {
-
   // ✅ DETECT LANGUAGE
-  const languageStyle =
-    detectLanguageStyle(userText);
-
-
+  const languageStyle = detectLanguageStyle(userText);
 
   // ✅ CREATE SYSTEM PROMPT
-  const systemInstruction =
-    createSystemPrompt({
-      contextData,
-      user,
-      languageStyle
-    });
-
-
+  const systemInstruction = createSystemPrompt({
+    contextData,
+    user,
+    languageStyle
+  });
 
   // ✅ CHAT HISTORY
   const chatHistory = messages
@@ -259,20 +243,21 @@ export const fetchAIResponse = async ({
       content: m.text
     }));
 
-
-
   try {
+    const headers = {
+      "Content-Type": "application/json"
+    };
+
+    // Include auth token if available for secure backend route validation
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
 
     const response = await fetch(
       BACKEND_API_URL,
       {
         method: "POST",
-
-        headers: {
-          "Content-Type":
-            "application/json"
-        },
-
+        headers,
         body: JSON.stringify({
           message: userText,
           chatHistory,
@@ -284,11 +269,7 @@ export const fetchAIResponse = async ({
       }
     );
 
-
-
     const data = await response.json();
-
-
 
     return (
       data.reply ||
@@ -297,7 +278,6 @@ export const fetchAIResponse = async ({
     );
 
   } catch (error) {
-
     console.error(
       "Backend API Error:",
       error
@@ -307,72 +287,40 @@ export const fetchAIResponse = async ({
   }
 };
 
-
-
-
 // ✅ BOT RESPONSE PARSER
 export const processBotResponse = (
-  rawBotResponse
+  rawBotResponse = ""
 ) => {
-
-  let finalBotText =
-    rawBotResponse.trim();
-
+  let finalBotText = typeof rawBotResponse === 'string' ? rawBotResponse.trim() : "";
   let triggerEscalation = false;
-
-
 
   // ✅ JSON ACTION PARSER
   if (
     finalBotText.startsWith("[") &&
     finalBotText.endsWith("]")
   ) {
-
     try {
-
-      const actions =
-        JSON.parse(finalBotText);
-
+      const actions = JSON.parse(finalBotText);
       const action = actions[0];
 
-
-
-      // ✅ PROFILE UPDATE
-      if (
-        action.action ===
-        "UPDATE_PROFILE"
-      ) {
-
-        finalBotText =
-          "Done ✅ User profile successfully update ho gaya hai.";
+      if (action && action.action) {
+        // ✅ PROFILE UPDATE
+        if (action.action === "UPDATE_PROFILE") {
+          finalBotText =
+            "Done ✅ User profile successfully update ho gaya hai.";
+        }
+        // ✅ STATUS UPDATE
+        else if (action.action === "UPDATE_STATUS") {
+          finalBotText =
+            "Done ✅ Order status successfully update kar diya gaya hai.";
+        }
+        // ✅ EMAIL SEND
+        else if (action.action === "SEND_EMAIL") {
+          finalBotText =
+            "Email successfully send kar diya gaya hai 📩 Please inbox check karo.";
+        }
       }
-
-
-
-      // ✅ STATUS UPDATE
-      else if (
-        action.action ===
-        "UPDATE_STATUS"
-      ) {
-
-        finalBotText =
-          "Done ✅ Order status successfully update kar diya gaya hai.";
-      }
-
-
-
-      // ✅ EMAIL SEND
-      else if (
-        action.action ===
-        "SEND_EMAIL"
-      ) {
-
-        finalBotText =
-          "Email successfully send kar diya gaya hai 📩 Please inbox check karo.";
-      }
-
     } catch (e) {
-
       console.error(
         "Action parsing failed",
         e
@@ -380,22 +328,17 @@ export const processBotResponse = (
     }
   }
 
-
-
   // ✅ HUMAN ESCALATION
   if (
     finalBotText.includes(
       "[TRANSFER_TO_AGENT]"
     )
   ) {
-
     finalBotText =
       "Maine ek live support ticket create kar diya hai ✅ Ek human agent jaldi aapse connect karega.";
 
     triggerEscalation = true;
   }
-
-
 
   return {
     finalBotText,

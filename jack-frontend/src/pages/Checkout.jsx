@@ -9,6 +9,17 @@ import Navbar from '../components/Navbar';
 import { useCart } from '../context/CartContext';
 import { useUser } from '../context/UserContext';
 import { API_URL } from '../config'; 
+import { getOptimizedImageUrl } from '../utils/imageOptimizer';
+import axiosInstance from '../api/axiosInstance'; 
+
+// 🔥 CANONICAL CURRENCY FORMATTER UTILITY
+const formatCurrency = (paise) => {
+  if (typeof paise !== 'number') return '₹0.00';
+  return `₹${(paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+
+// 🔥 HELPER TO GET TOKEN
+const getToken = () => localStorage.getItem('token');
 
 // --- Reusable Components for Performance & Cleanliness ---
 
@@ -20,7 +31,7 @@ const SummaryItemImage = memo(({ src, alt }) => {
   return (
     <div className="w-16 h-16 bg-white rounded-xl flex items-center justify-center p-1.5 border border-slate-100 shadow-sm flex-shrink-0 relative overflow-hidden select-none">
       <img 
-        src={imgError ? fallbackSvg : src} 
+        src={imgError ? fallbackSvg : getOptimizedImageUrl(src, 120)} 
         alt={alt || "Product Image"} 
         loading="lazy"
         decoding="async"
@@ -36,7 +47,7 @@ SummaryItemImage.displayName = 'SummaryItemImage';
 // --- Main Checkout Page Component ---
 
 const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
-  const { cart, clearCart } = useCart();
+  const { cart, clearCart, cartTotalPaise } = useCart();
   const navigate = useNavigate();
   const location = useLocation(); 
   const { user, placeOrder } = useUser();
@@ -48,6 +59,14 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
 
   const [showCodAlert, setShowCodAlert] = useState(false); 
   const [isProcessing, setIsProcessing] = useState(false); 
+
+  // 🔥 COD Intelligence States
+  const [codIntelligence, setCodIntelligence] = useState({
+    codAvailable: true,
+    codFeePaise: 5000, // Default fallback ₹50
+    riskLevel: 'LOW',
+    reason: ''
+  });
   
   const STORE_NAME = "Jack Essentials";
   
@@ -66,29 +85,51 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
     if (user?.addresses && user.addresses.length > 0) {
       setSelectedAddress(user.addresses[0]);
       setIsAddingNew(false);
+      // Check COD availability for default address
+      if (user.addresses[0].pincode) {
+        checkCodIntelligence(user.addresses[0].pincode);
+      }
     } else {
       setIsAddingNew(true);
     }
   }, [user]);
 
-  // Memoized Order Calculations for Performance Optimization
-  const { cartTotal, discount, codFee, finalTotal } = useMemo(() => {
-    const total = cart.reduce((acc, item) => {
-      const priceString = String(item.price).replace(/[^0-9]/g, '');
-      return acc + (parseInt(priceString, 10) * item.quantity);
-    }, 0);
+  // 🔥 CHECK COD INTELLIGENCE VIA BACKEND API (Fixed Token Auth & Timeout)
+  const checkCodIntelligence = async (pincode) => {
+    if (!pincode || pincode.length !== 6) return;
+    try {
+      const res = await axiosInstance.get(`/delivery-check?pincode=${pincode}&cartTotal=${cartTotalPaise}&userId=${user?._id || ''}`, {
+        timeout: 10000, // 🔥 FIX: Set 10 Seconds timeout to avoid 1000ms crash
+        headers: { Authorization: `Bearer ${getToken()}` } // Injecting Token explicitly
+      });
+      if (res.data && res.data.success) {
+        setCodIntelligence({
+          codAvailable: res.data.codAvailable,
+          codFeePaise: res.data.codFeePaise !== undefined ? res.data.codFeePaise : 5000,
+          riskLevel: res.data.riskLevel || 'LOW',
+          reason: res.data.message || ''
+        });
+      }
+    } catch (err) {
+      console.error("COD Intelligence Check Failed:", err);
+    }
+  };
+
+  // Memoized Order Calculations (Working purely with Paise integers)
+  const { cartTotalPaiseMetric, discountPaise, appliedCodFeePaise, finalTotalPaise } = useMemo(() => {
+    const totalPaise = Number(cartTotalPaise) || 0;
     
-    const calculatedDiscount = total * 0.10;
-    const calculatedCodFee = paymentMethod === 'cod' ? 50 : 0;
-    const calculatedFinalTotal = Math.max(total - calculatedDiscount + calculatedCodFee, 0);
+    const calculatedDiscountPaise = Math.round(totalPaise * 0.10);
+    const calculatedCodFeePaise = paymentMethod === 'cod' ? (codIntelligence.codFeePaise) : 0;
+    const calculatedFinalTotalPaise = Math.max(totalPaise - calculatedDiscountPaise + calculatedCodFeePaise, 0);
 
     return {
-      cartTotal: total,
-      discount: calculatedDiscount,
-      codFee: calculatedCodFee,
-      finalTotal: calculatedFinalTotal
+      cartTotalPaiseMetric: totalPaise,
+      discountPaise: calculatedDiscountPaise,
+      appliedCodFeePaise: calculatedCodFeePaise,
+      finalTotalPaise: calculatedFinalTotalPaise
     };
-  }, [cart, paymentMethod]);
+  }, [cartTotalPaise, paymentMethod, codIntelligence.codFeePaise]);
 
   const formattedDeliveryDate = useMemo(() => {
     const deliveryDate = new Date();
@@ -106,35 +147,45 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
     setNewAddress(prev => ({ ...prev, pincode: pin }));
 
     if (pin.length === 6) {
+      checkCodIntelligence(pin);
       try {
-        const res = await fetch(`https://api.postalpincode.in/pincode/${pin}`);
-        const data = await res.json();
-        if (data[0].Status === 'Success') {
-          const postOffice = data[0].PostOffice[0];
+        const res = await axiosInstance.get(`/pincode-info/${pin}`, {
+          timeout: 10000, // 🔥 FIX: Set 10 seconds timeout
+          headers: { Authorization: `Bearer ${getToken()}` } // Explicit auth
+        });
+        if (res.data && res.data.success && res.data.data) {
+          const postalDetails = res.data.data;
           setNewAddress(prev => ({ 
             ...prev, 
             pincode: pin, 
-            city: postOffice.District, 
-            state: postOffice.State 
+            city: postalDetails.district || postalDetails.city, 
+            state: postalDetails.state 
           }));
         }
       } catch (error) { 
         console.error("Pincode API failed", error); 
       }
     }
-  }, []);
+  }, [cartTotalPaise, user]);
 
   const handleAddressSubmit = useCallback((e) => {
     e.preventDefault();
     setSelectedAddress(newAddress); 
+    checkCodIntelligence(newAddress.pincode);
     setStep(2); 
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, [newAddress]);
+  }, [newAddress, cartTotalPaise, user]);
 
   const handlePaymentChange = useCallback((method) => {
-    if (method === 'cod') setShowCodAlert(true);
+    if (method === 'cod') {
+      if (!codIntelligence.codAvailable) {
+        alert(codIntelligence.reason || "Cash on Delivery is unavailable for this location or order value.");
+        return;
+      }
+      setShowCodAlert(true);
+    }
     setPaymentMethod(method);
-  }, []);
+  }, [codIntelligence]);
 
   // RAZORPAY SCRIPT LOADER
   const loadRazorpayScript = useCallback(() => {
@@ -155,7 +206,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
 
     try {
       if (user) {
-        const orderResult = await placeOrder(cart, finalTotal, selectedAddress, finalPaymentMethod, trafficSource);
+        const orderResult = await placeOrder(cart, finalTotalPaise, selectedAddress, finalPaymentMethod, trafficSource);
         
         if (orderResult && orderResult.error) {
             alert("Order failed to save: " + orderResult.error);
@@ -185,9 +236,9 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
       alert("Something went wrong. Please check your internet or try again.");
       setIsProcessing(false);
     }
-  }, [user, cart, finalTotal, selectedAddress, placeOrder, clearCart, navigate]);
+  }, [user, cart, finalTotalPaise, selectedAddress, placeOrder, clearCart, navigate]);
 
-  // RAZORPAY PAYMENT INITIATION (🔥 100% SECURE BACKEND FLOW)
+  // RAZORPAY PAYMENT INITIATION (🔥 FIXED: 400 Bad Request Fix using context placeOrder)
   const initiateRazorpayPayment = useCallback(async () => {
     setIsProcessing(true);
     const isLoaded = await loadRazorpayScript();
@@ -199,48 +250,36 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
     }
 
     try {
-      const token = localStorage.getItem("token");
       const savedTraffic = localStorage.getItem('jack_traffic_source');
       const trafficSource = savedTraffic ? JSON.parse(savedTraffic) : { source: 'Direct/Unknown', medium: 'organic', campaign: 'none' };
 
-      // 🔥 STEP 1: FRONTEND SIRF EK PENDING ORDER CREATE KAREGA
-      const orderRes = await fetch(`${API_URL}/orders`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}` 
-        },
-        body: JSON.stringify({
-          items: cart,
-          totalAmount: finalTotal, // Backend isko verify karega DB prices ke sath
-          address: selectedAddress,
-          paymentMethod: 'Razorpay Online',
-          trafficSource: trafficSource
-        })
-      });
+      // 🔥 FIX: We use your existing context `placeOrder` function to generate the pending order in database.
+      // This bypasses the 400 Bad Request error because `placeOrder` already sends the EXACT correct schema!
+      const orderResult = await placeOrder(cart, finalTotalPaise, selectedAddress, 'Razorpay Online', trafficSource);
+      
+      if (!orderResult || orderResult.error) {
+          alert("Failed to generate secure order ID: " + (orderResult?.error || "Invalid Payload"));
+          setIsProcessing(false);
+          return;
+      }
 
-      const pendingOrder = await orderRes.json();
-      const pendingOrderId = pendingOrder._id || pendingOrder.id;
+      const pendingOrderId = orderResult.order?._id || orderResult.order?.id;
 
       if (!pendingOrderId) {
-        alert("Failed to generate secure order ID from server.");
+        alert("Failed to extract order ID from server.");
         setIsProcessing(false);
         return;
       }
 
-      // 🔥 STEP 2: AB BACKEND KO ORDER ID BHEJO TAAKI WO REAL PRICE CALCULATE KARE
-      const res = await fetch(`${API_URL}/payment/create-order`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          orderId: pendingOrderId // 👈 Backend iski hi demand kar raha tha!
-        })
+      // 🔥 STEP 2: AB BACKEND KO ORDER ID BHEJO TAAKI WO REAL PRICE CALCULATE KARE (Explicit Auth Added)
+      const res = await axiosInstance.post('/payment/create-order', {
+        orderId: pendingOrderId 
+      }, {
+        timeout: 15000, // 15 seconds timeout to prevent crash
+        headers: { Authorization: `Bearer ${getToken()}` } 
       });
 
-      const orderData = await res.json();
+      const orderData = res.data;
 
       if (!orderData.success || !orderData.order_id) {
         alert("Backend Error: " + (orderData.error || "Could not create Razorpay Order."));
@@ -250,7 +289,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
 
       const options = {
         key: import.meta.env.VITE_RAZORPAY_KEY_ID || process.env.REACT_APP_RAZORPAY_KEY_ID || "rzp_test_Sx5dYj7qO20PEX",
-        amount: orderData.amount, // 🔥 Backend se aayi hui real securely calculated amount
+        amount: orderData.amount, 
         currency: orderData.currency,
         name: STORE_NAME,
         description: "Order Payment",
@@ -259,24 +298,19 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
           try {
             setIsProcessing(true);
             
-            // 🔥 STEP 3: PAYMENT VERIFY KARO
-            const verifyRes = await fetch(`${API_URL}/payment/verify`, {
-              method: 'POST',
-              headers: { 
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}` 
-              },
-              body: JSON.stringify({
-                razorpay_payment_id: response.razorpay_payment_id,
-                razorpay_order_id: response.razorpay_order_id,
-                razorpay_signature: response.razorpay_signature
-              })
+            // 🔥 STEP 3: PAYMENT VERIFY KARO (Explicit Auth Added)
+            const verifyRes = await axiosInstance.post('/payment/verify', {
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_signature: response.razorpay_signature
+            }, {
+              timeout: 15000,
+              headers: { Authorization: `Bearer ${getToken()}` } 
             });
             
-            const verifyData = await verifyRes.json();
+            const verifyData = verifyRes.data;
             
             if (verifyData.success) {
-              // ✅ Success! (Backend webhook background mein status paid kar dega)
               localStorage.removeItem('jack_traffic_source');
               setStep(3); 
               clearCart();
@@ -312,17 +346,17 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
 
       const rzp = new window.Razorpay(options);
       rzp.on('payment.failed', function (response) {
-        alert(response.error.description);
+        alert("Payment Failed: " + response.error.description);
         setIsProcessing(false);
       });
       rzp.open();
 
     } catch (error) {
       console.error("Payment Error:", error);
-      alert("Something went wrong initializing the payment gateway.");
+      alert(`Server connection issue: ${error.response?.data?.message || error.message}`);
       setIsProcessing(false);
     }
-  }, [cart, finalTotal, selectedAddress, user, clearCart, navigate, loadRazorpayScript]);
+  }, [cart, finalTotalPaise, selectedAddress, user, clearCart, navigate, loadRazorpayScript, placeOrder]);
 
   const handlePreCheckout = useCallback((e) => {
     e.preventDefault();
@@ -331,11 +365,14 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
     if (paymentMethod === 'online') {
       initiateRazorpayPayment(); 
     } else if (paymentMethod === 'cod') {
+      if (!codIntelligence.codAvailable) {
+        alert(codIntelligence.reason || "Cash on Delivery is unavailable for this location.");
+        return;
+      }
       handleFinalOrderSubmission('Cash on Delivery', `COD_${Date.now()}`); 
     }
-  }, [selectedAddress, isAddingNew, paymentMethod, initiateRazorpayPayment, handleFinalOrderSubmission]);
+  }, [selectedAddress, isAddingNew, paymentMethod, codIntelligence, initiateRazorpayPayment, handleFinalOrderSubmission]);
 
-  // Agar user nahi hai toh UI render hi nahi hoga, turant redirect hoga
   if (!user) return null;
 
   return (
@@ -350,9 +387,6 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
             animate={{ opacity: 1 }} 
             exit={{ opacity: 0 }} 
             className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="cod-modal-title"
           >
             <motion.div 
               initial={{ scale: 0.95, y: 20 }} 
@@ -363,14 +397,13 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
               <div className="w-16 h-16 bg-slate-50 text-slate-800 rounded-full flex items-center justify-center mx-auto mb-5 ring-8 ring-slate-50/50">
                 <FiTruck size={28} />
               </div>
-              <h2 id="cod-modal-title" className="text-2xl font-black text-slate-900 mb-3 tracking-tight">Premium Delivery Service</h2>
+              <h2 className="text-2xl font-black text-slate-900 mb-3 tracking-tight">Premium Delivery Service</h2>
               <p className="text-slate-500 text-sm mb-8 leading-relaxed px-2 font-medium">
-                To ensure a secure and expedited doorstep experience, a nominal handling fee of <span className="font-black text-slate-900 bg-slate-100 px-2 py-0.5 rounded">₹50</span> is applied to all Cash on Delivery orders.
+                To ensure a secure and expedited doorstep experience, a nominal handling fee of <span className="font-black text-slate-900 bg-slate-100 px-2 py-0.5 rounded">{formatCurrency(codIntelligence.codFeePaise)}</span> is applied to all Cash on Delivery orders.
               </p>
               <button 
                 onClick={() => setShowCodAlert(false)} 
                 className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-4 rounded-xl shadow-lg shadow-slate-900/20 active:scale-[0.98] transition-all tracking-wide outline-none focus-visible:ring-4 focus-visible:ring-slate-300"
-                aria-label="Accept Cash on Delivery fee"
               >
                 ACCEPT & CONTINUE
               </button>
@@ -424,10 +457,6 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                   <div 
                     className={`p-6 sm:p-8 bg-slate-50/50 border-b border-slate-100 flex items-center justify-between transition-colors ${step === 2 ? 'cursor-pointer hover:bg-slate-50' : ''}`} 
                     onClick={() => { if(step === 2) setStep(1) }}
-                    role={step === 2 ? 'button' : 'heading'}
-                    aria-expanded={step === 1}
-                    tabIndex={step === 2 ? 0 : -1}
-                    onKeyDown={(e) => { if(e.key === 'Enter' && step === 2) setStep(1) }}
                   >
                     <h2 className="text-xl font-black text-slate-900 flex items-center tracking-tight">
                       <div className="w-8 h-8 rounded-full bg-[#FF4500]/10 text-[#FF4500] flex items-center justify-center mr-3">
@@ -435,7 +464,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                       </div>
                       Delivery Address
                     </h2>
-                    {step === 2 && <span className="text-[#FF4500] font-bold text-sm bg-[#FF4500]/10 px-3 py-1 rounded-full hover:bg-[#FF4500]/20 transition-colors">Change</span>}
+                    {step === 2 && <span className="text-[#FF4500] font-bold text-sm bg-[#FF4500]/10 px-3 py-1 rounded-full">Change</span>}
                   </div>
 
                   <AnimatePresence>
@@ -450,7 +479,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                           <div className="space-y-4">
                             {user.addresses.map((addr, idx) => (
                               <label key={addr.id || addr._id || idx}
-                                className={`flex items-start p-5 border-2 rounded-2xl cursor-pointer transition-all duration-200 outline-none focus-within:ring-4 focus-within:ring-[#FF4500]/20 ${
+                                className={`flex items-start p-5 border-2 rounded-2xl cursor-pointer transition-all duration-200 ${
                                   selectedAddress?.id === addr.id 
                                     ? 'border-[#FF4500] bg-[#FF4500]/5 shadow-sm' 
                                     : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
@@ -461,9 +490,11 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                                     type="radio" 
                                     name="address" 
                                     checked={selectedAddress?.id === addr.id} 
-                                    onChange={() => setSelectedAddress(addr)} 
+                                    onChange={() => {
+                                      setSelectedAddress(addr);
+                                      if (addr.pincode) checkCodIntelligence(addr.pincode);
+                                    }} 
                                     className="peer sr-only" 
-                                    aria-label={`Select address ${addr.flat}, ${addr.street}`}
                                   />
                                   <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${selectedAddress?.id === addr.id ? 'border-[#FF4500] bg-[#FF4500]' : 'border-slate-300'}`}>
                                     {selectedAddress?.id === addr.id && <FiCheck size={12} className="text-white" />}
@@ -481,13 +512,13 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                               <button 
                                 onClick={() => { setStep(2); window.scrollTo({ top: 0, behavior: 'smooth' }); }} 
                                 disabled={!selectedAddress} 
-                                className="flex-1 bg-[#FF4500] hover:bg-[#E8004C] disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-black py-4 rounded-xl transition-all shadow-lg shadow-orange-500/20 active:scale-[0.98] flex justify-center items-center outline-none focus-visible:ring-4 focus-visible:ring-orange-300"
+                                className="flex-1 bg-[#FF4500] hover:bg-[#E8004C] disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-black py-4 rounded-xl transition-all shadow-lg shadow-orange-500/20 active:scale-[0.98] flex justify-center items-center"
                               >
                                 DELIVER HERE <FiChevronRight className="ml-2" size={20}/>
                               </button>
                               <button 
                                 onClick={() => setIsAddingNew(true)} 
-                                className="flex-1 bg-white border-2 border-slate-200 hover:border-slate-400 hover:bg-slate-50 text-slate-700 font-bold py-4 rounded-xl transition-all active:scale-[0.98] outline-none focus-visible:ring-4 focus-visible:ring-slate-200"
+                                className="flex-1 bg-white border-2 border-slate-200 hover:border-slate-400 hover:bg-slate-50 text-slate-700 font-bold py-4 rounded-xl transition-all active:scale-[0.98]"
                               >
                                 + Add New Address
                               </button>
@@ -544,7 +575,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                                   maxLength="6" 
                                   value={newAddress.pincode} 
                                   onChange={handlePincodeChange} 
-                                  className="w-full px-5 py-3.5 bg-indigo-50/50 border border-indigo-200 rounded-xl focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none font-black text-indigo-900 tracking-widest transition-all placeholder:font-medium placeholder:tracking-normal" 
+                                  className="w-full px-5 py-3.5 bg-indigo-50/50 border border-indigo-200 rounded-xl focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none font-black text-indigo-900 tracking-widest transition-all" 
                                   placeholder="6-digit pin"
                                 />
                               </div>
@@ -575,7 +606,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                             <div className="flex flex-col sm:flex-row gap-4 pt-6 mt-6 border-t border-slate-100">
                               <button 
                                 type="submit" 
-                                className="flex-1 bg-[#FF4500] hover:bg-[#E8004C] text-white font-black py-4 rounded-xl transition-all shadow-lg shadow-orange-500/20 active:scale-[0.98] outline-none focus-visible:ring-4 focus-visible:ring-orange-300"
+                                className="flex-1 bg-[#FF4500] hover:bg-[#E8004C] text-white font-black py-4 rounded-xl transition-all shadow-lg shadow-orange-500/20 active:scale-[0.98]"
                               >
                                 SAVE & CONTINUE
                               </button>
@@ -583,7 +614,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                                 <button 
                                   type="button" 
                                   onClick={() => setIsAddingNew(false)} 
-                                  className="px-10 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-4 rounded-xl transition-all active:scale-[0.98] outline-none focus-visible:ring-4 focus-visible:ring-slate-300"
+                                  className="px-10 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-4 rounded-xl transition-all active:scale-[0.98]"
                                 >
                                   Cancel
                                 </button>
@@ -628,17 +659,17 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                       <motion.div 
                         initial={{ opacity: 0, height: 0 }} 
                         animate={{ opacity: 1, height: 'auto' }} 
-                        className="p-6 sm:p-8"
+                        className="p-6 sm:p-8 space-y-4"
                       >
                         <div className="space-y-4">
                           <label 
-                            className={`flex items-start p-5 border-2 rounded-2xl cursor-pointer shadow-sm relative overflow-hidden transition-all duration-200 outline-none focus-within:ring-4 focus-within:ring-[#FF4500]/20 ${
+                            className={`flex items-start p-5 border-2 rounded-2xl cursor-pointer shadow-sm relative overflow-hidden transition-all duration-200 ${
                               paymentMethod === 'online' 
                                 ? 'border-[#FF4500] bg-[#FF4500]/5' 
                                 : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
                             }`}
                           >
-                            <div className={`absolute top-0 right-0 text-[9px] font-black px-3 py-1.5 rounded-bl-xl tracking-widest uppercase transition-colors ${paymentMethod === 'online' ? 'bg-[#FF4500] text-white' : 'bg-slate-200 text-slate-500'}`}>
+                            <div className="absolute top-0 right-0 bg-[#FF4500] text-white text-[9px] font-black px-3 py-1.5 rounded-bl-xl tracking-widest uppercase">
                               RECOMMENDED
                             </div>
                             <div className="relative flex items-center justify-center mt-1">
@@ -649,27 +680,28 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                                 checked={paymentMethod === 'online'} 
                                 onChange={() => handlePaymentChange('online')} 
                                 className="peer sr-only" 
-                                aria-label="Pay Online with UPI, Cards, or NetBanking"
                               />
                               <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${paymentMethod === 'online' ? 'border-[#FF4500] bg-[#FF4500]' : 'border-slate-300'}`}>
                                 {paymentMethod === 'online' && <FiCheck size={12} className="text-white" />}
                               </div>
                             </div>
-                            <div className={`w-12 h-12 rounded-full flex items-center justify-center ml-4 mr-4 transition-colors ${paymentMethod === 'online' ? 'bg-white shadow-sm text-[#FF4500]' : 'bg-slate-100 text-slate-400'}`}>
+                            <div className="w-12 h-12 rounded-full bg-white shadow-sm text-[#FF4500] flex items-center justify-center ml-4 mr-4">
                               <FiSmartphone size={24} />
                             </div>
                             <div className="flex-1 pt-1">
-                              <p className={`font-black text-lg leading-none ${paymentMethod === 'online' ? 'text-slate-900' : 'text-slate-700'}`}>Pay Online</p>
-                              <p className="text-sm font-medium text-slate-500 mt-2 leading-snug">UPI / Credit Card / Debit Card / NetBanking</p>
+                              <p className="font-black text-slate-900 text-lg leading-none">Pay Online</p>
+                              <p className="text-sm font-medium text-slate-500 mt-2">UPI / Credit Card / Debit Card / NetBanking</p>
                               <p className="text-[11px] font-bold text-indigo-500 mt-2 flex items-center gap-1 bg-indigo-50 w-max px-2 py-0.5 rounded"><FiShield size={12}/> Secure via Razorpay</p>
                             </div>
                           </label>
 
                           <label 
-                            className={`flex items-start p-5 border-2 rounded-2xl cursor-pointer shadow-sm relative overflow-hidden transition-all duration-200 outline-none focus-within:ring-4 focus-within:ring-slate-300 ${
-                              paymentMethod === 'cod' 
-                                ? 'border-slate-800 bg-slate-50' 
-                                : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                            className={`flex items-start p-5 border-2 rounded-2xl transition-all duration-200 ${
+                              !codIntelligence.codAvailable 
+                                ? 'opacity-50 bg-slate-100 border-slate-200 cursor-not-allowed' 
+                                : paymentMethod === 'cod' 
+                                  ? 'border-slate-800 bg-slate-50 cursor-pointer' 
+                                  : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50 cursor-pointer'
                             }`}
                           >
                             <div className="relative flex items-center justify-center mt-1">
@@ -677,21 +709,30 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                                 type="radio" 
                                 name="payment" 
                                 value="cod" 
+                                disabled={!codIntelligence.codAvailable}
                                 checked={paymentMethod === 'cod'} 
                                 onChange={() => handlePaymentChange('cod')} 
                                 className="peer sr-only" 
-                                aria-label="Pay via Cash on Delivery"
                               />
                               <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${paymentMethod === 'cod' ? 'border-slate-800 bg-slate-800' : 'border-slate-300'}`}>
                                 {paymentMethod === 'cod' && <FiCheck size={12} className="text-white" />}
                               </div>
                             </div>
-                            <div className={`w-12 h-12 rounded-full flex items-center justify-center ml-4 mr-4 transition-colors ${paymentMethod === 'cod' ? 'bg-white shadow-sm text-slate-800' : 'bg-slate-100 text-slate-400'}`}>
+                            <div className="w-12 h-12 rounded-full bg-white shadow-sm text-slate-800 flex items-center justify-center ml-4 mr-4">
                               <FiTruck size={24} />
                             </div>
                             <div className="flex-1 pt-1">
-                              <p className={`font-black text-lg leading-none ${paymentMethod === 'cod' ? 'text-slate-900' : 'text-slate-700'}`}>Cash on Delivery (COD)</p>
-                              <p className="text-sm font-medium text-slate-500 mt-2 leading-snug">Pay via Cash/UPI at your doorstep securely</p>
+                              <div className="flex justify-between items-center">
+                                <p className="font-black text-slate-900 text-lg leading-none">Cash on Delivery (COD)</p>
+                                {codIntelligence.codFeePaise > 0 && codIntelligence.codAvailable && (
+                                  <span className="text-[10px] font-black text-amber-800 bg-amber-100 px-2.5 py-1 rounded-md uppercase tracking-wider">
+                                    +{formatCurrency(codIntelligence.codFeePaise)} Fee
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-sm font-medium text-slate-500 mt-2">
+                                {codIntelligence.codAvailable ? 'Pay via Cash/UPI at your doorstep securely' : <span className="text-red-500 font-bold">{codIntelligence.reason}</span>}
+                              </p>
                             </div>
                           </label>
                         </div>
@@ -700,18 +741,14 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                           <button 
                             onClick={handlePreCheckout} 
                             disabled={isProcessing}
-                            className="w-full bg-slate-950 disabled:bg-slate-400 hover:bg-slate-800 text-white font-black py-4 sm:py-5 rounded-xl shadow-xl shadow-slate-900/20 active:scale-[0.98] transition-all text-base sm:text-lg flex justify-center items-center gap-3 outline-none focus-visible:ring-4 focus-visible:ring-slate-300"
-                            aria-busy={isProcessing}
+                            className="w-full bg-slate-950 disabled:bg-slate-400 hover:bg-slate-800 text-white font-black py-4 sm:py-5 rounded-xl shadow-xl shadow-slate-900/20 active:scale-[0.98] transition-all text-base sm:text-lg flex justify-center items-center gap-3"
                           >
                             {isProcessing ? (
                               <><FiLoader className="animate-spin" size={20} /> SECURING PAYMENT...</>
                             ) : (
-                              <><FiLock size={20} /> {paymentMethod === 'cod' ? `CONFIRM ORDER - ₹${finalTotal.toLocaleString('en-IN')}` : `PAY ₹${finalTotal.toLocaleString('en-IN')} SECURELY`}</>
+                              <><FiLock size={20} /> {paymentMethod === 'cod' ? `CONFIRM ORDER - ${formatCurrency(finalTotalPaise)}` : `PAY ${formatCurrency(finalTotalPaise)} SECURELY`}</>
                             )}
                           </button>
-                          <p className="text-center text-[11px] text-slate-400 mt-5 font-bold flex items-center justify-center uppercase tracking-widest">
-                            <FiShield size={14} className="text-emerald-500 mr-1.5" /> 256-bit SSL Encrypted Checkout
-                          </p>
                         </div>
                       </motion.div>
                     )}
@@ -733,35 +770,38 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                   </div>
 
                   <div className="space-y-4 mb-6 max-h-[300px] overflow-y-auto scrollbar-hide pr-1">
-                    {cart.map(item => (
-                      <div key={item.id} className="flex items-center gap-4 bg-slate-50/80 p-3 rounded-2xl border border-slate-100 hover:bg-slate-50 transition-colors">
-                        <SummaryItemImage src={item.image || (item.images && item.images[0])} alt={item.title} />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-bold text-slate-800 line-clamp-2 leading-tight mb-1">{item.title}</p>
-                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Qty: {item.quantity}</p>
+                    {cart.map(item => {
+                      const itemPricePaise = item.pricePaise || 0;
+                      return (
+                        <div key={item.id} className="flex items-center gap-4 bg-slate-50/80 p-3 rounded-2xl border border-slate-100">
+                          <SummaryItemImage src={item.image || (item.images && item.images[0])} alt={item.title} />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-bold text-slate-800 line-clamp-2 leading-tight mb-1">{item.title}</p>
+                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Qty: {item.quantity}</p>
+                          </div>
+                          <p className="text-sm font-black text-slate-900 pl-2">{formatCurrency(itemPricePaise)}</p>
                         </div>
-                        <p className="text-sm font-black text-slate-900 pl-2">₹{Number(item.price).toLocaleString('en-IN')}</p>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
 
                   <div className="space-y-3.5 mb-6 text-sm font-medium border-t border-slate-100 pt-6">
                     <div className="flex justify-between text-slate-500">
                       <span>Total MRP</span>
-                      <span className="text-slate-900 font-bold">₹{cartTotal.toLocaleString('en-IN')}</span>
+                      <span className="text-slate-900 font-bold">{formatCurrency(cartTotalPaiseMetric)}</span>
                     </div>
                     <div className="flex justify-between text-emerald-600 font-bold">
                       <span>Store Discount</span>
-                      <span>- ₹{discount.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+                      <span>- {formatCurrency(discountPaise)}</span>
                     </div>
                     <div className="flex justify-between text-slate-500 items-center">
                       <span>Shipping Fee</span>
                       <span className="text-emerald-600 font-black bg-emerald-50 px-2 py-0.5 rounded-md text-[10px] uppercase tracking-widest border border-emerald-100">FREE</span>
                     </div>
-                    {paymentMethod === 'cod' && (
-                      <div className="flex justify-between text-slate-800 font-bold animate-in fade-in pt-1">
+                    {paymentMethod === 'cod' && appliedCodFeePaise > 0 && (
+                      <div className="flex justify-between text-slate-800 font-bold pt-1">
                         <span>COD Handling Fee</span>
-                        <span className="text-slate-900 font-black">+ ₹50</span>
+                        <span className="text-slate-900 font-black">+ {formatCurrency(appliedCodFeePaise)}</span>
                       </div>
                     )}
                   </div>
@@ -773,7 +813,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                       <span className="font-bold text-slate-500 uppercase tracking-widest text-[11px] block mb-1">To Pay</span>
                       <span className="text-[10px] text-slate-400 font-medium leading-none">Inclusive of all taxes</span>
                     </div>
-                    <span className="text-3xl font-black text-slate-950 tracking-tight">₹{finalTotal.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+                    <span className="text-3xl font-black text-slate-950 tracking-tight">{formatCurrency(finalTotalPaise)}</span>
                   </div>
                 </div>
               </aside>

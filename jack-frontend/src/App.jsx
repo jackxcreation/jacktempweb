@@ -15,9 +15,14 @@ import { CartProvider } from './context/CartContext';
 import { UserProvider } from './context/UserContext';
 import { ProductProvider } from './context/ProductContext';
 import { SettingsProvider } from './context/SettingsContext';
+import { CompareProvider } from './context/CompareContext'; // Compare Context Provider
 
 // Components
 import Footer from './components/Footer';
+import { SmartPriceDropToast } from './components/SmartPriceDropToast'; // Real-time Price Drop Toast Notification
+import { SmartStockAlertToast } from './components/SmartStockAlertToast'; // Real-time Stock Alert Toast Notification
+import { PWAPrompt } from './components/PWAPrompt'; // PWA Install & Push Notification Prompt
+import { WhatsAppWidget } from './components/WhatsAppWidget'; // WhatsApp Support Floating Widget
 
 // Code-Split Pages via React.lazy for Performance Optimization
 const Home = lazy(() => import('./pages/Home'));
@@ -38,7 +43,9 @@ const PrivacyPolicy = lazy(() => import('./pages/PrivacyPolicy'));
 const AboutUs = lazy(() => import('./pages/AboutUs'));
 const TermsOfService = lazy(() => import('./pages/TermsOfService'));
 const ContactUs = lazy(() => import('./pages/ContactUs'));
-const TrackOrder = lazy(() => import('./pages/TrackOrder'));
+const TrackOrder = lazy(() => import('./pages/TrackOrder')); // Real-time tracking page load
+const Wishlist = lazy(() => import('./pages/Wishlist')); // Wishlist Page lazy load
+const Comparisons = lazy(() => import('./pages/Comparisons')); // 🔥 ADDED: SEO Comparisons Hub Page
 
 // --- Phase 8: TanStack Query Setup ---
 const queryClient = new QueryClient({
@@ -263,6 +270,10 @@ const StoreLayout = () => (
       </Suspense>
     </main>
     <Footer />
+    <SmartPriceDropToast /> 
+    <SmartStockAlertToast />
+    <PWAPrompt />
+    <WhatsAppWidget /> 
   </div>
 );
 
@@ -362,56 +373,70 @@ const App = () => {
           <UserProvider>
             <CartProvider>
               <SettingsProvider>
-                <Router>
-                  <ScrollManager /> 
-                  <EnterpriseAnalyticsManager /> 
-                  <SEOManager />
-                  
-                  <Routes>
-                    <Route element={<StoreLayout />}>
-                      
-                      <Route path="/" element={withAuth(Home)} />
-                      <Route path="/shop" element={withAuth(Shop)} />
-                      <Route path="/product/:id" element={withAuth(ProductDetails)} />
-                      <Route path="/cart" element={withAuth(Cart)} />
-                      
-                      <Route path="/help-center" element={<HelpCenter />} />
-                      <Route path="/returns" element={<ReturnsPage />} />
-                      <Route path="/privacy-policy" element={<PrivacyPolicy />} />
-                      <Route path="/terms" element={<TermsOfService />} />
-                      <Route path="/about" element={<AboutUs />} />
-                      <Route path="/contact" element={<ContactUs />} />
-                      <Route path="/track-order" element={<TrackOrder />} />
+                <CompareProvider>
+                  <Router>
+                    <ScrollManager /> 
+                    <EnterpriseAnalyticsManager /> 
+                    <SEOManager />
+                    
+                    <Routes>
+                      <Route element={<StoreLayout />}>
+                        
+                        <Route path="/" element={withAuth(Home)} />
+                        <Route path="/shop" element={withAuth(Shop)} />
+                        <Route path="/product/:id" element={withAuth(ProductDetails)} />
+                        <Route path="/cart" element={withAuth(Cart)} />
+                        <Route path="/wishlist" element={
+                          <RequireAuth isLoggedIn={isLoggedIn}>
+                            {withAuth(Wishlist)}
+                          </RequireAuth>
+                        } />
+                        
+                        {/* 🔥 SEO Content Engine Routes */}
+                        <Route path="/comparisons" element={withAuth(Comparisons)} />
 
-                      <Route path="/login" element={withAuth(Login)} />
-                      <Route path="/register" element={withAuth(Register)} />
-                      <Route path="/forgot-password" element={<ForgotPassword />} /> 
-                      <Route path="/secure-account" element={<SecureAccount />} />
-                      <Route path="/unlock-account" element={<UnlockAccount />} />
-                      
-                      <Route path="/checkout" element={
-                        <RequireAuth isLoggedIn={isLoggedIn}>
-                          {withAuth(Checkout)}
-                        </RequireAuth>
-                      } />
-                      <Route path="/profile" element={
-                        <RequireAuth isLoggedIn={isLoggedIn}>
-                          {withAuth(Profile)}
-                        </RequireAuth>
-                      } />
-                      <Route path="/order/:id" element={
-                        <RequireAuth isLoggedIn={isLoggedIn}>
-                          {withAuth(OrderDetails)}
-                        </RequireAuth>
-                      } />
-                      
-                      <Route path="*" element={<NotFound />} />
-                    </Route>
-                  </Routes>
+                        <Route path="/help-center" element={<HelpCenter />} />
+                        <Route path="/returns" element={<ReturnsPage />} />
+                        <Route path="/privacy-policy" element={<PrivacyPolicy />} />
+                        <Route path="/terms" element={<TermsOfService />} />
+                        <Route path="/about" element={<AboutUs />} />
+                        <Route path="/contact" element={<ContactUs />} />
+                        <Route path="/track-order" element={
+                          <RequireAuth isLoggedIn={isLoggedIn}>
+                            {withAuth(TrackOrder)}
+                          </RequireAuth>
+                        } />
 
-                  <SpeedInsights />
-                  <Analytics />
-                </Router>
+                        <Route path="/login" element={withAuth(Login)} />
+                        <Route path="/register" element={withAuth(Register)} />
+                        <Route path="/forgot-password" element={withAuth(ForgotPassword)} /> 
+                        <Route path="/secure-account" element={<SecureAccount />} />
+                        <Route path="/unlock-account" element={<UnlockAccount />} />
+                        
+                        <Route path="/checkout" element={
+                          <RequireAuth isLoggedIn={isLoggedIn}>
+                            {withAuth(Checkout)}
+                          </RequireAuth>
+                        } />
+                        <Route path="/profile" element={
+                          <RequireAuth isLoggedIn={isLoggedIn}>
+                            {withAuth(Profile)}
+                          </RequireAuth>
+                        } />
+                        <Route path="/order/:id" element={
+                          <RequireAuth isLoggedIn={isLoggedIn}>
+                            {withAuth(OrderDetails)}
+                          </RequireAuth>
+                        } />
+                        
+                        <Route path="*" element={<NotFound />} />
+                      </Route>
+                    </Routes>
+
+                    <SpeedInsights />
+                    <Analytics />
+                  </Router>
+                </CompareProvider>
               </SettingsProvider>
             </CartProvider>
           </UserProvider>

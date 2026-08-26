@@ -1,0 +1,12 @@
+{
+  "rewrites": [
+    {
+      "source": "/product/:id",
+      "destination": "/api/ssr-product/:id"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

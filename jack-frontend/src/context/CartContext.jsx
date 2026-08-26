@@ -1,7 +1,8 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FiCheckCircle } from 'react-icons/fi'; // 🔥 ADDED ICON
+import { FiCheckCircle } from 'react-icons/fi';
 import { API_URL } from '../config';
+import { getOptimizedImageUrl } from '../utils/imageOptimizer';
 
 const CartContext = createContext();
 export const useCart = () => useContext(CartContext);
@@ -46,7 +47,7 @@ export const CartProvider = ({ children }) => {
       const currentKey = getCartKey();
       const activeKey = localStorage.getItem('active_cart_key') || 'jack_cart_guest';
 
-      // Agar user login ya logout karta hai, toh key change hogi
+      // Agar user login ya logout کرتا hai, toh key change hogi
       if (currentKey !== activeKey) {
         localStorage.setItem('active_cart_key', currentKey);
         const savedCart = localStorage.getItem(currentKey);
@@ -108,29 +109,51 @@ export const CartProvider = ({ children }) => {
 
   // Calculations
   const cartCount = cart.reduce((total, item) => total + item.quantity, 0);
+  
+  // 🔥 Canonical Paisa-safe financial metrics handling
+  const cartTotalPaise = cart.reduce((total, item) => {
+    const pricePaise = item.pricePaise || (item.price ? Math.round(Number(item.price) * 100) : 0);
+    return total + (pricePaise * item.quantity);
+  }, 0);
+
   const cartTotal = cart.reduce((total, item) => {
-    const priceString = String(item.price).replace(/[^0-9]/g, ''); 
+    const priceString = String(item.price || item.pricePaise || 0).replace(/[^0-9]/g, ''); 
     return total + (parseInt(priceString, 10) * item.quantity);
   }, 0);
 
-  // 1. Add to Cart
+  // 1. Add to Cart with Image Optimization support
   const addToCart = (product) => {
+    if (!product) return;
+    const productId = product.id || product._id;
+    const rawImage = product.image || (product.images && product.images[0]) || '';
+    const optimizedImage = getOptimizedImageUrl(rawImage, 320);
+
+    const pricePaise = product.pricePaise || (product.price ? Math.round(Number(product.price) * 100) : 0);
+    const mrpPaise = product.mrpPaise || (product.mrp ? Math.round(Number(product.mrp) * 100) : pricePaise);
+
     setCart((prevCart) => {
-      const existingItem = prevCart.find(item => item.id === product.id);
+      const existingItem = prevCart.find(item => String(item.id) === String(productId));
       if (existingItem) {
         return prevCart.map(item => 
-          item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
+          String(item.id) === String(productId) ? { ...item, quantity: item.quantity + 1 } : item
         );
       }
-      return [...prevCart, { ...product, quantity: 1 }];
+      return [...prevCart, { 
+        ...product, 
+        id: productId,
+        image: optimizedImage,
+        pricePaise,
+        mrpPaise,
+        quantity: 1 
+      }];
     });
-    setToastMessage(`${product.title} added to cart!`); // Cleaned emoji for premium UI
+    setToastMessage(`${product.title} added to cart!`); 
     setTimeout(() => setToastMessage(''), 3000);
   };
 
   // 2. Remove from Cart
   const removeFromCart = (id) => {
-    setCart((prevCart) => prevCart.filter(item => item.id !== id));
+    setCart((prevCart) => prevCart.filter(item => String(item.id) !== String(id)));
     setToastMessage('Item removed from cart');
     setTimeout(() => setToastMessage(''), 3000);
   };
@@ -138,7 +161,7 @@ export const CartProvider = ({ children }) => {
   // 3. Update Quantity (+ / -)
   const updateQuantity = (id, action) => {
     setCart((prevCart) => prevCart.map(item => {
-      if (item.id === id) {
+      if (String(item.id) === String(id)) {
         const newQuantity = action === 'increase' ? item.quantity + 1 : item.quantity - 1;
         return { ...item, quantity: Math.max(1, newQuantity) }; 
       }
@@ -154,7 +177,7 @@ export const CartProvider = ({ children }) => {
 
   return (
     <CartContext.Provider value={{ 
-      cart, addToCart, removeFromCart, updateQuantity, clearCart, cartCount, cartTotal 
+      cart, addToCart, removeFromCart, updateQuantity, clearCart, cartCount, cartTotal, cartTotalPaise 
     }}>
       {children}
       

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FiMapPin, FiPlus, FiEdit2, FiTrash2, FiUser, FiMessageSquare } from 'react-icons/fi';
 import { useUser } from '../../context/UserContext';
+import axiosInstance from '../../api/axiosInstance'; // 🔥 ADDED: For secure backend decoupled API calls
 
 const AddressBook = ({ showToast }) => {
   const { user, updateUserProfile } = useUser();
@@ -19,13 +20,19 @@ const AddressBook = ({ showToast }) => {
     if (val.length === 6) {
       setIsFetchingPincode(true);
       try {
-        const response = await fetch(`https://api.postalpincode.in/pincode/${val}`);
-        const data = await response.json();
-        if (data[0].Status === 'Success') {
-          const postOffice = data[0].PostOffice[0];
-          setAddressForm(prev => ({ ...prev, city: postOffice.District, state: postOffice.State }));
+        // 🔥 DECOUPLED SECURE CALL: Fetch via backend API instead of direct third-party call
+        const res = await axiosInstance.get(`/pincode-info/${val}`);
+        if (res.data && res.data.success && res.data.data) {
+          const postalDetails = res.data.data;
+          setAddressForm(prev => ({ 
+            ...prev, 
+            city: postalDetails.district || postalDetails.city, 
+            state: postalDetails.state 
+          }));
         }
-      } catch (error) { console.error("Pincode fetch error:", error); }
+      } catch (error) { 
+        console.error("Pincode fetch error:", error); 
+      }
       setIsFetchingPincode(false);
     }
   };

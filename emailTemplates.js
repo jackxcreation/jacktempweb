@@ -141,9 +141,6 @@ const getBulkEmailTemplate = (subject, message) => {
   `;
 };
 
-// You can add more templates here later (Welcome, OTP, Login Alert, etc.)
-
-
 // 3. Premium Login Security Alert Template
 const getLoginAlertTemplate = (name, device, time, ip, lockLink) => {
   return `
@@ -309,7 +306,6 @@ const getResetOtpTemplate = (otp) => {
   `;
 };
 
-// 🔥 6. NEW: PASSWORD SUCCESSFULLY CHANGED TEMPLATE 🔥
 const getPasswordChangedTemplate = (name, loginLink) => {
   const BRAND_COLOR = "#FF4500";
   const DARK_BG = "#0f172a";
@@ -380,12 +376,92 @@ const getPasswordChangedTemplate = (name, loginLink) => {
   `;
 };
 
+// 🔥 7. NEW: PREMIUM PRICE DROP ALERT EMAIL TEMPLATE 🔥
+const getPriceDropTemplate = (userName, productTitle, productImage, oldPricePaise, newPricePaise, productLink) => {
+  const oldPrice = `₹${(oldPricePaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+  const newPrice = `₹${(newPricePaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+  const discountPercent = Math.round(((oldPricePaise - newPricePaise) / oldPricePaise) * 100);
+
+  return `
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <style>
+      body { font-family: 'Inter', 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f1f5f9; margin: 0; padding: 0; }
+      .container { max-width: 580px; margin: 40px auto; background-color: #ffffff; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.06); border-top: 6px solid ${BRAND_COLOR}; }
+      
+      .header { background-color: ${DARK_BG}; padding: 25px; text-align: center; }
+      .header h1 { margin: 0; color: #ffffff; font-size: 22px; letter-spacing: 2px; text-transform: uppercase; }
+      .header span { color: ${BRAND_COLOR}; font-weight: 900; }
+      
+      .content { padding: 35px 30px; text-align: center; color: #334155; }
+      .badge { background-color: #fff7ed; color: ${BRAND_COLOR}; border: 1px solid #fdba74; font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: 1px; padding: 6px 14px; border-radius: 50px; display: inline-block; margin-bottom: 15px; }
+      
+      .content h2 { color: ${DARK_BG}; font-size: 24px; font-weight: 900; margin-top: 0; margin-bottom: 10px; }
+      .content p { font-size: 15px; line-height: 1.6; color: #64748b; margin-bottom: 25px; }
+      
+      .product-card { background-color: ${LIGHT_BG}; border: 1px solid #e2e8f0; border-radius: 16px; padding: 20px; margin-bottom: 30px; text-align: left; display: table; width: 100%; box-sizing: border-box; }
+      .product-img-cell { display: table-cell; width: 120px; vertical-align: middle; text-align: center; }
+      .product-img { width: 100px; height: 100px; object-fit: contain; background: #ffffff; border-radius: 12px; padding: 6px; border: 1px solid #cbd5e1; }
+      .product-info-cell { display: table-cell; vertical-align: middle; padding-left: 20px; }
+      
+      .product-title { font-size: 16px; font-weight: bold; color: #0f172a; margin: 0 0 8px 0; line-height: 1.4; }
+      .price-row { font-size: 15px; margin: 0; }
+      .old-price { color: #94a3b8; text-decoration: line-through; margin-right: 10px; font-weight: 600; }
+      .new-price { color: #16a34a; font-size: 20px; font-weight: 900; }
+      .discount-tag { background-color: #dcfce7; color: #15803d; font-size: 10px; font-weight: bold; padding: 3px 8px; border-radius: 6px; display: inline-block; margin-left: 8px; vertical-align: middle; }
+      
+      .btn-buy { display: block; background: linear-gradient(135deg, ${BRAND_COLOR} 0%, #ea580c 100%); color: #ffffff !important; text-decoration: none; padding: 16px 0; border-radius: 14px; font-weight: 900; font-size: 16px; text-transform: uppercase; letter-spacing: 1px; box-shadow: 0 8px 20px rgba(255, 69, 0, 0.35); text-align: center; }
+      
+      .footer { background-color: #f8fafc; padding: 20px; text-align: center; border-top: 1px solid #e2e8f0; }
+      .footer p { color: #94a3b8; font-size: 12px; margin: 0; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>JACK<span>™</span> ESSENTIALS</h1>
+      </div>
+      
+      <div class="content">
+        <div class="badge">📉 Price Drop Alert</div>
+        <h2>Great news, ${userName || 'Shopper'}!</h2>
+        <p>An item on your watchlist or recent history just dropped in price. Grab it before stocks run out!</p>
+        
+        <div class="product-card">
+          <div class="product-img-cell">
+            <img src="${productImage || 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?q=80&w=300&auto=format&fit=crop'}" alt="${productTitle}" class="product-img" />
+          </div>
+          <div class="product-info-cell">
+            <h4 class="product-title">${productTitle}</h4>
+            <p class="price-row">
+              <span class="old-price">${oldPrice}</span>
+              <span class="new-price">${newPrice}</span>
+              <span class="discount-tag">-${discountPercent}%</span>
+            </p>
+          </div>
+        </div>
+        
+        <a href="${productLink || 'https://thejackessentials.com/shop'}" class="btn-buy">Buy It Now &rarr;</a>
+      </div>
+      
+      <div class="footer">
+        <p>You received this alert because you tracked or browsed this item on Jack Essentials.</p>
+        <p style="margin-top: 6px;">© ${new Date().getFullYear()} Jack Essentials. All rights reserved.</p>
+      </div>
+    </div>
+  </body>
+  </html>
+  `;
+};
+
 // Ensure you update your module.exports at the bottom of the file!
 module.exports = {
   getReportTemplate,
   getBulkEmailTemplate,
-  getLoginAlertTemplate, // 🔥 Ise add karna mat bhulna
+  getLoginAlertTemplate,
   getWelcomeTemplate,
   getResetOtpTemplate,
-  getPasswordChangedTemplate
+  getPasswordChangedTemplate,
+  getPriceDropTemplate // 🔥 Added here
 };

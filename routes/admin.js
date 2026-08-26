@@ -6,12 +6,15 @@ const { Resend } = require('resend');
 const { Setting, Subscriber, EmailTemplate, Ticket, AbandonedCart } = require('../models');
 const { getReportTemplate, getBulkEmailTemplate } = require('../emailTemplates');
 
-// 🚨 IMPORT AUTH MIDDLEWARES HERE
-const { protect, admin } = require('../middleware/authMiddleware');
+// 🚨 IMPORT AUTH & RBAC MIDDLEWARES
+const { protect } = require('../middleware/authMiddleware');
+const { checkPermission } = require('../middleware/rbacMiddleware');
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
+// ==========================================
 // ⚙️ 4. STORE SETTINGS
+// ==========================================
 // GET is public (Frontend needs to show footer/links)
 router.get('/api/settings', async (req, res) => {
   try {
@@ -25,8 +28,8 @@ router.get('/api/settings', async (req, res) => {
   } catch (error) { res.status(500).json({ message: "Failed to fetch settings" }); }
 });
 
-// PUT is strictly ADMIN ONLY
-router.put('/api/settings', protect, admin, async (req, res) => {
+// PUT is RBAC ENFORCED (Settings:all)
+router.put('/api/settings', protect, checkPermission('settings:all'), async (req, res) => {
   try {
     const { footerAbout, socialLinks, shopLinks, supportLinks } = req.body;
     let settings = await Setting.findOne();
@@ -44,7 +47,9 @@ router.put('/api/settings', protect, admin, async (req, res) => {
   } catch (error) { res.status(500).json({ message: "Failed to update settings" }); }
 });
 
+// ==========================================
 // 📧 5. EMAIL MARKETING & SUBSCRIBERS
+// ==========================================
 // Public can subscribe
 router.post('/api/subscribe', async (req, res) => {
   try {
@@ -55,16 +60,16 @@ router.post('/api/subscribe', async (req, res) => {
   } catch (error) { res.status(400).json({ message: "Email already subscribed or error." }); }
 });
 
-// Strictly ADMIN ONLY to view subscribers
-router.get('/api/subscribers', protect, admin, async (req, res) => {
+// RBAC ENFORCED to view subscribers
+router.get('/api/subscribers', protect, checkPermission('settings:all'), async (req, res) => {
   try {
     const subscribers = await Subscriber.find({}, 'email subscribedAt').lean();
     res.json(subscribers);
   } catch (error) { res.status(500).json({ message: "Error fetching subscribers" }); }
 });
 
-// Strictly ADMIN ONLY to send bulk emails
-router.post('/api/send-bulk-email', protect, admin, async (req, res) => {
+// RBAC ENFORCED to send bulk emails
+router.post('/api/send-bulk-email', protect, checkPermission('settings:all'), async (req, res) => {
   const { subject, message, emails } = req.body;
   if (!emails || emails.length === 0) return res.status(400).json({ success: false, message: "No users selected" });
   if (!process.env.RESEND_API_KEY) return res.status(500).json({ error: "RESEND_API_KEY is missing." });
@@ -83,8 +88,8 @@ router.post('/api/send-bulk-email', protect, admin, async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// Strictly ADMIN ONLY
-router.post('/api/send-report', protect, admin, async (req, res) => {
+// RBAC ENFORCED for Finance/Reports
+router.post('/api/send-report', protect, checkPermission('finance:all'), async (req, res) => {
   const { to, subject, data, dateRange } = req.body;
   if (!process.env.RESEND_API_KEY) return res.status(500).json({ error: "RESEND_API_KEY is missing" });
 
@@ -99,15 +104,17 @@ router.post('/api/send-report', protect, admin, async (req, res) => {
   } catch (error) { res.status(500).json({ error: "Failed to send report email" }); }
 });
 
-// 📝 6. EMAIL TEMPLATES - Strictly ADMIN ONLY
-router.get('/api/email-templates', protect, admin, async (req, res) => {
+// ==========================================
+// 📝 6. EMAIL TEMPLATES - RBAC ENFORCED
+// ==========================================
+router.get('/api/email-templates', protect, checkPermission('settings:all'), async (req, res) => {
   try {
     const templates = await EmailTemplate.find().sort({ createdAt: -1 }).lean();
     res.json(templates);
   } catch (error) { res.status(500).json({ message: "Error fetching templates" }); }
 });
 
-router.post('/api/email-templates', protect, admin, async (req, res) => {
+router.post('/api/email-templates', protect, checkPermission('settings:all'), async (req, res) => {
   try {
     const newTemplate = new EmailTemplate(req.body);
     await newTemplate.save();
@@ -115,14 +122,16 @@ router.post('/api/email-templates', protect, admin, async (req, res) => {
   } catch (error) { res.status(500).json({ message: "Error saving template" }); }
 });
 
-router.delete('/api/email-templates/:id', protect, admin, async (req, res) => {
+router.delete('/api/email-templates/:id', protect, checkPermission('settings:all'), async (req, res) => {
   try {
     await EmailTemplate.findByIdAndDelete(req.params.id);
     res.json({ message: "Template deleted" });
   } catch (error) { res.status(500).json({ message: "Error deleting template" }); }
 });
 
-// 🤖 7. GEMINI AI - Public (assuming chatbot is for normal users)
+// ==========================================
+// 🤖 7. GEMINI AI - Public (chatbot for normal users)
+// ==========================================
 router.post('/api/gemini-chat', async (req, res) => {
   try {
     if (!process.env.GEMINI_API_KEY) return res.status(500).json({ text: "[TRANSFER_TO_AGENT]" });
@@ -150,22 +159,23 @@ router.post('/api/gemini-chat', async (req, res) => {
   } catch (error) { res.status(500).json({ text: "[TRANSFER_TO_AGENT]" }); }
 });
 
-// 🎟️ 8. TICKETS - Strictly ADMIN ONLY
-router.get('/api/tickets', protect, admin, async (req, res) => {
+// ==========================================
+// 🎟️ 8. TICKETS - RBAC ENFORCED (Support / Admin)
+// ==========================================
+router.get('/api/tickets', protect, checkPermission('tickets:all'), async (req, res) => {
   try {
     const tickets = await Ticket.find().sort({ createdAt: -1 }).lean();
     res.json(tickets);
   } catch (error) { res.status(500).json({ message: "Failed to load tickets" }); }
 });
 
+// ==========================================
 // 🛒 9. ABANDONED CARTS
-// IDOR FIX: Only logged in users can sync their cart. 
-// We NO LONGER trust req.body.user.id. We use req.user._id from the verified JWT.
+// ==========================================
 router.post('/api/sync-cart', protect, async (req, res) => {
   try {
     const { items, totalValue } = req.body;
     
-    // Server assigns the identity securely from the JWT token
     const secureUserId = req.user._id; 
     
     if (items.length === 0) {
@@ -194,16 +204,16 @@ router.post('/api/sync-cart', protect, async (req, res) => {
   } catch (error) { res.status(500).json({ message: "Error syncing cart" }); }
 });
 
-// Strictly ADMIN ONLY
-router.get('/api/abandoned-carts', protect, admin, async (req, res) => {
+// RBAC ENFORCED for Abandoned Carts view
+router.get('/api/abandoned-carts', protect, checkPermission('orders:all'), async (req, res) => {
   try {
     const carts = await AbandonedCart.find().sort({ updatedAt: -1 }).lean();
     res.json(carts);
   } catch (error) { res.status(500).json({ message: "Error fetching abandoned carts" }); }
 });
 
-// Strictly ADMIN ONLY
-router.put('/api/abandoned-carts/:id/note', protect, admin, async (req, res) => {
+// RBAC ENFORCED for Abandoned Carts note update
+router.put('/api/abandoned-carts/:id/note', protect, checkPermission('orders:all'), async (req, res) => {
   try {
     const { adminNote } = req.body;
     const updatedCart = await AbandonedCart.findByIdAndUpdate(req.params.id, { adminNote }, { returnDocument: 'after' });

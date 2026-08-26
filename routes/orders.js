@@ -2,33 +2,83 @@ const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose'); 
 const { Order, Product } = require('../models'); 
+const { z } = require('zod'); // 🔥 Zod for strict input validation
+const { logger } = require('../utils/logger'); // 🔥 Production Winston Logger
 
-// 🚨 IMPORT AUTH MIDDLEWARES
-const { protect, admin } = require('../middleware/authMiddleware');
+// 🚨 IMPORT AUTH & RBAC MIDDLEWARES
+const { protect } = require('../middleware/authMiddleware');
+const { checkPermission } = require('../middleware/rbacMiddleware');
+
+// ==========================================
+// 🛡️ ZOD VALIDATION SCHEMAS FOR ORDERS
+// ==========================================
+const orderCreationSchema = z.object({
+  items: z.array(z.object({
+    productId: z.string().min(1, "Product ID is required"),
+    quantity: z.number().int().positive("Quantity must be at least 1")
+  })).min(1, "Order must contain at least one item"),
+  address: z.object({
+    name: z.string().min(1, "Name is required"),
+    flat: z.string().min(1, "Flat/House info is required"),
+    street: z.string().min(1, "Street info is required"),
+    city: z.string().min(1, "City is required"),
+    state: z.string().min(1, "State is required"),
+    pincode: z.string().regex(/^\d{6}$/, "Invalid pincode. Must be 6 digits"),
+    primaryPhone: z.string().regex(/^\d{10}$/, "Invalid phone number. Must be 10 digits")
+  }),
+  paymentMethod: z.string().min(1, "Payment method is required"),
+  userDetails: z.object({
+    name: z.string().optional(),
+    email: z.string().email().optional()
+  }).optional(),
+  trafficSource: z.any().optional()
+});
+
+const orderUpdateSchema = z.object({
+  status: z.enum(['Pending', 'Paid', 'Processing', 'Shipped', 'Delivered', 'Cancelled', 'Refunded']).optional(),
+  adminNotes: z.string().max(500).optional(),
+  refundStatus: z.string().optional()
+});
+
+// Helper for secure production error responses
+const sendErrorResponse = (res, req, error, defaultMessage = "Internal Server Error", statusCode = 500) => {
+  logger.error({
+    message: defaultMessage,
+    requestId: req.requestId,
+    error: error.message,
+    stack: error.stack,
+    route: req.originalUrl
+  });
+
+  return res.status(statusCode).json({
+    success: false,
+    message: process.env.NODE_ENV === 'production' ? defaultMessage : error.message,
+    requestId: req.requestId
+  });
+};
 
 // ==========================================
 // 🛒 3. ORDER APIs (Real-time Socket.IO Enabled)
 // ==========================================
 
-// 1. AWB GENERATION ROUTE - STRICTLY ADMIN ONLY
-router.post('/api/orders/:id/generate-awb', protect, admin, async (req, res) => {
+// 1. AWB GENERATION ROUTE - MANAGER / ADMIN RBAC
+router.post('/api/orders/:id/generate-awb', protect, checkPermission('orders:all'), async (req, res) => {
   try {
     const { id } = req.params;
     const order = await Order.findById(id);
     
-    if (!order) return res.status(404).json({ message: "Order not found" });
+    if (!order) return res.status(404).json({ success: false, message: "Order not found", requestId: req.requestId });
 
     res.status(200).json({ success: true, message: "AWB Generated Successfully", waybill: "JACK-" + Date.now() });
   } catch (error) {
-    console.error("AWB Generation Error:", error);
-    res.status(500).json({ success: false, message: "Error generating AWB" });
+    return sendErrorResponse(res, req, error, "Error generating AWB");
   }
 });
 
 // ==========================================
-// 🖨️ FETCH DELIVERY LABEL - STRICTLY ADMIN ONLY
+// 🖨️ FETCH DELIVERY LABEL - MANAGER / ADMIN RBAC
 // ==========================================
-router.get('/api/orders/label/:awb', protect, admin, async (req, res) => {
+router.get('/api/orders/label/:awb', protect, checkPermission('orders:all'), async (req, res) => {
   try {
     const { awb } = req.params;
     
@@ -49,14 +99,14 @@ router.get('/api/orders/label/:awb', protect, admin, async (req, res) => {
         res.status(200).json({ isHtml: true, htmlContent: rawText });
     }
   } catch (error) {
-    res.status(500).json({ success: false, message: "Server error fetching label" });
+    return sendErrorResponse(res, req, error, "Server error fetching label");
   }
 });
 
 // ==========================================
-// 🚚 SCHEDULE PICKUP / MANIFEST - STRICTLY ADMIN ONLY
+// 🚚 SCHEDULE PICKUP / MANIFEST - WAREHOUSE / ADMIN RBAC
 // ==========================================
-router.post('/api/orders/pickup', protect, admin, async (req, res) => {
+router.post('/api/orders/pickup', protect, checkPermission('warehouse:all'), async (req, res) => {
   try {
     const { package_count, location_name } = req.body;
     
@@ -87,14 +137,14 @@ router.post('/api/orders/pickup', protect, admin, async (req, res) => {
         res.status(200).json({ success: false, error: "Delhivery Response Error", raw: rawText });
     }
   } catch (error) {
-    res.status(500).json({ success: false, message: "Error scheduling pickup" });
+    return sendErrorResponse(res, req, error, "Error scheduling pickup");
   }
 });
 
 // ==========================================
-// 🚫 CANCEL DELHIIVERY SHIPMENT - STRICTLY ADMIN ONLY
+// 🚫 CANCEL DELHIIVERY SHIPMENT - MANAGER / ADMIN RBAC
 // ==========================================
-router.post('/api/orders/:id/cancel-shipment', protect, admin, async (req, res) => {
+router.post('/api/orders/:id/cancel-shipment', protect, checkPermission('orders:all'), async (req, res) => {
   try {
     const { waybill } = req.body;
     const payload = { "waybill": waybill, "cancellation": true };
@@ -116,44 +166,40 @@ router.post('/api/orders/:id/cancel-shipment', protect, admin, async (req, res) 
         res.status(200).json({ success: false, message: "Delhivery Response Error", raw: rawText });
     }
   } catch (error) {
-    res.status(500).json({ success: false, message: "Error cancelling shipment" });
+    return sendErrorResponse(res, req, error, "Error cancelling shipment");
   }
 });
 
 // ==========================================
-// 🛒 MAIN ORDER CREATION ROUTE - SERVER-SIDE PRICING & ATOMIC INVENTORY RESERVATION 🔥
+// 🛒 MAIN ORDER CREATION ROUTE - ZOD VALIDATED & ATOMIC RESERVATION 🔥
 // ==========================================
 router.post('/api/orders', protect, async (req, res) => {
+  // 🔥 Strict Zod Validation First
+  const validationResult = orderCreationSchema.safeParse(req.body);
+  if (!validationResult.success) {
+    return res.status(400).json({ 
+      success: false, 
+      message: "Validation failed", 
+      errors: validationResult.error.format(),
+      requestId: req.requestId
+    });
+  }
+
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const { items, address, paymentMethod, userDetails, trafficSource } = req.body;
-    
-    if (!items || !Array.isArray(items) || items.length === 0) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ message: "Order must contain items" });
-    }
-
+    const { items, address, paymentMethod, userDetails, trafficSource } = validationResult.data;
     const secureUserId = req.user._id; 
     const safeStatus = 'Pending'; 
 
     let calculatedServerTotalPaise = 0;
     const verifiedOrderItems = [];
 
-    // 🔥 AUDIT FIX: Normalize items and perform strict atomic reservation using findOneAndUpdate
     for (const rawItem of items) {
-      const productId = rawItem.productId || rawItem._id;
-      const orderQty = Number(rawItem.quantity) || 1;
+      const productId = rawItem.productId;
+      const orderQty = rawItem.quantity;
 
-      if (orderQty <= 0) {
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(400).json({ message: "Invalid product quantity" });
-      }
-
-      // Strict Atomic Condition Check & Decrement ($gte inventory check + $inc decrement)
       const updatedProduct = await Product.findOneAndUpdate(
         { _id: productId, inventory: { $gte: orderQty } },
         { $inc: { inventory: -orderQty } },
@@ -163,7 +209,7 @@ router.post('/api/orders', protect, async (req, res) => {
       if (!updatedProduct) {
         await session.abortTransaction();
         session.endSession();
-        return res.status(400).json({ message: `Insufficient stock or product not found for ID: ${productId}` });
+        return res.status(400).json({ success: false, message: `Insufficient stock or product not found for ID: ${productId}`, requestId: req.requestId });
       }
 
       const unitPricePaise = updatedProduct.pricePaise || Math.round(parseFloat(updatedProduct.price || 0) * 100);
@@ -181,12 +227,10 @@ router.post('/api/orders', protect, async (req, res) => {
     const deviceInfo = req.headers['user-agent']?.includes('Mobile') ? 'Mobile Device' : 'Desktop / PC';
     const io = req.app.get("io"); 
 
-    // 🔥 CREATE ORDER USING AUTHORITATIVE SERVER-CALCULATED PAISE TOTAL
     const newOrder = new Order({ 
       userId: secureUserId, 
       items: verifiedOrderItems, 
       totalPaise: calculatedServerTotalPaise,
-      totalAmount: (calculatedServerTotalPaise / 100).toFixed(2), // Backward compatibility 
       status: safeStatus, 
       address, 
       paymentMethod, 
@@ -288,21 +332,51 @@ router.post('/api/orders', protect, async (req, res) => {
       await session.abortTransaction();
     }
     session.endSession();
-    console.error("Order Creation Error & Inventory Rollback:", error);
-    res.status(500).json({ message: "Order failed", error: error.message }); 
+    return sendErrorResponse(res, req, error, "Order creation failed");
   }
 });
 
 // ==========================================
-// ✏️ UPDATE ORDER STATUS - STRICTLY ADMIN ONLY (WITH STATE ENUM VALIDATION)
+// ✏️ UPDATE ORDER STATUS - MANAGER / ADMIN RBAC & ZOD VALIDATED 🔥
 // ==========================================
-router.put('/api/orders/:id', protect, admin, async (req, res) => {
+const ALLOWED_STATE_TRANSITIONS = {
+  'Pending': ['Paid', 'Processing', 'Cancelled'],
+  'Paid': ['Processing', 'Refunded', 'Cancelled'],
+  'Processing': ['Shipped', 'Cancelled', 'Refunded'],
+  'Shipped': ['Delivered', 'Refunded'],
+  'Delivered': ['Refunded'],
+  'Cancelled': [],
+  'Refunded': []
+};
+
+router.put('/api/orders/:id', protect, checkPermission('orders:all'), async (req, res) => {
   try {
-    const { status, adminNotes, refundStatus } = req.body;
-    const allowedStatuses = ['Pending', 'Paid', 'Processing', 'Shipped', 'Delivered', 'Cancelled', 'Refunded'];
-    
-    if (status && !allowedStatuses.includes(status)) {
-      return res.status(400).json({ message: "Invalid order lifecycle state transition" });
+    // 🔥 Strict Zod Validation
+    const validationResult = orderUpdateSchema.safeParse(req.body);
+    if (!validationResult.success) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Validation failed", 
+        errors: validationResult.error.format(),
+        requestId: req.requestId
+      });
+    }
+
+    const { status, adminNotes, refundStatus } = validationResult.data;
+
+    const existingOrder = await Order.findById(req.params.id);
+    if (!existingOrder) return res.status(404).json({ success: false, message: "Order not found", requestId: req.requestId });
+
+    // 🔥 ENFORCE STRICT STATE MACHINE TRANSITIONS
+    if (status && status !== existingOrder.status) {
+      const validNextStates = ALLOWED_STATE_TRANSITIONS[existingOrder.status] || [];
+      if (!validNextStates.includes(status)) {
+        return res.status(400).json({ 
+          success: false,
+          message: `Invalid state transition. Cannot move order from '${existingOrder.status}' to '${status}'.`,
+          requestId: req.requestId
+        });
+      }
     }
 
     const io = req.app.get("io"); 
@@ -318,14 +392,12 @@ router.put('/api/orders/:id', protect, admin, async (req, res) => {
         { returnDocument: 'after' }
     );
 
-    if (!updatedOrder) return res.status(404).json({ message: "Order not found" });
-
     const orderResponse = { ...updatedOrder._doc, id: updatedOrder._id.toString() };
     if(io) { try { io.emit("order_status_updated", orderResponse); } catch(e){} }
 
     res.json(orderResponse);
   } catch (error) { 
-    res.status(500).json({ message: "Failed to update order status" }); 
+    return sendErrorResponse(res, req, error, "Failed to update order status");
   }
 });
 
@@ -334,8 +406,8 @@ router.put('/api/orders/:id', protect, admin, async (req, res) => {
 // ==========================================
 router.get('/api/orders/user/:userId', protect, async (req, res) => {
   try {
-    if (req.user._id.toString() !== req.params.userId && req.user.role !== 'admin') {
-       return res.status(403).json({ message: "Access Denied: You can only view your own orders." });
+    if (req.user._id.toString() !== req.params.userId && req.user.role !== 'admin' && req.user.role !== 'manager') {
+       return res.status(403).json({ success: false, message: "Access Denied: You can only view your own orders.", requestId: req.requestId });
     }
 
     const page = Math.max(1, parseInt(req.query.page) || 1);
@@ -349,13 +421,15 @@ router.get('/api/orders/user/:userId', protect, async (req, res) => {
       .lean();
 
     res.json(orders.map(o => ({ ...o, id: o._id.toString() })));
-  } catch (error) { res.status(500).json({ message: "Failed to fetch orders" }); }
+  } catch (error) { 
+    return sendErrorResponse(res, req, error, "Failed to fetch orders"); 
+  }
 });
 
 // ==========================================
-// 📦 GET ALL ORDERS - STRICTLY ADMIN ONLY & PAGINATED
+// 📦 GET ALL ORDERS - MANAGER / ADMIN RBAC & PAGINATED
 // ==========================================
-router.get('/api/orders', protect, admin, async (req, res) => {
+router.get('/api/orders', protect, checkPermission('orders:all'), async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(100, parseInt(req.query.limit) || 20);
@@ -368,7 +442,9 @@ router.get('/api/orders', protect, admin, async (req, res) => {
       .lean();
 
     res.json(orders.map(o => ({ ...o, id: o._id.toString() })));
-  } catch (error) { res.status(500).json({ message: "Failed to fetch orders" }); }
+  } catch (error) { 
+    return sendErrorResponse(res, req, error, "Failed to fetch orders"); 
+  }
 });
 
 module.exports = router;

@@ -7,6 +7,9 @@ const axiosInstance = axios.create({
   
   // 🔥 PHASE 8: Add timeout (10 seconds). Infinite loop se bachane ke liye.
   timeout: 10000, 
+
+  // 🔥 CRITICAL FOR COOKIES: Allow browser to send and receive HttpOnly cookies cross-origin/same-origin
+  withCredentials: true,
 });
 
 // ==========================================
@@ -14,9 +17,10 @@ const axiosInstance = axios.create({
 // ==========================================
 axiosInstance.interceptors.request.use(
   (config) => {
-    // Admin token ya regular user token fetch karo
-    const token = localStorage.getItem('adminToken') || localStorage.getItem('token');
-    
+    // 🔥 FIX: Re-added Token Injection! 
+    // Backend still relies on Bearer token for strict authentication. 
+    // Yeh line har request ke sath tera login proof (token) bhejegi.
+    const token = localStorage.getItem('token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -46,10 +50,9 @@ axiosInstance.interceptors.response.use(
     if (error.response && (error.response.status === 401 || error.response.status === 403)) {
       console.warn("🚨 Session expired or Unauthorized. Forcing auto-logout.");
       
-      // Tokens and user data delete karo
-      localStorage.removeItem('adminToken');
-      localStorage.removeItem('token');
+      // LocalStorage data delete karo (Jack user state)
       localStorage.removeItem('jack_user');
+      localStorage.removeItem('token'); // 🔥 FIX: Token ko bhi clear karo taaki purana token stuck na ho
 
       // Doosre React Contexts ko notify karne ke liye event fire karo
       window.dispatchEvent(new Event('jack_auth_change'));

@@ -3,6 +3,12 @@ import { motion } from 'framer-motion';
 import { FiPackage, FiShoppingBag, FiTruck, FiCheckCircle, FiClock, FiChevronRight } from 'react-icons/fi';
 import { Link, useNavigate } from 'react-router-dom';
 
+// 🔥 CANONICAL CURRENCY FORMATTER UTILITY
+const formatCurrency = (paise) => {
+  if (typeof paise !== 'number') return '₹0.00';
+  return `₹${(paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+
 const TrackOrder = () => {
   const navigate = useNavigate();
   const [orders, setOrders] = useState([]);
@@ -97,29 +103,33 @@ const TrackOrder = () => {
               // Calculate progress index based on real status
               const currentStageIdx = stages.includes(order.status) ? stages.indexOf(order.status) : 0;
               const progressPercentage = (currentStageIdx / (stages.length - 1)) * 100;
+              
+              const orderIdStr = order.id || order._id || '';
+              const orderTotalPaise = order.totalPaise || 0;
 
               return (
-                <motion.div key={order.id || idx} variants={fadeUp} className="bg-slate-800/40 rounded-3xl border border-slate-700 overflow-hidden hover:border-slate-500 transition-colors">
+                <motion.div key={orderIdStr || idx} variants={fadeUp} className="bg-slate-800/40 rounded-3xl border border-slate-700 overflow-hidden hover:border-slate-500 transition-colors">
                   
                   {/* Order Details Header */}
                   <div className="p-6 md:p-8 flex flex-col md:flex-row gap-6 items-start md:items-center justify-between border-b border-slate-700/50">
                     <div className="flex items-center gap-6">
                       <div className="w-24 h-24 bg-slate-900 rounded-2xl overflow-hidden border border-slate-700 flex-shrink-0 relative group">
                         <img 
-                          src={order.items?.[0]?.image || "https://via.placeholder.com/150"} 
+                          src={order.items?.[0]?.image || order.items?.[0]?.images?.[0] || "https://via.placeholder.com/150"} 
                           alt="product" 
-                          className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+                          className="w-full h-full object-contain bg-white p-1 group-hover:scale-110 transition-transform duration-500"
                         />
                       </div>
                       <div>
-                        <p className="text-xs font-bold text-[#FF4500] uppercase tracking-wider mb-1">Order #{order.id}</p>
-                        <h3 className="text-xl font-bold text-white line-clamp-1 mb-2">{order.items?.[0]?.title || "Premium Product"}</h3>
+                        <p className="text-xs font-bold text-[#FF4500] uppercase tracking-wider mb-1">Order #{orderIdStr.slice(-8).toUpperCase()}</p>
+                        <h3 className="text-xl font-bold text-white line-clamp-1 mb-1">{order.items?.[0]?.title || "Premium Product"}</h3>
+                        <p className="text-sm font-black text-emerald-400 mb-2">{formatCurrency(order.items?.[0]?.pricePaise || orderTotalPaise)}</p>
                         <p className="text-sm text-slate-400 flex items-center gap-2">
-                          <FiClock /> Placed on: {order.date || "Recently"}
+                          <FiClock /> Placed on: {order.date || new Date(order.createdAt).toLocaleDateString()}
                         </p>
                       </div>
                     </div>
-                    <Link to={`/order/${order.id}`} className="text-sm font-bold text-slate-300 hover:text-white bg-slate-700/50 hover:bg-slate-600 px-5 py-2.5 rounded-xl transition-all flex items-center gap-2 whitespace-nowrap">
+                    <Link to={`/order/${orderIdStr}`} className="text-sm font-bold text-slate-300 hover:text-white bg-slate-700/50 hover:bg-slate-600 px-5 py-2.5 rounded-xl transition-all flex items-center gap-2 whitespace-nowrap">
                       View Details <FiChevronRight />
                     </Link>
                   </div>

@@ -131,7 +131,7 @@ const Login = ({ setIsLoggedIn }) => {
       if (!isMounted.current) return; // Prevent state update if unmounted
 
       // 🔥 FOOLPROOF LOCK CHECK
-      if (res?.isLocked || (res?.message && res.message.includes('LOCKED'))) {
+      if (res?.isLocked || (res?.message && res.message.includes('LOCKED')) || (res?.error && res.error.includes('LOCKED'))) {
         setStatus({ type: 'error', msg: 'Account Locked! Redirecting to unlock page...' });
         
         setTimeout(() => {
@@ -140,7 +140,7 @@ const Login = ({ setIsLoggedIn }) => {
         return;
       }
 
-      if (res?.success) {
+      if (res?.success || res?.token) {
         try {
           if (rememberMe) {
             localStorage.setItem('jack_remembered_email', trimmedEmail);
@@ -159,11 +159,14 @@ const Login = ({ setIsLoggedIn }) => {
           if (isMounted.current) navigate(from, { replace: true }); 
         }, 1000);
       } else {
-        setStatus({ type: 'error', msg: res?.message || 'Invalid credentials. Please try again.' });
+        // 🔥 FIX: Read backend structured error from 'res' (if caught inside context)
+        setStatus({ type: 'error', msg: res?.error || res?.message || 'Invalid email or password.' });
       }
     } catch (error) {
       if (isMounted.current) {
-        setStatus({ type: 'error', msg: 'Network error. Please check your connection.' });
+        // 🔥 FIX: Dynamically read Axios/Fetch errors directly from the backend response
+        const backendError = error.response?.data?.error || error.response?.data?.message || error.message || 'Network error. Please check your connection.';
+        setStatus({ type: 'error', msg: backendError });
       }
     }
   }, [email, password, loginUser, navigate, setIsLoggedIn, rememberMe, isOnline, from]);
@@ -182,7 +185,7 @@ const Login = ({ setIsLoggedIn }) => {
       if (!isMounted.current) return;
 
       // 🔥 FOOLPROOF SOCIAL LOCK CHECK
-      if (dbRes?.isLocked || (dbRes?.message && dbRes.message.includes('LOCKED'))) {
+      if (dbRes?.isLocked || (dbRes?.message && dbRes.message.includes('LOCKED')) || (dbRes?.error && dbRes.error.includes('LOCKED'))) {
         setStatus({ type: 'error', msg: 'Account Locked! Redirecting to unlock page...' });
         setTimeout(() => {
           if (isMounted.current) navigate(`/unlock-account?email=${encodeURIComponent(result?.user?.email)}`);
@@ -190,7 +193,7 @@ const Login = ({ setIsLoggedIn }) => {
         return;
       }
       
-      if (dbRes?.success) {
+      if (dbRes?.success || dbRes?.token) {
         setStatus({ type: 'success', msg: `Welcome back, ${result?.user?.displayName?.split(' ')[0] || 'User'}!` });
         if (setIsLoggedIn) setIsLoggedIn(true);
         
@@ -199,14 +202,15 @@ const Login = ({ setIsLoggedIn }) => {
           if (isMounted.current) navigate(from, { replace: true }); 
         }, 1000);
       } else {
-        setStatus({ type: 'error', msg: `Account sync failed. Please try again.` });
+        setStatus({ type: 'error', msg: dbRes?.error || dbRes?.message || `Account sync failed. Please try again.` });
       }
     } catch (error) {
       if (!isMounted.current) return;
       if (error?.code === 'auth/popup-closed-by-user') {
         setStatus({ type: '', msg: '' }); 
       } else {
-        setStatus({ type: 'error', msg: `Connection to ${providerName} failed.` });
+        const backendError = error.response?.data?.error || error.response?.data?.message || `Connection to ${providerName} failed.`;
+        setStatus({ type: 'error', msg: backendError });
       }
     }
   }, [socialLoginUser, navigate, setIsLoggedIn, isOnline, from]);

@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { FiSearch, FiShoppingCart, FiUser, FiMenu, FiHeart, FiX, FiHome, FiGrid } from 'react-icons/fi';
 import { useCart } from '../context/CartContext';
 import { useUser } from '../context/UserContext'; 
+import { LanguageSelector } from './LanguageSelector'; // 🔥 ADDED: Multi-lingual selector component
 
 const Navbar = ({ isLoggedIn }) => {
   const navigate = useNavigate();
@@ -66,8 +67,13 @@ const Navbar = ({ isLoggedIn }) => {
           </div>
 
           {/* Action Icons (Right Side) */}
-          <div className="flex items-center space-x-6 sm:space-x-8 text-slate-700">
+          <div className="flex items-center space-x-5 sm:space-x-7 text-slate-700">
             
+            {/* 🔥 Multi-Lingual Selector */}
+            <div className="hidden lg:block">
+              <LanguageSelector />
+            </div>
+
             {/* Personalized User Profile */}
             <div className="hidden sm:flex items-center">
               {isLoggedIn && user ? (
@@ -88,8 +94,8 @@ const Navbar = ({ isLoggedIn }) => {
               )}
             </div>
             
-            {/* Wishlist */}
-            <Link to="/profile" className="hidden sm:flex flex-col items-center hover:text-[#FF4500] transition-colors">
+            {/* 🔥 FIX: Wishlist link updated to /wishlist instead of /profile */}
+            <Link to="/wishlist" className="hidden sm:flex flex-col items-center hover:text-[#FF4500] transition-colors">
               <FiHeart size={24} className="stroke-[2px]" />
               <span className="text-[10px] font-black uppercase tracking-wider mt-1.5">Wishlist</span>
             </Link>
@@ -168,7 +174,7 @@ const Navbar = ({ isLoggedIn }) => {
                 <button onClick={() => setIsMobileMenuOpen(false)} className="p-2.5 bg-slate-100 rounded-full text-slate-600 hover:text-slate-900 hover:bg-slate-200 transition-colors"><FiX size={22}/></button>
               </div>
               
-              <div className="p-6 border-b border-slate-100 bg-slate-50/50">
+              <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex flex-col gap-4">
                 {isLoggedIn && user ? (
                   <div className="flex items-center gap-4">
                     <div className="w-14 h-14 rounded-full bg-slate-900 text-white flex items-center justify-center font-black text-2xl shadow-lg">{user.name ? user.name.charAt(0).toUpperCase() : 'U'}</div>
@@ -183,6 +189,9 @@ const Navbar = ({ isLoggedIn }) => {
                     <FiUser size={20} /> SIGN IN / REGISTER
                   </Link>
                 )}
+                <div className="pt-2">
+                  <LanguageSelector />
+                </div>
               </div>
 
               <div className="flex-1 overflow-y-auto py-6">
@@ -190,7 +199,8 @@ const Navbar = ({ isLoggedIn }) => {
                   <Link to="/" onClick={() => setIsMobileMenuOpen(false)} className="px-4 py-3.5 text-slate-800 font-black tracking-wide hover:bg-slate-100 rounded-xl flex items-center gap-4 text-lg"><FiHome className="text-slate-400" size={22}/> Home</Link>
                   <Link to="/shop" onClick={() => setIsMobileMenuOpen(false)} className="px-4 py-3.5 text-slate-800 font-black tracking-wide hover:bg-slate-100 rounded-xl flex items-center gap-4 text-lg"><FiGrid className="text-slate-400" size={22}/> Shop All</Link>
                   <Link to="/profile" onClick={() => setIsMobileMenuOpen(false)} className="px-4 py-3.5 text-slate-800 font-black tracking-wide hover:bg-slate-100 rounded-xl flex items-center gap-4 text-lg"><FiUser className="text-slate-400" size={22}/> My Account</Link>
-                  <Link to="/profile" onClick={() => setIsMobileMenuOpen(false)} className="px-4 py-3.5 text-slate-800 font-black tracking-wide hover:bg-slate-100 rounded-xl flex items-center gap-4 text-lg"><FiHeart className="text-slate-400" size={22}/> Wishlist</Link>
+                  {/* 🔥 FIX: Mobile menu wishlist link updated to /wishlist */}
+                  <Link to="/wishlist" onClick={() => setIsMobileMenuOpen(false)} className="px-4 py-3.5 text-slate-800 font-black tracking-wide hover:bg-slate-100 rounded-xl flex items-center gap-4 text-lg"><FiHeart className="text-slate-400" size={22}/> Wishlist</Link>
                 </nav>
               </div>
 

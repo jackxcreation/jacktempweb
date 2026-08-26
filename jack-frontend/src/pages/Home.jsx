@@ -5,11 +5,19 @@ import Navbar from '../components/Navbar';
 import { 
   FiHeart, FiStar, FiShoppingCart, FiTruck, FiShield, 
   FiRefreshCcw, FiArrowRight, FiClock, FiZap,
-  FiSmartphone, FiWatch, FiCpu, FiHome, FiCompass, FiTv, FiSmile, FiEye
+  FiSmartphone, FiWatch, FiCpu, FiHome, FiCompass, FiTv, FiSmile, FiEye, FiX, FiCheck
 } from 'react-icons/fi';
 import { useCart } from '../context/CartContext';
 import { useUser } from '../context/UserContext';
 import { useProducts } from '../context/ProductContext';
+import { useCompare } from '../context/CompareContext'; // 🔥 Compare context integration
+import { getOptimizedImageUrl } from '../utils/imageOptimizer';
+
+// 🔥 CANONICAL CURRENCY FORMATTER UTILITY
+const formatCurrency = (paise) => {
+  if (typeof paise !== 'number') return '₹0.00';
+  return `₹${(paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
 
 // --- Constants ---
 const BANNERS = [
@@ -30,21 +38,165 @@ const CATEGORIES = [
 ];
 
 // --- Utilities ---
-const calculateDiscount = (mrp, price) => {
-  if (!mrp || !price || Number(mrp) <= Number(price)) return null;
-  return Math.round(((Number(mrp) - Number(price)) / Number(mrp)) * 100);
+const calculateDiscountPercentage = (mrpPaise, pricePaise) => {
+  if (!mrpPaise || !pricePaise || mrpPaise <= pricePaise) return null;
+  return Math.round(((mrpPaise - pricePaise) / mrpPaise) * 100);
+};
+
+// ==========================================
+// ⚖️ SIDE-BY-SIDE COMPARISON MODAL COMPONENT
+// ==========================================
+const CompareModal = ({ isOpen, onClose }) => {
+  const { compareList, removeFromCompare, clearCompare } = useCompare();
+
+  if (!isOpen) return null;
+
+  return (
+    <AnimatePresence>
+      <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.95 }} 
+          animate={{ opacity: 1, scale: 1 }} 
+          exit={{ opacity: 0, scale: 0.95 }}
+          className="bg-white rounded-[2rem] max-w-4xl w-full max-h-[90vh] overflow-hidden shadow-2xl flex flex-col"
+        >
+          {/* Header */}
+          <div className="flex justify-between items-center p-6 border-b border-slate-100">
+            <div>
+              <h2 className="text-2xl font-black text-slate-900">Product Comparison</h2>
+              <p className="text-xs text-slate-500 font-medium">Compare up to 2 products side-by-side</p>
+            </div>
+            <div className="flex items-center gap-4">
+              {compareList.length > 0 && (
+                <button onClick={clearCompare} className="text-xs font-bold text-red-500 hover:underline">Clear All</button>
+              )}
+              <button onClick={onClose} className="p-2 bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200 transition-colors"><FiX size={20}/></button>
+            </div>
+          </div>
+
+          {/* Body Content */}
+          <div className="flex-1 overflow-y-auto p-6">
+            {compareList.length === 0 ? (
+              <div className="text-center py-16">
+                <p className="text-slate-400 font-medium mb-2">No products selected for comparison.</p>
+                <p className="text-xs text-slate-400">Click "Compare" on any product card to start comparing.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-3 gap-6">
+                {/* Labels Column */}
+                <div className="space-y-6 pt-24 font-bold text-slate-400 text-sm uppercase tracking-wider">
+                  <div>Price</div>
+                  <div>Rating</div>
+                  <div>Category & Brand</div>
+                  <div>Warranty</div>
+                  <div>Delivery Info</div>
+                  <div>Key Features / Specs</div>
+                </div>
+
+                {/* Product Columns */}
+                {compareList.map((product) => {
+                  const rawImg = product.image || (product.images && product.images[0]);
+                  // 🔥 FIX: Fallback logic for price inside Compare Modal
+                  const productPricePaise = product.pricePaise || (product.price ? product.price * 100 : 0);
+                  const productMrpPaise = product.mrpPaise || (product.mrp ? product.mrp * 100 : 0);
+
+                  return (
+                    <div key={product.id || product._id} className="bg-slate-50/50 rounded-3xl p-6 border border-slate-100 relative flex flex-col">
+                      <button 
+                        onClick={() => removeFromCompare(product.id || product._id)}
+                        className="absolute top-4 right-4 p-1.5 bg-white rounded-full text-slate-400 hover:text-red-500 shadow-sm"
+                      >
+                        <FiX size={14} />
+                      </button>
+
+                      {/* Image & Title */}
+                      <div className="h-36 bg-white rounded-2xl p-3 flex items-center justify-center mb-4 shadow-sm">
+                        <img src={getOptimizedImageUrl(rawImg, 200)} alt={product.title} className="max-h-full object-contain" />
+                      </div>
+                      <h3 className="text-sm font-bold text-slate-800 line-clamp-2 mb-6 h-10">{product.title}</h3>
+
+                      {/* Specs Mapping */}
+                      <div className="space-y-6 text-sm font-bold text-slate-900">
+                        {/* Price */}
+                        <div>
+                          <span className="text-[#FF4500] text-lg">{formatCurrency(productPricePaise)}</span>
+                          {productMrpPaise > productPricePaise && (
+                            <span className="text-xs text-slate-400 line-through ml-2">{formatCurrency(productMrpPaise)}</span>
+                          )}
+                        </div>
+
+                        {/* Rating */}
+                        <div className="flex items-center gap-1 text-slate-700">
+                          <FiStar className="text-yellow-400 fill-yellow-400" size={14} />
+                          <span>{product.rating || '4.5'} ({product.reviews || 120} reviews)</span>
+                        </div>
+
+                        {/* Category & Brand */}
+                        <div>
+                          <span className="text-indigo-600 block">{product.category}</span>
+                          <span className="text-xs text-slate-500 font-medium">Brand: {product.brand || 'Generic'}</span>
+                        </div>
+
+                        {/* Warranty */}
+                        <div className="text-slate-600 font-medium">
+                          {product.warranty || '1 Year Manufacturer Warranty'}
+                        </div>
+
+                        {/* Delivery */}
+                        <div className="text-emerald-600 font-medium text-xs flex items-center gap-1">
+                          <FiCheck size={14} /> Standard Delivery (3-5 Days)
+                        </div>
+
+                        {/* Features / Specs */}
+                        <div className="text-xs text-slate-500 font-medium space-y-1 bg-white p-3 rounded-xl border border-slate-100">
+                          <div>Color: {product.color || 'Standard'}</div>
+                          <div>Material: {product.material || 'Premium Build'}</div>
+                          <div>Weight: {product.weight || 'N/A'}</div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* Empty Slot if only 1 product selected */}
+                {compareList.length === 1 && (
+                  <div className="rounded-3xl border-2 border-dashed border-slate-200 p-6 flex flex-col items-center justify-center text-center">
+                    <p className="text-xs font-bold text-slate-400 mb-2">Add one more product</p>
+                    <p className="text-[11px] text-slate-400">Select another product to compare side-by-side.</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </motion.div>
+      </div>
+    </AnimatePresence>
+  );
 };
 
 // --- Components ---
 
 const ProductCard = memo(({ product }) => {
   const { addToCart } = useCart();
+  const { addToCompare } = useCompare(); // 🔥 Compare context integration
+  const { user, toggleWishlist, wishlist } = useUser(); // 🔥 ADDED: Wishlist logic integration
   const [imgError, setImgError] = useState(false);
 
   if (!product) return null;
 
-  const discountPercent = calculateDiscount(product.mrp, product.price);
+  // 🔥 FIX: Fallback logic for price inside Product Card
+  const productPricePaise = product.pricePaise || (product.price ? product.price * 100 : 0);
+  const productMrpPaise = product.mrpPaise || (product.mrp ? product.mrp * 100 : 0);
+
+  const discountPercent = calculateDiscountPercentage(productMrpPaise, productPricePaise);
   const displayDiscount = product.discount || (discountPercent ? `${discountPercent}% OFF` : null);
+  const rawImg = product.image;
+
+  // 🔥 Check if this specific product is already in the wishlist
+  const isInWishlist = wishlist?.some(item => {
+    const p = item.product || item;
+    return String(p._id || p.id) === String(product.id || product._id);
+  });
 
   return (
     <Link 
@@ -59,7 +211,7 @@ const ProductCard = memo(({ product }) => {
         transition={{ duration: 0.4, ease: "easeOut" }}
         className="bg-white rounded-xl sm:rounded-3xl p-2 sm:p-3 shadow-sm hover:shadow-xl transition-all duration-300 border border-slate-200 sm:border-slate-100/80 relative flex flex-col h-full overflow-hidden"
       >
-        {/* Dynamic Meta Badges (Scaled down for mobile) */}
+        {/* Dynamic Meta Badges */}
         <div className="absolute top-2 left-2 sm:top-4 sm:left-4 z-10 flex flex-col gap-1 sm:gap-1.5 items-start pointer-events-none select-none origin-top-left scale-90 sm:scale-100">
           {product.isBestSeller && (
             <span className="bg-amber-500 text-slate-900 text-[8px] sm:text-[9px] font-black px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-sm uppercase tracking-wider shadow-sm">
@@ -78,19 +230,27 @@ const ProductCard = memo(({ product }) => {
           )}
         </div>
 
-        {/* Wishlist Action */}
+        {/* Wishlist Action 🔥 FIX: Now actually toggles wishlist */}
         <button 
-          onClick={(e) => { e.preventDefault(); e.stopPropagation(); }} 
-          className="absolute top-2 right-2 sm:top-4 sm:right-4 z-10 p-1.5 sm:p-2.5 bg-white/90 backdrop-blur-md rounded-full text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all shadow-sm outline-none"
+          onClick={(e) => { 
+            e.preventDefault(); 
+            e.stopPropagation(); 
+            if (!user) {
+              alert("Please login to add items to your wishlist!");
+              return;
+            }
+            toggleWishlist(product.id || product._id);
+          }} 
+          className={`absolute top-2 right-2 sm:top-4 sm:right-4 z-10 p-1.5 sm:p-2.5 backdrop-blur-md rounded-full transition-all shadow-sm outline-none ${isInWishlist ? 'bg-red-50 text-red-500' : 'bg-white/90 text-slate-400 hover:text-red-500 hover:bg-red-50'}`}
           aria-label="Add to Wishlist"
         >
-          <FiHeart size={14} className="sm:w-4 sm:h-4 transition-transform active:scale-75" />
+          <FiHeart size={14} className={`sm:w-4 sm:h-4 transition-transform active:scale-75 ${isInWishlist ? 'fill-current text-red-500' : ''}`} />
         </button>
 
         {/* Image Container */}
         <div className="w-full h-32 sm:h-52 md:h-64 bg-transparent sm:bg-slate-50/60 rounded-lg sm:rounded-2xl overflow-hidden mb-2 sm:mb-4 relative p-2 sm:p-4 flex items-center justify-center mix-blend-multiply transition-colors group-hover:bg-slate-50">
           <img 
-            src={imgError ? "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 24 24' fill='none' stroke='%23cbd5e1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='3' width='18' height='18' rx='2' ry='2'/><circle cx='8.5' cy='8.5' r='1.5'/><polyline points='21 15 16 10 5 21'/></svg>" : product.image} 
+            src={imgError ? "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 24 24' fill='none' stroke='%23cbd5e1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='3' width='18' height='18' rx='2' ry='2'/><circle cx='8.5' cy='8.5' r='1.5'/><polyline points='21 15 16 10 5 21'/></svg>" : getOptimizedImageUrl(rawImg, 320)} 
             alt={product.title} 
             loading="lazy"
             decoding="async"
@@ -98,14 +258,21 @@ const ProductCard = memo(({ product }) => {
             className="max-w-full max-h-full object-contain group-hover:scale-105 transition-transform duration-500 ease-out will-change-transform" 
           />
           
-          {/* Desktop Hover Quick Add */}
-          <div className="absolute bottom-0 left-0 w-full p-2 translate-y-full group-hover:translate-y-0 transition-transform duration-300 ease-out hidden md:block">
+          {/* Desktop Hover Quick Add & Compare Buttons */}
+          <div className="absolute bottom-0 left-0 w-full p-2 translate-y-full group-hover:translate-y-0 transition-transform duration-300 ease-out hidden md:flex gap-1">
             <button 
               onClick={(e) => { e.preventDefault(); e.stopPropagation(); addToCart(product); }}
-              className="w-full bg-slate-900/95 backdrop-blur-sm text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-[#FF4500] active:bg-[#e03d00] transition-all shadow-lg active:scale-[0.99]"
+              className="flex-1 bg-slate-900/95 backdrop-blur-sm text-white font-bold py-2.5 rounded-xl flex items-center justify-center gap-1 hover:bg-[#FF4500] transition-all shadow-lg text-xs"
               aria-label={`Quick add ${product.title} to cart`}
             >
-              <FiShoppingCart size={16} /> Quick Add
+              <FiShoppingCart size={14} /> Add
+            </button>
+            <button 
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); addToCompare(product); }}
+              className="bg-white/95 backdrop-blur-sm text-slate-900 font-bold px-3 py-2.5 rounded-xl hover:bg-slate-900 hover:text-white transition-colors shadow-lg text-xs"
+              aria-label={`Compare ${product.title}`}
+            >
+              Compare
             </button>
           </div>
         </div>
@@ -126,20 +293,29 @@ const ProductCard = memo(({ product }) => {
           
           <div className="mt-auto flex items-end justify-between pt-1">
             <div className="flex flex-col">
-              {product.mrp && Number(product.mrp) > Number(product.price) && (
-                <span className="text-[10px] sm:text-xs text-slate-400 line-through font-medium leading-none mb-0.5 sm:mb-1">₹{product.mrp}</span>
+              {productMrpPaise > productPricePaise && (
+                <span className="text-[10px] sm:text-xs text-slate-400 line-through font-medium leading-none mb-0.5 sm:mb-1">{formatCurrency(productMrpPaise)}</span>
               )}
-              <span className="text-sm sm:text-lg font-black text-slate-900 leading-none tracking-tight">₹{product.price}</span>
+              <span className="text-sm sm:text-lg font-black text-slate-900 leading-none tracking-tight">{formatCurrency(productPricePaise)}</span>
             </div>
             
-            {/* Mobile Touch Target for Add to Cart */}
-            <button 
-              onClick={(e) => { e.preventDefault(); e.stopPropagation(); addToCart(product); }}
-              className="md:hidden p-1.5 sm:p-2.5 bg-slate-100 text-slate-900 hover:bg-[#FF4500] hover:text-white rounded-lg sm:rounded-xl transition-colors outline-none"
-              aria-label={`Add ${product.title} to cart`}
-            >
-              <FiShoppingCart size={14} className="sm:w-[18px] sm:h-[18px]" />
-            </button>
+            {/* Mobile Actions */}
+            <div className="flex gap-1 md:hidden">
+              <button 
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); addToCompare(product); }}
+                className="bg-slate-100 text-slate-700 hover:bg-slate-900 hover:text-white p-2 rounded-xl transition-colors text-[10px] font-bold"
+                aria-label={`Compare ${product.title}`}
+              >
+                Comp
+              </button>
+              <button 
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); addToCart(product); }}
+                className="p-1.5 sm:p-2.5 bg-slate-100 text-slate-900 hover:bg-[#FF4500] hover:text-white rounded-lg sm:rounded-xl transition-colors outline-none"
+                aria-label={`Add ${product.title} to cart`}
+              >
+                <FiShoppingCart size={14} className="sm:w-[18px] sm:h-[18px]" />
+              </button>
+            </div>
           </div>
         </div>
       </motion.div>
@@ -169,21 +345,33 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
   const [currentSlide, setCurrentSlide] = useState(0);
   const [trendingProducts, setTrendingProducts] = useState([]);
   const [loadingTrending, setLoadingTrending] = useState(true);
+  const [isCompareModalOpen, setIsCompareModalOpen] = useState(false); // 🔥 Modal State
   
   const userContext = useUser();
   const recentlyViewed = userContext?.recentlyViewed || []; 
   
   const productContext = useProducts();
   const products = productContext?.products || [];
+  const { compareList } = useCompare(); // 🔥 Compare Context hook
 
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
-  // Strict local generation logic keeping contract integrity intact
   const dealOfTheDayProducts = useMemo(() => {
     if (!products || products.length === 0) return [];
     return [...products]
-      .filter(p => p && p.mrp && p.price && Number(p.mrp) > Number(p.price))
-      .sort((a, b) => calculateDiscount(b.mrp, b.price) - calculateDiscount(a.mrp, a.price))
+      // 🔥 FIX: Check both structures for deal of the day filtering
+      .filter(p => {
+        const mrp = p.mrpPaise || (p.mrp ? p.mrp * 100 : 0);
+        const price = p.pricePaise || (p.price ? p.price * 100 : 0);
+        return mrp > 0 && price > 0 && mrp > price;
+      })
+      .sort((a, b) => {
+        const mrpA = a.mrpPaise || (a.mrp ? a.mrp * 100 : 0);
+        const priceA = a.pricePaise || (a.price ? a.price * 100 : 0);
+        const mrpB = b.mrpPaise || (b.mrp ? b.mrp * 100 : 0);
+        const priceB = b.pricePaise || (b.price ? b.price * 100 : 0);
+        return calculateDiscountPercentage(mrpB, priceB) - calculateDiscountPercentage(mrpA, priceA);
+      })
       .slice(0, 4);
   }, [products]);
 
@@ -237,7 +425,7 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
 
       <main className="max-w-[1440px] mx-auto pb-24 px-2 sm:px-4 md:px-6 outline-none" tabIndex="-1">
         
-        {/* 🔥 CATEGORIES NAVIGATION SYSTEMS (Compact for mobile) 🔥 */}
+        {/* Categories Navigation */}
         <nav className="mt-3 md:mt-6 border-b border-slate-200/60 pb-3 md:pb-4" aria-label="Product Categories Pipeline">
           <div className="flex space-x-3 md:space-x-5 overflow-x-auto scrollbar-hide py-1 snap-x scroll-smooth">
             {CATEGORIES.map((cat, index) => {
@@ -260,12 +448,12 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
           </div>
         </nav>
 
-        {/* 🔥 HERO PROMOTIONAL BANNER CONTROL (Mobile responsive height) 🔥 */}
+        {/* Hero Banner */}
         <section className="mt-4 md:mt-6 relative h-[160px] sm:h-[280px] md:h-[400px] lg:h-[480px] rounded-2xl md:rounded-[2rem] overflow-hidden shadow-md group border border-slate-200/40">
           <AnimatePresence mode="wait">
             <motion.img 
               key={currentSlide} 
-              src={BANNERS[currentSlide]} 
+              src={getOptimizedImageUrl(BANNERS[currentSlide], 1200)} 
               initial={{ opacity: 0, scale: 1.02 }} 
               animate={{ opacity: 1, scale: 1 }} 
               exit={{ opacity: 0 }} 
@@ -305,7 +493,7 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
           </div>
         </section>
 
-        {/* 🔥 VALUE PROPOSITION METRICS BLOCK (Hidden on mobile to save space) 🔥 */}
+        {/* Value Proposition Metrics */}
         <section className="hidden md:grid mt-8 grid-cols-3 gap-4 bg-white p-8 rounded-[2rem] shadow-sm border border-slate-200/60">
           <div className="flex items-center justify-center text-left gap-4 p-2 transition-transform duration-200 hover:scale-[1.01]">
             <div className="w-12 h-12 bg-indigo-50/70 text-indigo-600 rounded-2xl flex items-center justify-center shrink-0"><FiTruck size={22} className="stroke-[1.75]" /></div>
@@ -330,7 +518,7 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
           </div>
         </section>
 
-        {/* 🔥 HIGHEST DISCOUNT PIPELINE (Clean White Background) 🔥 */}
+        {/* Deal of the Day */}
         {dealOfTheDayProducts.length > 0 && (
           <section className="mt-8 md:mt-16 bg-white rounded-2xl md:rounded-[2rem] p-4 sm:p-8 md:p-10 shadow-sm border border-slate-200/60">
             <div className="flex flex-row items-end justify-between mb-4 md:mb-8 gap-2">
@@ -348,14 +536,14 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
             </div>
 
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4 md:gap-5">
-              {dealOfTheDayProducts.map(product => (
-                <ProductCard key={`deal-${product.id || product._id}`} product={product} />
+              {dealOfTheDayProducts.map((product, index) => (
+                <ProductCard key={product.id || product._id ? `deal-${product.id || product._id}` : `deal-fallback-${index}`} product={product} />
               ))}
             </div>
           </section>
         )}
 
-        {/* 🔥 TRENDING STAGE MODULE 🔥 */}
+        {/* Trending Now */}
         <section className="mt-8 md:mt-16">
           <div className="flex flex-row items-end justify-between mb-4 md:mb-8 gap-2">
             <div>
@@ -372,7 +560,7 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
             {loadingTrending ? (
               Array(8).fill(0).map((_, i) => <ProductSkeleton key={i} />)
             ) : trendingProducts.length > 0 ? (
-              trendingProducts.map((product) => <ProductCard key={`trend-${product.id || product._id}`} product={product} />)
+              trendingProducts.map((product, index) => <ProductCard key={product.id || product._id ? `trend-${product.id || product._id}` : `trend-fallback-${index}`} product={product} />)
             ) : (
               <div className="col-span-full py-10 md:py-16 text-center bg-white rounded-2xl md:rounded-3xl border border-slate-100">
                 <p className="text-slate-400 font-medium text-xs md:text-sm">Populating recommendations...</p>
@@ -381,7 +569,7 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
           </div>
         </section>
 
-        {/* 🔥 NEW DROP ACQUISITION CHANNEL 🔥 */}
+        {/* New Arrivals */}
         {newArrivals.length > 0 && (
           <section className="mt-8 md:mt-16 border-t border-slate-200/60 pt-8 md:pt-16">
             <div className="flex flex-row items-end justify-between mb-4 md:mb-8 gap-2">
@@ -392,26 +580,42 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
               </div>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-4 md:gap-6">
-              {newArrivals.map(product => (
-                <ProductCard key={`new-${product.id || product._id}`} product={product} />
+              {newArrivals.map((product, index) => (
+                <ProductCard key={product.id || product._id ? `new-${product.id || product._id}` : `new-fallback-${index}`} product={product} />
               ))}
             </div>
           </section>
         )}
 
-        {/* 🔥 HISTORICAL RECENT VISITATION CAROUSEL 🔥 */}
+        {/* Recently Viewed */}
         {recentlyViewed.length > 0 && (
           <section className="mt-8 md:mt-16 border-t border-slate-200/60 pt-8 md:pt-16">
             <h3 className="text-lg sm:text-3xl md:text-4xl font-black text-slate-900 tracking-tight mb-4 md:mb-8">Recently Viewed</h3>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-4 md:gap-6">
-              {recentlyViewed.slice(0, 4).map((product) => (
-                <ProductCard key={`recent-${product.id || product._id}`} product={product} />
+              {recentlyViewed.slice(0, 4).map((product, index) => (
+                <ProductCard key={product.id || product._id ? `recent-${product.id || product._id}` : `recent-fallback-${index}`} product={product} />
               ))}
             </div>
           </section>
         )}
 
       </main>
+
+      {/* 🔥 FLOATING COMPARE BAR */}
+      {compareList.length > 0 && (
+        <div className="fixed bottom-6 right-6 bg-slate-900 text-white px-6 py-3 rounded-full shadow-2xl flex items-center gap-4 z-40 border border-slate-800">
+          <span className="text-xs font-bold">Comparing ({compareList.length}/2)</span>
+          <button 
+            onClick={() => setIsCompareModalOpen(true)}
+            className="bg-[#FF4500] text-white text-xs font-black px-4 py-2 rounded-full shadow-md active:scale-95 transition-transform"
+          >
+            View Comparison
+          </button>
+        </div>
+      )}
+
+      {/* 🔥 COMPARISON MODAL */}
+      <CompareModal isOpen={isCompareModalOpen} onClose={() => setIsCompareModalOpen(false)} />
     </div>
   );
 };

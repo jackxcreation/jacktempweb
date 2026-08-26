@@ -3,6 +3,9 @@ import { createRoot } from 'react-dom/client';
 import './index.css';
 import App from './App.jsx';
 
+// 🔥 IMPORT MULTI-LINGUAL I18N CONFIGURATION
+import './i18n'; 
+
 // ==========================================
 // 🔥 PRO FEATURE 1: GLOBAL ERROR BOUNDARY 🔥
 // ==========================================

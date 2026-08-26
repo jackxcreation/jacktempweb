@@ -7,6 +7,7 @@ const jwt = require('jsonwebtoken'); // 🔥 ADDED FOR AUTHENTICATION
 const { Resend } = require('resend');
 const rateLimit = require('express-rate-limit'); // 🔥 ADDED FOR OTP BRUTE-FORCE PROTECTION
 const { getLoginAlertTemplate, getWelcomeTemplate } = require('../emailTemplates'); 
+const { z } = require('zod'); // 🔥 ADDED: Zod for strict input validation
 
 // 🚨 IMPORT SECURE MIDDLEWARES
 const { protect, admin } = require('../middleware/authMiddleware');
@@ -19,6 +20,33 @@ const otpStore = new Map();
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '30d' });
 };
+
+// ==========================================
+// 🛡️ ZOD VALIDATION SCHEMAS FOR USERS & AUTH
+// ==========================================
+const registerSchema = z.object({
+  name: z.string().min(2, "Name is required").max(100, "Name is too long"),
+  email: z.string().email("Invalid email address"),
+  mobile: z.string().regex(/^\d{10}$/, "Invalid mobile number. Must be 10 digits").optional(),
+  password: z.string().min(6, "Password must be at least 6 characters long")
+});
+
+const loginSchema = z.object({
+  email: z.string().email("Invalid email address"),
+  password: z.string().min(1, "Password is required")
+});
+
+const otpSchema = z.object({
+  email: z.string().email("Invalid email address"),
+  otp: z.string().regex(/^\d{6}$/, "Invalid OTP format. Must be 6 digits").optional()
+});
+
+const userUpdateSchema = z.object({
+  name: z.string().min(2).max(100).optional(),
+  mobile: z.string().regex(/^\d{10}$/).optional(),
+  addresses: z.array(z.any()).optional(),
+  role: z.string().optional()
+});
 
 // ==========================================
 // 🛡️ ANTI-BRUTE-FORCE OTP LIMITERS
@@ -41,7 +69,13 @@ const otpVerifyLimiter = rateLimit({
 
 router.post('/api/public/send-otp', otpSendLimiter, async (req, res) => {
   try {
-    const { email } = req.body;
+    // 🔥 Strict Zod Validation
+    const validationResult = otpSchema.pick({ email: true }).safeParse(req.body);
+    if (!validationResult.success) {
+      return res.status(400).json({ success: false, message: "Invalid email format", errors: validationResult.error.format() });
+    }
+
+    const { email } = validationResult.data;
 
     const existingUser = await User.findOne({ email });
     if (existingUser) {
@@ -83,7 +117,13 @@ router.post('/api/public/send-otp', otpSendLimiter, async (req, res) => {
 
 router.post('/api/public/verify-otp', otpVerifyLimiter, async (req, res) => {
   try {
-    const { email, otp } = req.body;
+    // 🔥 Strict Zod Validation
+    const validationResult = otpSchema.safeParse(req.body);
+    if (!validationResult.success) {
+      return res.status(400).json({ success: false, message: "Validation failed", errors: validationResult.error.format() });
+    }
+
+    const { email, otp } = validationResult.data;
     const record = otpStore.get(email);
 
     if (!record) return res.status(400).json({ message: "No OTP requested or it has expired." });
@@ -116,7 +156,13 @@ router.get('/api/users', protect, admin, async (req, res) => {
 
 router.post('/api/users/register', async (req, res) => {
   try {
-    const { name, email, mobile, password } = req.body;
+    // 🔥 Strict Zod Validation
+    const validationResult = registerSchema.safeParse(req.body);
+    if (!validationResult.success) {
+      return res.status(400).json({ success: false, message: "Validation failed", errors: validationResult.error.format() });
+    }
+
+    const { name, email, mobile, password } = validationResult.data;
     const userExists = await User.findOne({ email });
     if (userExists) return res.status(400).json({ message: "User already exists" });
 
@@ -148,7 +194,13 @@ router.post('/api/users/register', async (req, res) => {
 
 router.post('/api/users/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    // 🔥 Strict Zod Validation
+    const validationResult = loginSchema.safeParse(req.body);
+    if (!validationResult.success) {
+      return res.status(400).json({ success: false, message: "Validation failed", errors: validationResult.error.format() });
+    }
+
+    const { email, password } = validationResult.data;
     
     const user = await User.findOne({ email }).select('+password');
     if (!user) return res.status(400).json({ message: "Invalid email or password" });
@@ -281,11 +333,13 @@ router.post('/api/users/unlock-account', async (req, res) => {
 router.post('/api/users/social-login', async (req, res) => {
   try {
     const { name, email, firebaseId } = req.body;
+    if (!email) return res.status(400).json({ message: "Email is required" });
+
     let user = await User.findOne({ email });
     let isNewUser = false; 
     
     if (!user) {
-      user = new User({ name: name || 'User', email, password: firebaseId, role: 'user' });
+      user = new User({ name: name || 'User', email, password: firebaseId || 'social_login', role: 'user' });
       await user.save();
       isNewUser = true; 
     }
@@ -305,7 +359,7 @@ router.post('/api/users/social-login', async (req, res) => {
 });
 
 // ==========================================
-// 🔥 SECURED: UPDATE USER (IDOR FIXED)
+// 🔥 SECURED: UPDATE USER (IDOR FIXED & ZOD VALIDATED)
 // ==========================================
 router.put('/api/users/:id', protect, async (req, res) => {
   try {
@@ -314,12 +368,24 @@ router.put('/api/users/:id', protect, async (req, res) => {
       return res.status(403).json({ message: "Access Denied: You cannot update someone else's profile." });
     }
 
-    // Protect role modification (only admins can make other admins)
-    if (req.body.role && req.user.role !== 'admin') {
-      delete req.body.role; 
+    // 🔥 Strict Zod Validation
+    const validationResult = userUpdateSchema.safeParse(req.body);
+    if (!validationResult.success) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Validation failed", 
+        errors: validationResult.error.format() 
+      });
     }
 
-    const updatedUser = await User.findByIdAndUpdate(req.params.id, req.body, { returnDocument: 'after' });
+    const updateData = validationResult.data;
+
+    // Protect role modification (only admins can make other admins)
+    if (updateData.role && req.user.role !== 'admin') {
+      delete updateData.role; 
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(req.params.id, updateData, { returnDocument: 'after' });
     res.json({ ...updatedUser._doc, id: updatedUser._id.toString() });
   } catch (error) { res.status(500).json({ message: "Update failed" }); }
 });
