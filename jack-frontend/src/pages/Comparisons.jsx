@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { FiCheck, FiX, FiTrendingUp, FiArrowRight } from 'react-icons/fi';
+import { FiArrowRight } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
+// 🔥 PHASE 1 FIX: Canonical Axios Instance
 import axiosInstance from '../api/axiosInstance';
 
 const Comparisons = ({ isLoggedIn, setIsLoggedIn }) => {
@@ -13,7 +13,8 @@ const Comparisons = ({ isLoggedIn, setIsLoggedIn }) => {
     window.scrollTo(0, 0);
     const fetchComparisons = async () => {
       try {
-        const res = await axiosInstance.get('/api/content?type=comparison');
+        // 🔥 PHASE 1 FIX: Removed `/api` prefix because axiosInstance already maps to /api
+        const res = await axiosInstance.get('/content?type=comparison');
         if (res.data.success) setComparisons(res.data.posts);
       } catch (err) {
         console.error("Failed to load comparisons");

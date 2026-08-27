@@ -7,16 +7,26 @@ test.describe('🛒 Jack Essentials E2E User Journey', () => {
     await expect(page).toHaveTitle(/Jack Essentials/);
 
     // 2. Navigate to Shop/Product
-    await page.click('text=Shop Now');
-    await page.click('.product-card:first-child');
+    // 🔥 FIX: Using robust regex match for Shop links
+    await page.getByRole('link', { name: /shop/i }).first().click();
+    
+    // 🔥 FIX: Replaced stale '.product-card:first-child' with reliable product URL locator
+    await page.locator('a[href*="/product/"]').first().click();
 
     // 3. Add to Cart
-    await page.click('button:has-text("Add to Cart")');
-    await expect(page.locator('.cart-badge')).toHaveText('1');
+    // 🔥 FIX: Updated from "Add to Cart" to current UI "ADD TO BAG"
+    await page.getByRole('button', { name: /add to bag/i }).first().click();
+    
+    // 🔥 FIX: Replaced non-existent '.cart-badge'. Now verifying the cart link contains '1'
+    await expect(page.locator('a[href="/cart"]').first()).toContainText('1', { timeout: 10000 });
 
     // 4. Proceed to Checkout
-    await page.click('text=Cart');
-    await page.click('button:has-text("Proceed to Checkout")');
+    // 🔥 FIX: Safely clicking the Cart icon/link
+    await page.locator('a[href="/cart"]').first().click();
+    
+    // 🔥 FIX: Updated to match "PROCEED TO SECURE CHECKOUT" button
+    await page.getByRole('button', { name: /proceed to secure checkout/i }).click();
+    
     await expect(page).toHaveURL(/.*checkout/);
   });
 });

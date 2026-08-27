@@ -1,8 +1,13 @@
-// services/cartScheduler.js
 const { Queue } = require('bullmq');
 const AbandonedCart = require('../models/AbandonedCart');
 
-// 🔥 Explicitly pass Redis URL from .env to stop it from hitting localhost
+// ==========================================
+// 🔥 PRODUCTION REDIS VALIDATION FOR BULLMQ
+// ==========================================
+if (process.env.NODE_ENV === 'production' && !process.env.REDIS_URL) {
+    throw new Error('FATAL: REDIS_URL environment variable is required in production for BullMQ queues.');
+}
+
 const connection = {
   url: process.env.REDIS_URL || 'redis://localhost:6379'
 };

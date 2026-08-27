@@ -60,21 +60,21 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
   const [showCodAlert, setShowCodAlert] = useState(false); 
   const [isProcessing, setIsProcessing] = useState(false); 
 
-  // 🔥 COD Intelligence States
+  // 🔥 PHASE 2 FIX: codFeePaise default set to 0 to respect backend authority
   const [codIntelligence, setCodIntelligence] = useState({
     codAvailable: true,
-    codFeePaise: 5000, // Default fallback ₹50
+    codFeePaise: 0, 
     riskLevel: 'LOW',
     reason: ''
   });
   
   const STORE_NAME = "Jack Essentials";
   
+  // 🔥 ALIGNED WITH BACKEND ZOD SCHEMA: using primaryPhone instead of phone
   const [newAddress, setNewAddress] = useState({
-    name: user?.name || '', phone: user?.phone || '', flat: '', street: '', city: '', state: '', pincode: ''
+    name: user?.name || '', primaryPhone: user?.phone || '', flat: '', street: '', city: '', state: '', pincode: ''
   });
 
-  // 🔥 MAGIC LOGIC: Agar user login nahi hai, toh Login pe bhejo location record ke sath
   useEffect(() => {
     if (!user) {
       navigate('/login', { state: { from: location.pathname } });
@@ -83,29 +83,33 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
 
   useEffect(() => {
     if (user?.addresses && user.addresses.length > 0) {
-      setSelectedAddress(user.addresses[0]);
+      // 🔥 SAFETY FIX: Ensure primaryPhone is populated even on saved addresses
+      const defaultAddr = {
+        ...user.addresses[0],
+        primaryPhone: user.addresses[0].primaryPhone || user.addresses[0].phone || user?.phone || '9999999999'
+      };
+      setSelectedAddress(defaultAddr);
       setIsAddingNew(false);
-      // Check COD availability for default address
-      if (user.addresses[0].pincode) {
-        checkCodIntelligence(user.addresses[0].pincode);
+      if (defaultAddr.pincode) {
+        checkCodIntelligence(defaultAddr.pincode);
       }
     } else {
       setIsAddingNew(true);
     }
   }, [user]);
 
-  // 🔥 CHECK COD INTELLIGENCE VIA BACKEND API (Fixed Token Auth & Timeout)
+  // 🔥 CHECK COD INTELLIGENCE VIA BACKEND API
   const checkCodIntelligence = async (pincode) => {
     if (!pincode || pincode.length !== 6) return;
     try {
       const res = await axiosInstance.get(`/delivery-check?pincode=${pincode}&cartTotal=${cartTotalPaise}&userId=${user?._id || ''}`, {
-        timeout: 10000, // 🔥 FIX: Set 10 Seconds timeout to avoid 1000ms crash
-        headers: { Authorization: `Bearer ${getToken()}` } // Injecting Token explicitly
+        timeout: 10000, 
+        headers: { Authorization: `Bearer ${getToken()}` } 
       });
       if (res.data && res.data.success) {
         setCodIntelligence({
           codAvailable: res.data.codAvailable,
-          codFeePaise: res.data.codFeePaise !== undefined ? res.data.codFeePaise : 5000,
+          codFeePaise: res.data.codFeePaise || 0,
           riskLevel: res.data.riskLevel || 'LOW',
           reason: res.data.message || ''
         });
@@ -150,8 +154,8 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
       checkCodIntelligence(pin);
       try {
         const res = await axiosInstance.get(`/pincode-info/${pin}`, {
-          timeout: 10000, // 🔥 FIX: Set 10 seconds timeout
-          headers: { Authorization: `Bearer ${getToken()}` } // Explicit auth
+          timeout: 10000, 
+          headers: { Authorization: `Bearer ${getToken()}` } 
         });
         if (res.data && res.data.success && res.data.data) {
           const postalDetails = res.data.data;
@@ -170,11 +174,16 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
 
   const handleAddressSubmit = useCallback((e) => {
     e.preventDefault();
-    setSelectedAddress(newAddress); 
-    checkCodIntelligence(newAddress.pincode);
+    // 🔥 Ensure primaryPhone is strictly included in new address submission
+    const formattedNewAddr = {
+      ...newAddress,
+      primaryPhone: newAddress.primaryPhone || user?.phone || '9999999999'
+    };
+    setSelectedAddress(formattedNewAddr); 
+    checkCodIntelligence(formattedNewAddr.pincode);
     setStep(2); 
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, [newAddress, cartTotalPaise, user]);
+  }, [newAddress, user, cartTotalPaise]);
 
   const handlePaymentChange = useCallback((method) => {
     if (method === 'cod') {
@@ -198,7 +207,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
     });
   }, []);
 
-  // FINAL ORDER SUBMISSION (Used for COD or manual flow)
+  // FINAL ORDER SUBMISSION 
   const handleFinalOrderSubmission = useCallback(async (finalPaymentMethod, gatewayOrderId) => {
     setIsProcessing(true);
     const savedTraffic = localStorage.getItem('jack_traffic_source');
@@ -206,7 +215,23 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
 
     try {
       if (user) {
-        const orderResult = await placeOrder(cart, finalTotalPaise, selectedAddress, finalPaymentMethod, trafficSource);
+        const orderItems = cart.map((item) => ({
+          productId: item.id || item._id,
+          quantity: Number(item.quantity),
+        }));
+
+        // 🔥 Final safety check on selectedAddress to guarantee primaryPhone exists
+        const safeAddress = {
+          name: selectedAddress?.name || user?.name || 'Customer',
+          flat: selectedAddress?.flat || 'N/A',
+          street: selectedAddress?.street || 'N/A',
+          city: selectedAddress?.city || 'N/A',
+          state: selectedAddress?.state || 'N/A',
+          pincode: selectedAddress?.pincode || '110001',
+          primaryPhone: selectedAddress?.primaryPhone || selectedAddress?.phone || user?.phone || '9999999999'
+        };
+
+        const orderResult = await placeOrder(orderItems, finalTotalPaise, safeAddress, finalPaymentMethod, trafficSource);
         
         if (orderResult && orderResult.error) {
             alert("Order failed to save: " + orderResult.error);
@@ -216,7 +241,6 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
 
         const createdOrderId = orderResult.order?._id || orderResult.order?.id;
 
-        // Success flow
         localStorage.removeItem('jack_traffic_source');
         setStep(3); 
         clearCart();
@@ -238,7 +262,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
     }
   }, [user, cart, finalTotalPaise, selectedAddress, placeOrder, clearCart, navigate]);
 
-  // RAZORPAY PAYMENT INITIATION (🔥 FIXED: 400 Bad Request Fix using context placeOrder)
+  // RAZORPAY PAYMENT INITIATION 
   const initiateRazorpayPayment = useCallback(async () => {
     setIsProcessing(true);
     const isLoaded = await loadRazorpayScript();
@@ -253,9 +277,23 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
       const savedTraffic = localStorage.getItem('jack_traffic_source');
       const trafficSource = savedTraffic ? JSON.parse(savedTraffic) : { source: 'Direct/Unknown', medium: 'organic', campaign: 'none' };
 
-      // 🔥 FIX: We use your existing context `placeOrder` function to generate the pending order in database.
-      // This bypasses the 400 Bad Request error because `placeOrder` already sends the EXACT correct schema!
-      const orderResult = await placeOrder(cart, finalTotalPaise, selectedAddress, 'Razorpay Online', trafficSource);
+      const orderItems = cart.map((item) => ({
+        productId: item.id || item._id,
+        quantity: Number(item.quantity),
+      }));
+
+      // 🔥 Final safety check on selectedAddress to guarantee primaryPhone exists
+      const safeAddress = {
+        name: selectedAddress?.name || user?.name || 'Customer',
+        flat: selectedAddress?.flat || 'N/A',
+        street: selectedAddress?.street || 'N/A',
+        city: selectedAddress?.city || 'N/A',
+        state: selectedAddress?.state || 'N/A',
+        pincode: selectedAddress?.pincode || '110001',
+        primaryPhone: selectedAddress?.primaryPhone || selectedAddress?.phone || user?.phone || '9999999999'
+      };
+
+      const orderResult = await placeOrder(orderItems, finalTotalPaise, safeAddress, 'Razorpay Online', trafficSource);
       
       if (!orderResult || orderResult.error) {
           alert("Failed to generate secure order ID: " + (orderResult?.error || "Invalid Payload"));
@@ -271,11 +309,10 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
         return;
       }
 
-      // 🔥 STEP 2: AB BACKEND KO ORDER ID BHEJO TAAKI WO REAL PRICE CALCULATE KARE (Explicit Auth Added)
       const res = await axiosInstance.post('/payment/create-order', {
         orderId: pendingOrderId 
       }, {
-        timeout: 15000, // 15 seconds timeout to prevent crash
+        timeout: 15000, 
         headers: { Authorization: `Bearer ${getToken()}` } 
       });
 
@@ -288,7 +325,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
       }
 
       const options = {
-        key: import.meta.env.VITE_RAZORPAY_KEY_ID || process.env.REACT_APP_RAZORPAY_KEY_ID || "rzp_test_Sx5dYj7qO20PEX",
+        key: import.meta.env.VITE_RAZORPAY_KEY_ID || "rzp_test_Sx5dYj7qO20PEX",
         amount: orderData.amount, 
         currency: orderData.currency,
         name: STORE_NAME,
@@ -298,7 +335,6 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
           try {
             setIsProcessing(true);
             
-            // 🔥 STEP 3: PAYMENT VERIFY KARO (Explicit Auth Added)
             const verifyRes = await axiosInstance.post('/payment/verify', {
               razorpay_payment_id: response.razorpay_payment_id,
               razorpay_order_id: response.razorpay_order_id,
@@ -332,16 +368,10 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
         prefill: {
           name: user?.name || newAddress.name || "Guest",
           email: user?.email || "guest@jackessentials.com",
-          contact: user?.phone || newAddress.phone || "9999999999"
+          contact: user?.phone || newAddress.primaryPhone || "9999999999"
         },
-        theme: {
-          color: "#FF4500" 
-        },
-        modal: {
-          ondismiss: function () {
-            setIsProcessing(false);
-          }
-        }
+        theme: { color: "#FF4500" },
+        modal: { ondismiss: function () { setIsProcessing(false); } }
       };
 
       const rzp = new window.Razorpay(options);
@@ -383,15 +413,11 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
       <AnimatePresence>
         {showCodAlert && (
           <motion.div 
-            initial={{ opacity: 0 }} 
-            animate={{ opacity: 1 }} 
-            exit={{ opacity: 0 }} 
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} 
             className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm"
           >
             <motion.div 
-              initial={{ scale: 0.95, y: 20 }} 
-              animate={{ scale: 1, y: 0 }} 
-              exit={{ scale: 0.95, y: 20 }} 
+              initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 20 }} 
               className="bg-white rounded-[2rem] w-full max-w-md p-8 relative shadow-2xl text-center border border-slate-100"
             >
               <div className="w-16 h-16 bg-slate-50 text-slate-800 rounded-full flex items-center justify-center mx-auto mb-5 ring-8 ring-slate-50/50">
@@ -442,10 +468,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
           {step !== 3 ? (
             <motion.div 
               key="checkout-form" 
-              initial={{ opacity: 0, y: 15 }} 
-              animate={{ opacity: 1, y: 0 }} 
-              exit={{ opacity: 0, y: -15 }} 
-              transition={{ duration: 0.4, ease: "easeOut" }} 
+              initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -15 }} transition={{ duration: 0.4, ease: "easeOut" }} 
               className="flex flex-col lg:flex-row gap-8 items-start"
             >
               
@@ -470,9 +493,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                   <AnimatePresence>
                     {step === 1 && (
                       <motion.div 
-                        initial={{ opacity: 0, height: 0 }} 
-                        animate={{ opacity: 1, height: 'auto' }} 
-                        exit={{ opacity: 0, height: 0 }} 
+                        initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} 
                         className="p-6 sm:p-8"
                       >
                         {user?.addresses && user.addresses.length > 0 && !isAddingNew ? (
@@ -480,9 +501,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                             {user.addresses.map((addr, idx) => (
                               <label key={addr.id || addr._id || idx}
                                 className={`flex items-start p-5 border-2 rounded-2xl cursor-pointer transition-all duration-200 ${
-                                  selectedAddress?.id === addr.id 
-                                    ? 'border-[#FF4500] bg-[#FF4500]/5 shadow-sm' 
-                                    : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                                  selectedAddress?.id === addr.id ? 'border-[#FF4500] bg-[#FF4500]/5 shadow-sm' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
                                 }`}
                               >
                                 <div className="relative flex items-center justify-center mt-0.5">
@@ -491,7 +510,11 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                                     name="address" 
                                     checked={selectedAddress?.id === addr.id} 
                                     onChange={() => {
-                                      setSelectedAddress(addr);
+                                      const formattedAddr = {
+                                        ...addr,
+                                        primaryPhone: addr.primaryPhone || addr.phone || user?.phone || '9999999999'
+                                      };
+                                      setSelectedAddress(formattedAddr);
                                       if (addr.pincode) checkCodIntelligence(addr.pincode);
                                     }} 
                                     className="peer sr-only" 
@@ -544,8 +567,8 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                                   type="tel" 
                                   required 
                                   maxLength="10" 
-                                  value={newAddress.phone} 
-                                  onChange={(e) => setNewAddress({...newAddress, phone: e.target.value.replace(/[^0-9]/g, '')})} 
+                                  value={newAddress.primaryPhone} 
+                                  onChange={(e) => setNewAddress({...newAddress, primaryPhone: e.target.value.replace(/[^0-9]/g, '')})} 
                                   className="w-full px-5 py-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:border-[#FF4500] focus:ring-4 focus:ring-[#FF4500]/10 focus:bg-white outline-none font-medium transition-all text-slate-800" 
                                   placeholder="10-digit mobile number"
                                 />
@@ -629,13 +652,11 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                   <AnimatePresence>
                     {step === 2 && selectedAddress && (
                       <motion.div 
-                        initial={{ opacity: 0, height: 0 }} 
-                        animate={{ opacity: 1, height: 'auto' }} 
-                        exit={{ opacity: 0, height: 0 }} 
+                        initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} 
                         className="px-6 sm:px-8 pb-6 text-sm"
                       >
                         <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                          <p className="font-bold text-slate-900 text-base">{user?.name || 'Guest'} <span className="text-slate-400 mx-2">|</span> {user?.phone || newAddress.phone}</p>
+                          <p className="font-bold text-slate-900 text-base">{user?.name || 'Guest'} <span className="text-slate-400 mx-2">|</span> {user?.phone || selectedAddress.primaryPhone || selectedAddress.phone}</p>
                           <p className="text-slate-500 mt-1.5 leading-relaxed">{selectedAddress.flat}, {selectedAddress.street}, {selectedAddress.city}, {selectedAddress.state} - <span className="font-bold text-slate-800">{selectedAddress.pincode}</span></p>
                         </div>
                       </motion.div>
@@ -657,16 +678,13 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                   <AnimatePresence>
                     {step === 2 && (
                       <motion.div 
-                        initial={{ opacity: 0, height: 0 }} 
-                        animate={{ opacity: 1, height: 'auto' }} 
+                        initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} 
                         className="p-6 sm:p-8 space-y-4"
                       >
                         <div className="space-y-4">
                           <label 
                             className={`flex items-start p-5 border-2 rounded-2xl cursor-pointer shadow-sm relative overflow-hidden transition-all duration-200 ${
-                              paymentMethod === 'online' 
-                                ? 'border-[#FF4500] bg-[#FF4500]/5' 
-                                : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                              paymentMethod === 'online' ? 'border-[#FF4500] bg-[#FF4500]/5' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
                             }`}
                           >
                             <div className="absolute top-0 right-0 bg-[#FF4500] text-white text-[9px] font-black px-3 py-1.5 rounded-bl-xl tracking-widest uppercase">
@@ -823,14 +841,11 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
             /* STEP 3: SUCCESS ANIMATION */
             <motion.div 
               key="success" 
-              initial={{ opacity: 0, scale: 0.95, y: 20 }} 
-              animate={{ opacity: 1, scale: 1, y: 0 }} 
-              transition={{ duration: 0.5, type: "spring", bounce: 0.4 }} 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ duration: 0.5, type: "spring", bounce: 0.4 }} 
               className="flex flex-col items-center justify-center py-24 bg-white rounded-[2rem] shadow-sm border border-slate-100 max-w-2xl mx-auto mt-12 text-center px-6"
             >
               <motion.div 
-                initial={{ scale: 0 }} 
-                animate={{ scale: 1 }} 
+                initial={{ scale: 0 }} animate={{ scale: 1 }} 
                 transition={{ type: 'spring', damping: 12, stiffness: 100, delay: 0.2 }} 
                 className="w-32 h-32 bg-emerald-50 rounded-full flex items-center justify-center text-emerald-500 mb-8 border-4 border-emerald-100 relative"
               >

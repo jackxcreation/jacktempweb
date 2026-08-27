@@ -27,6 +27,13 @@ router.get('/api/track/:orderId', async (req, res) => {
       date: index <= currentStepIndex ? new Date(order.createdAt).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Pending'
     }));
 
+    // 🔥 PRIVACY FIX: Masking sensitive personal data (PII) to prevent public leakage
+    const sanitizedAddress = order.address ? {
+      city: order.address.city || 'N/A',
+      state: order.address.state || 'N/A',
+      pincode: order.address.pincode ? order.address.pincode.slice(0, 3) + '***' : '******' // Masked pincode
+    } : null;
+
     res.json({
       success: true,
       orderId: order._id,
@@ -35,7 +42,7 @@ router.get('/api/track/:orderId', async (req, res) => {
       estimatedDelivery: order.estimatedDelivery || '3-5 Business Days',
       status: order.status || 'Ordered',
       timeline,
-      shippingAddress: order.address
+      shippingAddress: sanitizedAddress // Safe masked address returned publicly
     });
   } catch (error) {
     console.error("Tracking API Error:", error);

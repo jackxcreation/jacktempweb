@@ -227,7 +227,9 @@ const EnterpriseAnalyticsManager = () => {
           ...payload
         };
         window.EnterpriseDataLayer.push(eventContext);
-        if (process.env.NODE_ENV !== 'production') {
+        
+        // 🔥 FIX: Replaced process.env with Vite's import.meta.env.DEV
+        if (import.meta.env.DEV) {
           console.debug(`[Analytics Event]: ${eventName}`, eventContext);
         }
       },

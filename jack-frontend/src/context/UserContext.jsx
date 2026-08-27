@@ -22,8 +22,10 @@ export const UserProvider = ({ children }) => {
   const [orders, setOrders] = useState([]);
   const [wishlist, setWishlist] = useState([]); 
   const [isLoadingSession, setIsLoadingSession] = useState(true);
+  
+  // 🔥 PHASE 4 FIX: Consolidated Admin State into single Auth Context
+  const [isAdmin, setIsAdmin] = useState(false);
 
-  // 🔥 HELPER: Get token from localStorage
   const getToken = () => localStorage.getItem('token');
 
   // 🔥 CLEAN SESSION VALIDATION VIA /auth/me AT STARTUP
@@ -40,7 +42,7 @@ export const UserProvider = ({ children }) => {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}` // 🔥 Send Token here
+            'Authorization': `Bearer ${token}` 
           },
           credentials: 'include' 
         });
@@ -49,12 +51,18 @@ export const UserProvider = ({ children }) => {
           const userData = await res.json();
           setUser(userData);
           setRecentlyViewed(userData.recentlyViewed || []);
+          
+          // 🔥 PHASE 4 FIX: Automatically identify if user is Admin
+          setIsAdmin(userData.role === 'admin' || userData.role === 'manager');
+          
           localStorage.setItem('jack_user', JSON.stringify(userData));
         } else {
           // Session invalid or expired
           localStorage.removeItem('jack_user');
           localStorage.removeItem('token');
+          localStorage.removeItem('adminToken'); // Clear legacy token if exists
           setUser(null);
+          setIsAdmin(false);
         }
       } catch (error) {
         console.error("Session verification network error:", error);
@@ -66,7 +74,6 @@ export const UserProvider = ({ children }) => {
     verifyUserSession();
   }, []);
 
-  // 🔥 FIX: Safe ID getter for all useEffects (Only calls ONCE after session load)
   useEffect(() => {
     if (isLoadingSession) return; 
 
@@ -78,14 +85,13 @@ export const UserProvider = ({ children }) => {
     }
   }, [user?.id, user?._id, isLoadingSession]); 
 
-  // 🔥 FETCH WISHLIST FROM BACKEND
   const fetchWishlist = async () => {
     try {
       const res = await fetch(`${API_URL}/wishlist`, {
         method: 'GET',
         headers: { 
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getToken()}` // 🔥 Send Token
+          'Authorization': `Bearer ${getToken()}` 
         },
         credentials: 'include'
       });
@@ -98,14 +104,13 @@ export const UserProvider = ({ children }) => {
     }
   };
 
-  // 🔥 TOGGLE ADD/REMOVE FROM WISHLIST
   const toggleWishlist = async (productId) => {
     try {
       const res = await fetch(`${API_URL}/wishlist/toggle`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getToken()}` // 🔥 Send Token
+          'Authorization': `Bearer ${getToken()}`
         },
         credentials: 'include',
         body: JSON.stringify({ productId })
@@ -126,7 +131,7 @@ export const UserProvider = ({ children }) => {
         method: 'GET',
         headers: { 
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getToken()}` // 🔥 Send Token
+          'Authorization': `Bearer ${getToken()}`
         },
         credentials: 'include' 
       });
@@ -139,11 +144,10 @@ export const UserProvider = ({ children }) => {
     } catch (error) { console.error("Sync Recently Viewed Error:", error); }
   };
 
-  // HELPER: Connect socket securely with credentials
   const connectSecureSocket = () => {
     const token = getToken();
     if (token) {
-      socket.auth = { token }; // 🔥 Secure socket with token
+      socket.auth = { token }; 
       socket.connect();
     }
   };
@@ -158,19 +162,20 @@ export const UserProvider = ({ children }) => {
       });
       const data = await res.json();
       if (res.ok) {
-        // 🔥 FIX: Store the token so subsequent requests work!
         localStorage.setItem('token', data.token);
+
+        // 🔥 PHASE 4 FIX: Centralized Admin Auth Handshake
+        const userIsAdmin = data.user.role === 'admin' || data.user.role === 'manager';
+        if (userIsAdmin) {
+          localStorage.setItem('adminToken', data.token); // Maintained for backward compatibility in Admin panel
+        }
+        setIsAdmin(userIsAdmin);
 
         setUser(data.user);
         setRecentlyViewed(data.user.recentlyViewed || []);
         localStorage.setItem('jack_user', JSON.stringify(data.user));
         
-        // Connect socket after successful login
         connectSecureSocket();
-
-        // 🚨 Note: Removed explicit fetchUserOrders/fetchWishlist here to stop Double-Fire (429 Error).
-        // The useEffect will automatically handle fetching them once state updates.
-
         return { success: true };
       }
       return { success: false, message: data.error || data.message || "Login failed" }; 
@@ -187,15 +192,12 @@ export const UserProvider = ({ children }) => {
       });
       const data = await res.json();
       if (res.ok) {
-        // 🔥 FIX: Store the token!
         localStorage.setItem('token', data.token);
-
         setUser(data.user);
+        setIsAdmin(data.user.role === 'admin');
         setRecentlyViewed(data.user.recentlyViewed || []);
         localStorage.setItem('jack_user', JSON.stringify(data.user));
-        
         connectSecureSocket();
-
         return { success: true, isNewUser: data.isNewUser }; 
       }
       return { success: false };
@@ -213,11 +215,13 @@ export const UserProvider = ({ children }) => {
     }
 
     setUser(null);
+    setIsAdmin(false);
     setOrders([]);
     setWishlist([]);
     setRecentlyViewed([]);
     localStorage.removeItem('jack_user');
-    localStorage.removeItem('token'); // 🔥 Remove token on logout
+    localStorage.removeItem('token'); 
+    localStorage.removeItem('adminToken'); // Clean admin token as well
     socket.disconnect(); 
   };
 
@@ -227,7 +231,7 @@ export const UserProvider = ({ children }) => {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getToken()}` // 🔥 Send Token
+          'Authorization': `Bearer ${getToken()}`
         },
         credentials: 'include' 
       });
@@ -237,13 +241,17 @@ export const UserProvider = ({ children }) => {
     } catch (error) { console.error("Error fetching orders:", error); }
   };
 
-  // 🔥 BULLETPROOF PLACE ORDER 🔥
+  // 🔥 FIXED: placeOrder now maps items to productId + quantity and drops unverified totalAmount
   const placeOrder = async (items, totalAmount, address, paymentMethod, trafficSource) => {
     if (!user) return { success: false, error: "Please login first" };
 
+    const orderItems = items.map((item) => ({
+      productId: item.id || item._id,
+      quantity: Number(item.quantity),
+    }));
+
     const orderData = { 
-      items, 
-      totalAmount: totalAmount.toString(), 
+      items: orderItems, 
       address,
       paymentMethod,
       userDetails: { name: user.name, email: user.email },
@@ -255,7 +263,7 @@ export const UserProvider = ({ children }) => {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getToken()}` // 🔥 Send Token
+          'Authorization': `Bearer ${getToken()}`
         },
         credentials: 'include', 
         body: JSON.stringify(orderData)
@@ -264,7 +272,13 @@ export const UserProvider = ({ children }) => {
       const newOrder = await res.json();
       
       if (!res.ok) {
-        throw new Error(newOrder.message || "Failed to place order");
+        console.error("Order API Error:", newOrder);
+        throw new Error(
+          newOrder.error || 
+          newOrder.message || 
+          (newOrder.errors ? JSON.stringify(newOrder.errors) : null) || 
+          "Failed to place order"
+        );
       }
       
       setOrders(prevOrders => [newOrder, ...prevOrders]); 
@@ -290,7 +304,7 @@ export const UserProvider = ({ children }) => {
         method: 'PUT',
         headers: { 
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getToken()}` // 🔥 Send Token
+          'Authorization': `Bearer ${getToken()}`
         },
         credentials: 'include',
         body: JSON.stringify({ recentlyViewed: newHistory })
@@ -310,7 +324,7 @@ export const UserProvider = ({ children }) => {
         method: 'PUT',
         headers: { 
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getToken()}` // 🔥 Send Token
+          'Authorization': `Bearer ${getToken()}`
         },
         credentials: 'include',
         body: JSON.stringify(updatedData)
@@ -335,7 +349,7 @@ export const UserProvider = ({ children }) => {
 
     const userId = user?.id || user?._id;
     if (userId && getToken()) {
-      connectSecureSocket(); // Securely connect
+      connectSecureSocket(); 
       socket.emit('join_user_room', userId);
       
       socket.on('force_logout', () => {
@@ -349,7 +363,7 @@ export const UserProvider = ({ children }) => {
 
   return (
     <UserContext.Provider value={{ 
-      user, orders, recentlyViewed, wishlist, isLoadingSession,
+      user, orders, recentlyViewed, wishlist, isLoadingSession, isAdmin,
       loginUser, socialLoginUser, logoutUser, placeOrder, cancelOrder, addRecentlyViewed, 
       updateUserProfile, syncRecentlyViewed, fetchWishlist, toggleWishlist, socket
     }}>

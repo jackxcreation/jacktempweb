@@ -9,12 +9,12 @@ import { LanguageSelector } from './LanguageSelector'; // 🔥 ADDED: Multi-ling
 const Navbar = ({ isLoggedIn }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { cart } = useCart();
+  const { cart, cartCount } = useCart(); // 🔥 FIX: Destructured cartCount from useCart for accurate total quantity tracking
   const { user, logoutUser } = useUser(); 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
 
-  const totalItems = cart.length;
+  const totalItems = cartCount !== undefined ? cartCount : cart.length; // 🔥 FIX: Using cartCount so multi-quantity items count correctly
 
   useEffect(() => {
     const handleScroll = () => {

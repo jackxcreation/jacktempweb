@@ -20,6 +20,8 @@ const productSchema = new mongoose.Schema({
   views: { type: Number, default: 0, index: true },       
   sales: { type: Number, default: 0, index: true },       
   isTrending: { type: Boolean, default: false },         
+  trendingScore: { type: Number, default: 0, index: true }, // 🔥 FIX: Added for cron updates and correct sorting
+  conversion: { type: Number, default: 0, index: true }, // 🔥 FIX: Added conversion field to make the trending formula work accurately
   
   image: { type: String, required: [true, 'Main product image is required'], trim: true }, 
   images: { type: [String], default: [] }, 
@@ -99,10 +101,28 @@ const orderSchema = new mongoose.Schema({
 
   status: { 
     type: String, 
-    enum: ['Pending', 'Paid', 'Processing', 'Shipped', 'Delivered', 'Cancelled', 'Refunded'], 
+    enum: [
+      'Pending', 
+      'Paid', 
+      'Processing', 
+      'Shipped', 
+      'OutForDelivery', 
+      'Delivered', 
+      'ReturnRequested', 
+      'ReturnApproved', 
+      'Returned', 
+      'Refunded', 
+      'Cancelled'
+    ], 
     default: "Pending", 
     index: true 
   },
+  
+  // 🔥 FIX: Added tracking fields to canonical schema to support public tracking & logistics queries
+  trackingId: { type: String, unique: true, sparse: true, index: true },
+  courierPartner: { type: String, default: 'Delhivery Express' },
+  estimatedDelivery: { type: Date, default: null },
+
   date: { type: String, default: () => new Date().toLocaleDateString('en-IN') },
   time: { type: String, default: () => new Date().toLocaleTimeString('en-IN') }, 
   createdAt: { type: Date, default: Date.now, index: true },

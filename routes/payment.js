@@ -30,10 +30,15 @@ const sendErrorResponse = (res, req, error, defaultMessage = "Internal Server Er
   });
 };
 
+// 🔥 PHASE 1 FIX: ADDED ROUTE-LEVEL JSON PARSER
+// Kyunki app.js/server.js mein yeh router global json parser se pehle mount hota hai (webhook raw body safe rakhne ke liye),
+// toh normal payment routes (create/verify) ko apna personal JSON parser dena padega varna req.body undefined aayega.
+const jsonParser = express.json({ limit: '100kb' });
+
 // =================================================================
 // 1. CREATE PAYMENT ORDER (🔥 CANONICAL PAISE AMOUNT)
 // =================================================================
-router.post('/payment/create-order', protect, async (req, res) => {
+router.post('/payment/create-order', jsonParser, protect, async (req, res) => {
   try {
     const { orderId } = req.body; 
 
@@ -72,7 +77,7 @@ router.post('/payment/create-order', protect, async (req, res) => {
 // =================================================================
 // 2. VERIFY SIGNATURE & RECONCILE (🔥 AUDIT SECURED)
 // =================================================================
-router.post('/payment/verify', protect, async (req, res) => {
+router.post('/payment/verify', jsonParser, protect, async (req, res) => {
   try {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
 
@@ -137,6 +142,7 @@ router.post('/payment/verify', protect, async (req, res) => {
 // =================================================================
 // 3. SECURE WEBHOOK (🔥 ATOMIC FINDONEANDUPDATE & IDEMPOTENCY)
 // =================================================================
+// 🔥 Webhook deliberately uses express.raw() to preserve cryptographic signature bytes
 router.post('/payment/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   try {
     const signature = req.headers['x-razorpay-signature'];

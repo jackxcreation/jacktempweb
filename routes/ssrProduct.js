@@ -1,8 +1,25 @@
 const express = require('express');
 const router = express.Router();
-const { Product } = require('../models');
+// 🔥 FIX: Imported Review model to fetch actual real reviews from the database
+const { Product, Review } = require('../models');
 
-router.get('/api/ssr-product/:id', async (req, res) => {
+// ==========================================
+// 🛡️ SECURITY FIX: HTML Escaper to prevent XSS Attacks
+// ==========================================
+const escapeHTML = (str) => {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+};
+
+// ==========================================
+// 🚀 SEO ARCHITECTURE FIX: Route intercepts both API calls AND Direct Bot Visits
+// ==========================================
+router.get(['/api/ssr-product/:id', '/product/:id'], async (req, res) => {
   try {
     const productId = req.params.id;
     if (!productId.match(/^[0-9a-fA-F]{24}$/)) {
@@ -15,14 +32,45 @@ router.get('/api/ssr-product/:id', async (req, res) => {
       return res.status(404).send("Product not found for SEO prerender");
     }
 
-    const title = `${product.title} | Jack Essentials`;
-    const description = product.description ? product.description.substring(0, 160) : `Buy ${product.title} at best price on Jack Essentials. Free delivery & secure payments.`;
-    const imageUrl = product.image || (product.images && product.images[0]) || 'https://thejackessentials.com/logo.png';
+    // 🔥 FETCH REAL REVIEWS FROM DB FOR SEO SCHEMA
+    const actualReviews = await Review.find({ 
+      $or: [{ productId: productId }, { product: productId }] 
+    }).sort({ createdAt: -1 }).limit(10).lean();
+
+    const productUrl = `https://thejackessentials.com/product/${productId}`;
+
+    // ==========================================
+    // 🤖 BOT DETECTION (Redirect normal users to React SPA)
+    // ==========================================
+    const userAgent = req.headers['user-agent'] || '';
+    const isBot = /bot|googlebot|crawler|spider|robot|crawling|bingbot|yandexbot|slurp|duckduckbot|baiduspider|twitterbot|facebookexternalhit|linkedinbot|whatsapp/i.test(userAgent);
+
+    // Agar normal user direct backend ke /product/:id par aaye, toh use Frontend par bhej do
+    if (!isBot && req.path.startsWith('/product/')) {
+       return res.redirect(301, productUrl);
+    }
+
+    // Prepare raw variables
+    const rawTitle = `${product.title} | Jack Essentials`;
+    const rawDescription = product.description ? product.description.substring(0, 160) : `Buy ${product.title} at best price on Jack Essentials. Free delivery & secure payments.`;
+    const rawImageUrl = product.image || (product.images && product.images[0]) || 'https://thejackessentials.com/logo.png';
     const productPrice = product.pricePaise ? product.pricePaise / 100 : 0;
     const productMrp = product.mrpPaise ? product.mrpPaise / 100 : productPrice;
-    const skuCode = product.sku || `JCK-${String(product._id).slice(-6).toUpperCase()}`;
-    const productUrl = `https://thejackessentials.com/product/${productId}`;
-    const categoryName = product.category || 'General';
+    
+    // 🛡️ Apply Escape HTML to all dynamic user-generated content
+    const title = escapeHTML(rawTitle);
+    const description = escapeHTML(rawDescription);
+    const imageUrl = escapeHTML(rawImageUrl);
+    const skuCode = escapeHTML(product.sku || `JCK-${String(product._id).slice(-6).toUpperCase()}`);
+    const categoryName = escapeHTML(product.category || 'General');
+    const safeBrand = escapeHTML(product.brand || 'Jack Essentials');
+    const safeTitle = escapeHTML(product.title);
+    const safeDescription = escapeHTML(product.description || 'No description available.');
+
+    // 🔥 FIX: Generate a dynamic rolling date for priceValidUntil (Current Date + 1 Year)
+    const nextYearDate = new Date();
+    nextYearDate.setFullYear(nextYearDate.getFullYear() + 1);
+    const dynamicValidUntil = nextYearDate.toISOString().split('T')[0]; // Format: YYYY-MM-DD
 
     // ==========================================
     // 📊 1. PRODUCT JSON-LD SCHEMA (Rich Snippets)
@@ -30,20 +78,20 @@ router.get('/api/ssr-product/:id', async (req, res) => {
     const productSchema = {
       "@context": "https://schema.org/",
       "@type": "Product",
-      "name": product.title,
-      "image": product.images && product.images.length > 0 ? product.images : [imageUrl],
+      "name": safeTitle,
+      "image": product.images && product.images.length > 0 ? product.images.map(escapeHTML) : [imageUrl],
       "description": description,
-      "sku": skuCode,
+      "sku": product.sku || skuCode,
       "brand": {
         "@type": "Brand",
-        "name": product.brand || "Jack Essentials"
+        "name": safeBrand
       },
       "offers": {
         "@type": "Offer",
         "url": productUrl,
         "priceCurrency": "INR",
         "price": productPrice,
-        "priceValidUntil": "2027-12-31",
+        "priceValidUntil": dynamicValidUntil, // 🔥 Dynamically updated to stay valid forever
         "itemCondition": "https://schema.org/NewCondition",
         "availability": parseInt(product.inventory) > 0 ? "https://schema.org/InStock" : "https://schema.org/OutOfStock",
         "seller": {
@@ -81,29 +129,28 @@ router.get('/api/ssr-product/:id', async (req, res) => {
           "returnMethod": "https://schema.org/ReturnByMail",
           "returnFees": "https://schema.org/FreeReturn"
         }
-      },
-      "aggregateRating": {
-        "@type": "AggregateRating",
-        "ratingValue": product.rating || "4.8",
-        "reviewCount": product.reviews || "124"
-      },
-      "review": [
-        {
-          "@type": "Review",
-          "author": { "@type": "Person", "name": "Rahul M." },
-          "datePublished": "2026-01-15",
-          "reviewRating": { "@type": "Rating", "ratingValue": "5" },
-          "reviewBody": "Amazing quality! Delivered in just 2 days. Highly recommended."
-        },
-        {
-          "@type": "Review",
-          "author": { "@type": "Person", "name": "Sneha P." },
-          "datePublished": "2026-02-01",
-          "reviewRating": { "@type": "Rating", "ratingValue": "4" },
-          "reviewBody": "Good product but packaging could be better. Product works fine."
-        }
-      ]
+      }
     };
+
+    // 🔥 DYNAMIC REVIEWS & AGGREGATE RATING INJECTION (No more hardcoded fake data)
+    if (actualReviews && actualReviews.length > 0) {
+      const totalRating = actualReviews.reduce((sum, rev) => sum + (rev.rating || 0), 0);
+      const avgRating = (totalRating / actualReviews.length).toFixed(1);
+
+      productSchema.aggregateRating = {
+        "@type": "AggregateRating",
+        "ratingValue": String(avgRating),
+        "reviewCount": String(actualReviews.length)
+      };
+
+      productSchema.review = actualReviews.map(r => ({
+        "@type": "Review",
+        "author": { "@type": "Person", "name": escapeHTML(r.userName || "Customer") },
+        "datePublished": new Date(r.createdAt || Date.now()).toISOString().split('T')[0],
+        "reviewRating": { "@type": "Rating", "ratingValue": String(r.rating || 5) },
+        "reviewBody": escapeHTML(r.comment || "")
+      }));
+    }
 
     // ==========================================
     // 🍞 2. BREADCRUMBLIST SCHEMA
@@ -127,7 +174,7 @@ router.get('/api/ssr-product/:id', async (req, res) => {
         {
           "@type": "ListItem",
           "position": 3,
-          "name": product.title,
+          "name": safeTitle,
           "item": productUrl
         }
       ]
@@ -159,8 +206,11 @@ router.get('/api/ssr-product/:id', async (req, res) => {
       }
     };
 
+    // 🛡️ Helper to prevent </script> injection inside JSON blobs
+    const safeJsonStringify = (obj) => JSON.stringify(obj).replace(/</g, '\\u003c');
+
     // ==========================================
-    // 📄 PRERENDERED HTML WITH FULL SEO & SEMANTIC H1
+    // 📄 PRERENDERED HTML WITH FULL SEO, SEMANTIC H1, AND XSS ESCAPING
     // ==========================================
     const prerenderedHtml = `
       <!doctype html>
@@ -178,19 +228,19 @@ router.get('/api/ssr-product/:id', async (req, res) => {
           <meta property="og:type" content="product" />
           <meta property="og:url" content="${productUrl}" />
 
-          <script type="application/ld+json">${JSON.stringify(productSchema)}</script>
-          <script type="application/ld+json">${JSON.stringify(breadcrumbSchema)}</script>
-          <script type="application/ld+json">${JSON.stringify(organizationSchema)}</script>
-          <script type="application/ld+json">${JSON.stringify(websiteSchema)}</script>
+          <script type="application/ld+json">${safeJsonStringify(productSchema)}</script>
+          <script type="application/ld+json">${safeJsonStringify(breadcrumbSchema)}</script>
+          <script type="application/ld+json">${safeJsonStringify(organizationSchema)}</script>
+          <script type="application/ld+json">${safeJsonStringify(websiteSchema)}</script>
         </head>
         <body>
           <div id="root">
             <main style="font-family: sans-serif; padding: 20px; max-width: 800px; margin: auto;">
               <nav aria-label="breadcrumb" style="font-size: 12px; color: #666; margin-bottom: 20px;">
-                Home / ${categoryName} / <strong>${product.title}</strong>
+                Home / ${categoryName} / <strong>${safeTitle}</strong>
               </nav>
-              <h1 style="font-size: 28px; color: #111; margin-bottom: 10px;">${product.title}</h1>
-              <p style="font-size: 14px; color: #555; text-transform: uppercase; font-weight: bold;">Brand: ${product.brand || 'Jack Essentials'}</p>
+              <h1 style="font-size: 28px; color: #111; margin-bottom: 10px;">${safeTitle}</h1>
+              <p style="font-size: 14px; color: #555; text-transform: uppercase; font-weight: bold;">Brand: ${safeBrand}</p>
               <p style="font-size: 14px; color: #777;">SKU: ${skuCode}</p>
               <div style="margin: 20px 0;">
                 <span style="font-size: 32px; font-weight: 900; color: #111;">₹${productPrice}</span>
@@ -198,11 +248,11 @@ router.get('/api/ssr-product/:id', async (req, res) => {
               </div>
               <p style="font-size: 14px; color: #2e7d32; font-weight: bold;">${parseInt(product.inventory) > 0 ? '✓ In Stock (Free Delivery in 2-5 days)' : '✕ Out of Stock'}</p>
               <div style="margin-top: 30px;">
-                <img src="${imageUrl}" alt="${product.title}" style="max-width: 400px; height: auto; object-fit: contain;" />
+                <img src="${imageUrl}" alt="${safeTitle}" style="max-width: 400px; height: auto; object-fit: contain;" />
               </div>
               <div style="margin-top: 30px;">
                 <h2>About this item</h2>
-                <p style="line-height: 1.6; color: #333;">${product.description || 'No description available.'}</p>
+                <p style="line-height: 1.6; color: #333;">${safeDescription}</p>
               </div>
             </main>
           </div>

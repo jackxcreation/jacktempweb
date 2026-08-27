@@ -1,11 +1,18 @@
 const express = require('express');
 const router = express.Router();
-const { Product, User } = require('../models');
+const Redis = require('ioredis'); // 🔥 ADDED: Redis for distributed cluster-safe view tracking
+const { Product, User, Order } = require('../models');
 const { z } = require('zod'); // 🔥 Zod for strict input validation
 
 // 🚨 IMPORT SECURE MIDDLEWARES & RBAC
 const { protect } = require('../middleware/authMiddleware');
 const { checkPermission } = require('../middleware/rbacMiddleware');
+
+// ==========================================
+// 🔥 INITIALIZE REDIS CLIENT FOR VIEW TRACKING
+// ==========================================
+const redisClient = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+redisClient.on('error', (err) => console.error('Redis View Tracker Error:', err));
 
 // ==========================================
 // 🛡️ ZOD VALIDATION SCHEMA FOR PRODUCTS
@@ -31,17 +38,11 @@ const productValidationSchema = z.object({
 });
 
 // ==========================================
-// 🛡️ IN-MEMORY VIEW RATE LIMITER CACHE (Cooldown protection against view spam)
+// 🛡️ REGEX ESCAPE HELPER (Prevents ReDoS / Regex Injection)
 // ==========================================
-const recentViewsTracker = new Map();
-
-// Clean up old memory entries every 1 hour to prevent memory leaks
-setInterval(() => {
-  const oneHourAgo = Date.now() - 3600000;
-  for (const [key, timestamp] of recentViewsTracker.entries()) {
-    if (timestamp < oneHourAgo) recentViewsTracker.delete(key);
-  }
-}, 3600000);
+const escapeRegex = (text) => {
+  return text.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+};
 
 // ==========================================
 // 📦 1. PRODUCT APIs
@@ -98,12 +99,14 @@ router.get('/api/products', async (req, res) => {
 
     let products = [];
     let totalCount = 0;
+    let usedAtlasSearch = false; // 🔥 FIX: Explicit flag to track Atlas Search execution & fallback safely
 
     // Build filter array for Atlas Search & Mongoose Query
     const finalMaxPrice = extractedMaxPrice || maxPrice;
 
     // Attempt MongoDB Atlas Search if clean search query is provided
     if (cleanSearchQuery && cleanSearchQuery.length > 0) {
+      usedAtlasSearch = true;
       try {
         const atlasFilters = [
           ...(warehouseId ? [{ text: { query: warehouseId, path: "warehouseId" } }] : []),
@@ -159,8 +162,8 @@ router.get('/api/products', async (req, res) => {
       }
     }
 
-    // Fallback standard Mongoose query if Atlas Search didn't execute or return data
-    if (!products || products.length === 0 && !cleanSearchQuery) {
+    // 🔥 FIX: Reliable fallback standard Mongoose query if Atlas Search wasn't used, returned 0 results, or failed
+    if (!products || products.length === 0) {
       const query = {};
       if (warehouseId) query.warehouseId = warehouseId;
       if (category && category !== 'All') query.category = category;
@@ -177,9 +180,11 @@ router.get('/api/products', async (req, res) => {
       }
 
       if (cleanSearchQuery) {
+        // 🔥 FIX: Using escapeRegex to prevent ReDoS & regex injection attacks
+        const safeRegex = new RegExp(escapeRegex(cleanSearchQuery), 'i');
         query.$or = [
-          { title: new RegExp(cleanSearchQuery, 'i') },
-          { description: new RegExp(cleanSearchQuery, 'i') }
+          { title: safeRegex },
+          { description: safeRegex }
         ];
       }
 
@@ -241,23 +246,20 @@ router.get('/api/products/similar/:id', async (req, res) => {
   }
 });
 
-// 🔥 4. Get Single Product (And Rate-Limited Unique View Counter Cooldown)
+// 🔥 4. Get Single Product (And Distributed Redis TTL View Counter Cooldown)
 router.get('/api/products/:id', async (req, res) => {
   try {
     const productId = req.params.id;
     
-    // Generate a unique visitor key using IP and Product ID
+    // Generate a unique visitor hash/key using IP and Product ID
     const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown_ip';
-    const viewKey = `${clientIp}_${productId}`;
-    const now = Date.now();
-    const cooldownPeriod = 30 * 60 * 1000; // 30 minutes cooldown per visitor per product
+    const redisKey = `view:${productId}:${clientIp}`;
 
     let productQuery = Product.findById(productId);
 
-    // Check cooldown status to prevent artificial view spamming
-    const lastViewedTime = recentViewsTracker.get(viewKey);
-    if (!lastViewedTime || (now - lastViewedTime) > cooldownPeriod) {
-      recentViewsTracker.set(viewKey, now);
+    // 🔥 ENTERPRISE FIX: Use Redis SET with NX and EX (30 mins = 1800s) to prevent spam across clustered servers
+    const viewLock = await redisClient.set(redisKey, '1', 'EX', 1800, 'NX');
+    if (viewLock === 'OK') {
       productQuery = Product.findByIdAndUpdate(
         productId,
         { $inc: { views: 1 } }, 
@@ -330,23 +332,70 @@ router.get('/api/recommendations/trending', async (req, res) => {
   }
 });
 
-// Because You Bought X (Personalized based on wishlist/history)
+// Because You Bought X (Enterprise Purchase History Recommendation Engine)
 router.get('/api/recommendations/because-you-bought/:userId', protect, async (req, res) => {
   try {
-    const user = await User.findById(req.params.userId).populate('wishlist').lean();
-    if (!user || !user.wishlist || user.wishlist.length === 0) {
+    const userId = req.params.userId;
+    
+    // 1. Fetch user past orders to inspect actual purchase history
+    const pastOrders = await Order.find({ userId }).lean();
+    
+    let purchasedProductIds = [];
+    let categories = new Set();
+    let brands = new Set();
+
+    pastOrders.forEach(order => {
+      if (order.items && Array.isArray(order.items)) {
+        order.items.forEach(item => {
+          if (item.productId) purchasedProductIds.push(item.productId);
+          if (item.product) purchasedProductIds.push(item.product.toString());
+          if (item.category) categories.add(item.category);
+          if (item.brand) brands.add(item.brand);
+        });
+      }
+    });
+
+    // If order items only store IDs, fetch product metadata to extract category/brand
+    if (purchasedProductIds.length > 0 && (categories.size === 0 || brands.size === 0)) {
+      const purchasedProducts = await Product.find({ _id: { $in: purchasedProductIds } }).lean();
+      purchasedProducts.forEach(p => {
+        if (p.category) categories.add(p.category);
+        if (p.brand) brands.add(p.brand);
+      });
+    }
+
+    let recommended = [];
+
+    if (categories.size > 0 || brands.size > 0) {
+      const query = {
+        $or: [
+          ...(categories.size > 0 ? [{ category: { $in: Array.from(categories) } }] : []),
+          ...(brands.size > 0 ? [{ brand: { $in: Array.from(brands) } }] : [])
+        ]
+      };
+      if (purchasedProductIds.length > 0) {
+        query._id = { $nin: purchasedProductIds };
+      }
+
+      recommended = await Product.find(query).sort({ rating: -1, views: -1 }).limit(4).lean();
+    }
+
+    // Fallback to top-rated products if no purchase history exists or recommendations are empty
+    if (!recommended || recommended.length === 0) {
       const topRated = await Product.find().sort({ rating: -1 }).limit(4).lean();
       return res.json(topRated.map(p => ({ ...p, id: p._id.toString() })));
     }
 
-    const lastWishCategory = user.wishlist[user.wishlist.length - 1].category;
-    const recommended = await Product.find({
-      category: lastWishCategory,
-      _id: { $nin: user.wishlist }
-    }).limit(4).lean();
+    // Fill up to 4 items with top-rated if less than 4 recommendations are found
+    if (recommended.length < 4) {
+      const existingIds = recommended.map(p => p._id).concat(purchasedProductIds);
+      const additional = await Product.find({ _id: { $nin: existingIds } }).sort({ rating: -1 }).limit(4 - recommended.length).lean();
+      recommended = recommended.concat(additional);
+    }
 
     res.json(recommended.map(p => ({ ...p, id: p._id.toString() })));
   } catch (err) {
+    console.error("Because You Bought Recommendations Error:", err);
     res.status(500).json({ message: "Error fetching personalized recommendations" });
   }
 });

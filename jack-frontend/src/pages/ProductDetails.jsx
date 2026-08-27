@@ -9,7 +9,8 @@ import { useUser } from '../context/UserContext';
 import { useCompare } from '../context/CompareContext';
 import { io } from 'socket.io-client';
 import { getOptimizedImageUrl } from '../utils/imageOptimizer';
-import axiosInstance from '../api/axiosInstance';
+// 🔥 PHASE 1 FIX: Use canonical axiosInstance for ALL backend calls
+import axiosInstance from '../api/axiosInstance'; 
 import { ProductInternalGraph } from '../components/ProductInternalGraph';
 
 // 🔥 CANONICAL CURRENCY FORMATTER UTILITY
@@ -69,7 +70,8 @@ const NotifyMeButton = ({ productId }) => {
   const handleNotify = async () => {
     setLoading(true);
     try {
-      const res = await axiosInstance.post('/api/stock-alerts/subscribe', { productId });
+      // 🔥 PHASE 1 FIX: Removed `/api` prefix because axiosInstance already maps to /api
+      const res = await axiosInstance.post('/stock-alerts/subscribe', { productId });
       if (res.data.success) {
         setSubscribed(true);
         alert(res.data.message);
@@ -201,7 +203,11 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
 
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
   const [isLoadingSimilar, setIsLoadingSimilar] = useState(true);
-  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+
+  // 🔥 PHASE 1 FIX: Extracted WebSocket URL logically
+  const socketURL = import.meta.env.VITE_API_URL 
+      ? import.meta.env.VITE_API_URL.replace(/\/api$/, '') 
+      : 'https://ecom-project-lwt4.onrender.com';
 
   const fetchProductReviews = () => {
     if (!productIdSafeguard) return;
@@ -319,11 +325,8 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
     let socket;
     const token = localStorage.getItem('token');
     
-    // Sirf tabhi connect karo jab token ho
     if (productIdSafeguard && token) {
-      const socketUrl = API_URL.replace('/api', '');
-      
-      socket = io(socketUrl, { 
+      socket = io(socketURL, { 
         withCredentials: true,
         auth: { token }
       });
@@ -340,18 +343,15 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
     return () => {
       if (socket) socket.disconnect();
     };
-  }, [productIdSafeguard, API_URL]);
+  }, [productIdSafeguard, socketURL]);
 
   // 🔥 FIX: Added strictly token check for visitor socket
   useEffect(() => {
     let socketVisitor;
     const token = localStorage.getItem('token');
 
-    // Sirf tabhi connect karo jab token ho
     if (productIdSafeguard && token) {
-      const socketUrl = API_URL.replace('/api', '');
-      
-      socketVisitor = io(socketUrl, { 
+      socketVisitor = io(socketURL, { 
         withCredentials: true,
         auth: { token }
       });
@@ -372,7 +372,7 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
         socketVisitor.disconnect();
       }
     };
-  }, [productIdSafeguard, user?.id, API_URL, product?.title]);
+  }, [productIdSafeguard, user?.name, socketURL, product?.title]);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -400,6 +400,7 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
 
     setDeliveryStatus('checking');
     try {
+      // 🔥 PHASE 1 FIX: Using axiosInstance instead of fetch
       const res = await axiosInstance.get(`/delivery-check?pincode=${pinCodeToCheck}`);
       const data = res.data;
       

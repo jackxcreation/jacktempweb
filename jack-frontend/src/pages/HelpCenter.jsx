@@ -5,7 +5,9 @@ import {
   FiMessageSquare, FiSearch, FiCreditCard, FiRefreshCw, FiShoppingBag, FiInfo
 } from 'react-icons/fi';
 import { Link } from 'react-router-dom';
-import Chat from './Chat'; // Ensure correct path based on your folder structure
+import Chat from '../components/Chat'; // 🔥 PHASE 1 FIX: Corrected import path
+// 🔥 PHASE 1 FIX: Canonical Axios Instance
+import axiosInstance from '../api/axiosInstance';
 
 const HelpCenter = () => {
   const [activeFaq, setActiveFaq] = useState(null);
@@ -21,10 +23,6 @@ const HelpCenter = () => {
   const [chatContext, setChatContext] = useState(null); // Will hold order data if clicked from an order
   const [toastMessage, setToastMessage] = useState('');
 
-  const API_URL = import.meta.env.VITE_API_URL 
-    ? `${import.meta.env.VITE_API_URL}/api` 
-    : 'http://localhost:5000/api';
-
   useEffect(() => {
     window.scrollTo(0, 0);
     
@@ -33,11 +31,9 @@ const HelpCenter = () => {
       if (storedUser && storedUser.id) {
         setCurrentUser(storedUser);
         try {
-          const res = await fetch(`${API_URL}/orders/user/${storedUser.id}`);
-          if (res.ok) {
-            const data = await res.json();
-            setUserOrders(data);
-          }
+          // 🔥 PHASE 1 FIX: Removed localhost and used axiosInstance
+          const res = await axiosInstance.get(`/orders/user/${storedUser.id}`);
+          setUserOrders(res.data);
         } catch (error) {
           console.error("Orders fetch failed", error);
         }

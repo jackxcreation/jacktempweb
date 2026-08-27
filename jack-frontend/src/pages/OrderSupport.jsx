@@ -1,7 +1,10 @@
-import React, { useEffect, useState } from 'react';
+  import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { FiArrowLeft, FiBox, FiMessageSquare } from 'react-icons/fi';
-import Chat from '../components/Chat'; // Step 2 mein banayenge
+// 🔥 PHASE 1 FIX: Corrected import path for Chat component to prevent build failure
+import Chat from '../components/Chat'; 
+// 🔥 PHASE 1 FIX: Imported the canonical axiosInstance
+import axiosInstance from '../api/axiosInstance'; // Make sure path matches your structure
 
 // 🔥 CANONICAL CURRENCY FORMATTER UTILITY
 const formatCurrency = (paise) => {
@@ -14,10 +17,11 @@ const OrderSupport = () => {
   const [order, setOrder] = useState(null);
 
   useEffect(() => {
-    // API se order details fetch karo
-    fetch(`http://localhost:5000/api/orders/${orderId}`)
-      .then(res => res.json())
-      .then(data => setOrder(data));
+    // 🔥 PHASE 1 FIX: Removed dangerous hardcoded localhost:5000. 
+    // Now uses axiosInstance which natively prepends the exact Production API_URL
+    axiosInstance.get(`/orders/${orderId}`)
+      .then(res => setOrder(res.data))
+      .catch(err => console.error("Error fetching order:", err));
   }, [orderId]);
 
   if (!order) return <div className="p-20 text-center">Loading Order Details...</div>;

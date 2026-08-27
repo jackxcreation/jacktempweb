@@ -9,7 +9,10 @@ export const NotifyMeButton = ({ productId }) => {
   const handleNotify = async () => {
     setLoading(true);
     try {
-      const res = await axiosInstance.post('/api/stock-alerts/subscribe', { productId });
+      // 🔥 PHASE 1 FIX: Removed '/api' prefix! 
+      // Because axiosInstance baseURL is '.../api', adding '/api' here would cause a 404 on '/api/api/stock-alerts...'
+      const res = await axiosInstance.post('/stock-alerts/subscribe', { productId });
+      
       if (res.data.success) {
         setSubscribed(true);
         alert(res.data.message);

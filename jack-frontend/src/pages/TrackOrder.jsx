@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { FiPackage, FiShoppingBag, FiTruck, FiCheckCircle, FiClock, FiChevronRight } from 'react-icons/fi';
 import { Link, useNavigate } from 'react-router-dom';
+// 🔥 PHASE 1 FIX: Canonical Axios Instance
+import axiosInstance from '../api/axiosInstance';
 
 // 🔥 CANONICAL CURRENCY FORMATTER UTILITY
 const formatCurrency = (paise) => {
@@ -14,10 +16,6 @@ const TrackOrder = () => {
   const [orders, setOrders] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState(null);
-
-  const API_URL = import.meta.env.VITE_API_URL 
-    ? `${import.meta.env.VITE_API_URL}/api` 
-    : 'http://localhost:5000/api';
 
   // Order Tracking Stages
   const stages = ["Placed", "Processing", "Shipped", "Out for Delivery", "Delivered"];
@@ -38,11 +36,9 @@ const TrackOrder = () => {
 
       // 2. Fetch real orders
       try {
-        const res = await fetch(`${API_URL}/orders/user/${storedUser.id}`);
-        if (res.ok) {
-          const data = await res.json();
-          setOrders(data);
-        }
+        // 🔥 PHASE 1 FIX: Removed localhost and used axiosInstance
+        const res = await axiosInstance.get(`/orders/user/${storedUser.id}`);
+        setOrders(res.data);
       } catch (error) {
         console.error("Failed to fetch orders:", error);
       } finally {

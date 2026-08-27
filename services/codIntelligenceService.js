@@ -25,8 +25,11 @@ const evaluateCodEligibility = async (pincode, cartTotalPaise, userId) => {
 
     // 3. Evaluate User History & Risk (Check past cancelled/returned orders)
     if (userId) {
-      const pastOrders = await Order.find({ user: userId }).lean();
-      const cancelledCount = pastOrders.filter(o => o.status === 'Cancelled' || o.status === 'Returned').count || 0;
+      // 🔥 FIX 1: Corrected schema field 'user: userId' to 'userId'
+      const pastOrders = await Order.find({ userId }).lean();
+      
+      // 🔥 FIX 2: Replaced invalid JavaScript '.count' with proper '.length'
+      const cancelledCount = pastOrders.filter(o => o.status === 'Cancelled' || o.status === 'Returned').length;
       
       if (cancelledCount >= 2) {
         riskLevel = 'HIGH';

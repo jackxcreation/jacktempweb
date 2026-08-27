@@ -27,6 +27,7 @@ const orderCreationSchema = z.object({
     primaryPhone: z.string().regex(/^\d{10}$/, "Invalid phone number. Must be 10 digits")
   }),
   paymentMethod: z.string().min(1, "Payment method is required"),
+  couponCode: z.string().optional(), // 🔥 Added explicitly for backend validation
   userDetails: z.object({
     name: z.string().optional(),
     email: z.string().email().optional()
@@ -189,7 +190,7 @@ router.post('/api/orders', protect, async (req, res) => {
   session.startTransaction();
 
   try {
-    const { items, address, paymentMethod, userDetails, trafficSource } = validationResult.data;
+    const { items, address, paymentMethod, userDetails, trafficSource, couponCode } = validationResult.data;
     const secureUserId = req.user._id; 
     const safeStatus = 'Pending'; 
 
@@ -224,13 +225,36 @@ router.post('/api/orders', protect, async (req, res) => {
       });
     }
 
+    // ==========================================
+    // 🔥 SECURE SERVER-SIDE PRICE CALCULATION ENGINE
+    // ==========================================
+    const payString = String(paymentMethod || '').toLowerCase();
+    const isCod = payString.includes('cod') || payString.includes('cash');
+
+    let finalTotalPaise = calculatedServerTotalPaise;
+
+    // Rule 1: Apply 10% Discount for Prepaid Orders
+    if (!isCod) {
+      const prepaidDiscountPaise = Math.round(calculatedServerTotalPaise * 0.10);
+      finalTotalPaise -= prepaidDiscountPaise;
+    }
+
+    // Rule 2: Apply Flat ₹50 (5000 paise) COD Fee
+    if (isCod) {
+      const codFeePaise = 5000;
+      finalTotalPaise += codFeePaise;
+    }
+
+    // Future-proofing: Example coupon logic
+    // if (couponCode === 'JACK10') { finalTotalPaise -= 10000; }
+
     const deviceInfo = req.headers['user-agent']?.includes('Mobile') ? 'Mobile Device' : 'Desktop / PC';
     const io = req.app.get("io"); 
 
     const newOrder = new Order({ 
       userId: secureUserId, 
       items: verifiedOrderItems, 
-      totalPaise: calculatedServerTotalPaise,
+      totalPaise: finalTotalPaise, // 🔥 Strictly calculated server-side total used here
       status: safeStatus, 
       address, 
       paymentMethod, 
@@ -262,13 +286,10 @@ router.post('/api/orders', protect, async (req, res) => {
             if (cleanPhone.length > 10) cleanPhone = cleanPhone.slice(-10);
             let cleanPincode = (address.pincode || "110001").replace(/[^0-9]/g, '');
 
-            const finalNumericAmount = Math.round(calculatedServerTotalPaise / 100);
+            const finalNumericAmount = Math.round(finalTotalPaise / 100); // 🔥 Now uses secure derived total
 
-            const payString = String(paymentMethod || '').toLowerCase();
-            const isCod = payString.includes('cod') || payString.includes('cash');
-
-            let productsDescription = verifiedOrderItems.map(i => i.title || "Product").join(", ");
-            let totalQuantity = verifiedOrderItems.reduce((sum, item) => sum + item.quantity, 0);
+            const productsDescription = verifiedOrderItems.map(i => i.title || "Product").join(", ");
+            const totalQuantity = verifiedOrderItems.reduce((sum, item) => sum + item.quantity, 0);
 
             let totalWeight = 0, maxL = 15, maxB = 15, totalH = 10;
             verifiedOrderItems.forEach(item => {

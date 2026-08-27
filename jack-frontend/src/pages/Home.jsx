@@ -10,8 +10,10 @@ import {
 import { useCart } from '../context/CartContext';
 import { useUser } from '../context/UserContext';
 import { useProducts } from '../context/ProductContext';
-import { useCompare } from '../context/CompareContext'; // 🔥 Compare context integration
+import { useCompare } from '../context/CompareContext';
 import { getOptimizedImageUrl } from '../utils/imageOptimizer';
+// 🔥 PHASE 1 FIX: Canonical Axios Instance
+import axiosInstance from '../api/axiosInstance';
 
 // 🔥 CANONICAL CURRENCY FORMATTER UTILITY
 const formatCurrency = (paise) => {
@@ -96,7 +98,6 @@ const CompareModal = ({ isOpen, onClose }) => {
                 {/* Product Columns */}
                 {compareList.map((product) => {
                   const rawImg = product.image || (product.images && product.images[0]);
-                  // 🔥 FIX: Fallback logic for price inside Compare Modal
                   const productPricePaise = product.pricePaise || (product.price ? product.price * 100 : 0);
                   const productMrpPaise = product.mrpPaise || (product.mrp ? product.mrp * 100 : 0);
 
@@ -178,13 +179,12 @@ const CompareModal = ({ isOpen, onClose }) => {
 
 const ProductCard = memo(({ product }) => {
   const { addToCart } = useCart();
-  const { addToCompare } = useCompare(); // 🔥 Compare context integration
-  const { user, toggleWishlist, wishlist } = useUser(); // 🔥 ADDED: Wishlist logic integration
+  const { addToCompare } = useCompare(); 
+  const { user, toggleWishlist, wishlist } = useUser(); 
   const [imgError, setImgError] = useState(false);
 
   if (!product) return null;
 
-  // 🔥 FIX: Fallback logic for price inside Product Card
   const productPricePaise = product.pricePaise || (product.price ? product.price * 100 : 0);
   const productMrpPaise = product.mrpPaise || (product.mrp ? product.mrp * 100 : 0);
 
@@ -192,7 +192,6 @@ const ProductCard = memo(({ product }) => {
   const displayDiscount = product.discount || (discountPercent ? `${discountPercent}% OFF` : null);
   const rawImg = product.image;
 
-  // 🔥 Check if this specific product is already in the wishlist
   const isInWishlist = wishlist?.some(item => {
     const p = item.product || item;
     return String(p._id || p.id) === String(product.id || product._id);
@@ -230,7 +229,7 @@ const ProductCard = memo(({ product }) => {
           )}
         </div>
 
-        {/* Wishlist Action 🔥 FIX: Now actually toggles wishlist */}
+        {/* Wishlist Action */}
         <button 
           onClick={(e) => { 
             e.preventDefault(); 
@@ -345,21 +344,18 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
   const [currentSlide, setCurrentSlide] = useState(0);
   const [trendingProducts, setTrendingProducts] = useState([]);
   const [loadingTrending, setLoadingTrending] = useState(true);
-  const [isCompareModalOpen, setIsCompareModalOpen] = useState(false); // 🔥 Modal State
+  const [isCompareModalOpen, setIsCompareModalOpen] = useState(false); 
   
   const userContext = useUser();
   const recentlyViewed = userContext?.recentlyViewed || []; 
   
   const productContext = useProducts();
   const products = productContext?.products || [];
-  const { compareList } = useCompare(); // 🔥 Compare Context hook
-
-  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+  const { compareList } = useCompare(); 
 
   const dealOfTheDayProducts = useMemo(() => {
     if (!products || products.length === 0) return [];
     return [...products]
-      // 🔥 FIX: Check both structures for deal of the day filtering
       .filter(p => {
         const mrp = p.mrpPaise || (p.mrp ? p.mrp * 100 : 0);
         const price = p.pricePaise || (p.price ? p.price * 100 : 0);
@@ -386,19 +382,18 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
     const fetchTrending = async () => {
       try {
         setLoadingTrending(true);
-        const res = await fetch(`${API_URL}/products/trending/top`, { 
-          signal: controller.signal,
-          headers: { 'Accept': 'application/json' }
+        // 🔥 PHASE 1 FIX: Replaced raw fetch with axiosInstance for consistency & interceptors
+        const res = await axiosInstance.get(`/products/trending/top`, { 
+          signal: controller.signal
         });
-        if (!res.ok) throw new Error("API Failure");
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          setTrendingProducts(data);
+        
+        if (Array.isArray(res.data)) {
+          setTrendingProducts(res.data);
         } else {
           throw new Error("Invalid structure returned");
         }
       } catch (err) {
-        if (err.name !== 'AbortError') {
+        if (err.name !== 'CanceledError') {
           console.warn("Fallback sequence initiated due to telemetry/API breakdown.", err);
           setTrendingProducts(products.slice(0, 8));
         }
@@ -417,7 +412,7 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
       controller.abort();
       clearInterval(timer);
     };
-  }, [products, API_URL]);
+  }, [products]);
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] font-sans selection:bg-[#FF4500] selection:text-white text-slate-900 antialiased overflow-x-hidden">

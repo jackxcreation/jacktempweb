@@ -1,11 +1,16 @@
-// workers/abandonedCartWorker.js
 const { Worker } = require('bullmq');
 const { Resend } = require('resend');
 const AbandonedCart = require('../models/AbandonedCart');
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-// 🔥 Explicitly pass Redis URL from .env to stop it from hitting localhost
+// ==========================================
+// 🔥 PRODUCTION REDIS VALIDATION FOR WORKER
+// ==========================================
+if (process.env.NODE_ENV === 'production' && !process.env.REDIS_URL) {
+    throw new Error('FATAL: REDIS_URL environment variable is required in production for BullMQ workers.');
+}
+
 const connection = {
   url: process.env.REDIS_URL || 'redis://localhost:6379'
 };

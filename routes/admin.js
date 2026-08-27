@@ -48,45 +48,9 @@ router.put('/api/settings', protect, checkPermission('settings:all'), async (req
 });
 
 // ==========================================
-// 📧 5. EMAIL MARKETING & SUBSCRIBERS
+// 📧 5. REPORTS & FINANCIAL EMAILS
 // ==========================================
-// Public can subscribe
-router.post('/api/subscribe', async (req, res) => {
-  try {
-    const { email } = req.body;
-    const newSub = new Subscriber({ email });
-    await newSub.save();
-    res.status(201).json({ message: "Subscribed successfully!" });
-  } catch (error) { res.status(400).json({ message: "Email already subscribed or error." }); }
-});
-
-// RBAC ENFORCED to view subscribers
-router.get('/api/subscribers', protect, checkPermission('settings:all'), async (req, res) => {
-  try {
-    const subscribers = await Subscriber.find({}, 'email subscribedAt').lean();
-    res.json(subscribers);
-  } catch (error) { res.status(500).json({ message: "Error fetching subscribers" }); }
-});
-
-// RBAC ENFORCED to send bulk emails
-router.post('/api/send-bulk-email', protect, checkPermission('settings:all'), async (req, res) => {
-  const { subject, message, emails } = req.body;
-  if (!emails || emails.length === 0) return res.status(400).json({ success: false, message: "No users selected" });
-  if (!process.env.RESEND_API_KEY) return res.status(500).json({ error: "RESEND_API_KEY is missing." });
-
-  try {
-    const htmlContent = getBulkEmailTemplate(subject, message);
-    const { data, error } = await resend.emails.send({
-      from: 'Jack Essentials <updates@thejackessentials.com>',
-      to: ['jackessentialstm@gmail.com'], 
-      bcc: emails, 
-      subject: subject,
-      html: htmlContent,
-    });
-    if (error) return res.status(400).json({ error: error.message });
-    res.json({ success: true, message: "Emails sent successfully via Resend API!" });
-  } catch (error) { res.status(500).json({ error: error.message }); }
-});
+// Note: Subscriber management & bulk emailing are canonically handled in routes/subscribers.js to prevent route collision.
 
 // RBAC ENFORCED for Finance/Reports
 router.post('/api/send-report', protect, checkPermission('finance:all'), async (req, res) => {

@@ -112,14 +112,17 @@ export const CartProvider = ({ children }) => {
   
   // 🔥 Canonical Paisa-safe financial metrics handling
   const cartTotalPaise = cart.reduce((total, item) => {
-    const pricePaise = item.pricePaise || (item.price ? Math.round(Number(item.price) * 100) : 0);
-    return total + (pricePaise * item.quantity);
+    let pPaise = item.pricePaise;
+    // Fallback safely for legacy cached items without pricePaise (keeps decimals intact)
+    if (pPaise === undefined || pPaise === null) {
+      const cleanPriceString = String(item.price || '0').replace(/[^0-9.]/g, '');
+      pPaise = Math.round(Number(cleanPriceString) * 100);
+    }
+    return total + (pPaise * item.quantity);
   }, 0);
 
-  const cartTotal = cart.reduce((total, item) => {
-    const priceString = String(item.price || item.pricePaise || 0).replace(/[^0-9]/g, ''); 
-    return total + (parseInt(priceString, 10) * item.quantity);
-  }, 0);
+  // 🔥 FIX: Derived securely from canonical paise to avoid regex stripping bugs
+  const cartTotal = cartTotalPaise / 100;
 
   // 1. Add to Cart with Image Optimization support
   const addToCart = (product) => {
@@ -128,8 +131,18 @@ export const CartProvider = ({ children }) => {
     const rawImage = product.image || (product.images && product.images[0]) || '';
     const optimizedImage = getOptimizedImageUrl(rawImage, 320);
 
-    const pricePaise = product.pricePaise || (product.price ? Math.round(Number(product.price) * 100) : 0);
-    const mrpPaise = product.mrpPaise || (product.mrp ? Math.round(Number(product.mrp) * 100) : pricePaise);
+    // Safeguard paise calculation during addition
+    let pricePaise = product.pricePaise;
+    if (pricePaise === undefined || pricePaise === null) {
+      const cleanPrice = String(product.price || '0').replace(/[^0-9.]/g, '');
+      pricePaise = Math.round(Number(cleanPrice) * 100);
+    }
+    
+    let mrpPaise = product.mrpPaise;
+    if (mrpPaise === undefined || mrpPaise === null) {
+      const cleanMrp = String(product.mrp || '0').replace(/[^0-9.]/g, '');
+      mrpPaise = product.mrp ? Math.round(Number(cleanMrp) * 100) : pricePaise;
+    }
 
     setCart((prevCart) => {
       const existingItem = prevCart.find(item => String(item.id) === String(productId));

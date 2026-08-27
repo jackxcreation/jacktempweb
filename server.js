@@ -305,6 +305,9 @@ app.use('/', require('./routes/admin'));
 app.use('/api/auth', require('./routes/auth'));
 app.use('/', require('./routes/warehouse'));
 
+// 🔥 MOUNTED CANONICAL STORE SETTINGS ROUTE
+app.use('/api/settings', require('./routes/settings'));
+
 // 🔥 MOUNTED DELIVERY CHECK & PINCODE INFO ROUTE
 app.use('/api', require('./routes/deliveryCheck'));
 
@@ -496,14 +499,14 @@ io.on('connection', (socket) => {
     }
   });
 
-  // 🔥 REDIS SHARED STATE LIVE VISITOR TRACKING
+  // 🔥 REDIS SHARED STATE LIVE VISITOR TRACKING (PRIVACY SECURED: Anonymized visitor labels instead of real user names)
   socket.on('join_product_page', async (data) => {
     try {
       const visitorPayload = JSON.stringify({
         socketId: socket.id,
         productId: data.productId,
         productName: data.productName,
-        user: socket.user.name || 'Anonymous', 
+        user: 'Anonymous Visitor', // 🔥 PRIVACY FIX: Prevented leaking actual customer names to live analytics streams
         device: data.device || 'Desktop',
         joinedAt: Date.now()
       });
@@ -512,7 +515,7 @@ io.on('connection', (socket) => {
         await pubClient.hSet('live_visitors', socket.id, visitorPayload);
         const allVisitorsObj = await pubClient.hGetAll('live_visitors');
         const visitorsArray = Object.values(allVisitorsObj).map(v => JSON.parse(v));
-        io.emit('live_traffic_update', visitorsArray);
+        io.to('admin_room').emit('live_traffic_update', visitorsArray);
       }
     } catch (err) { console.error("Redis join page error:", err); }
   });
@@ -523,7 +526,7 @@ io.on('connection', (socket) => {
         await pubClient.hDel('live_visitors', socket.id);
         const allVisitorsObj = await pubClient.hGetAll('live_visitors');
         const visitorsArray = Object.values(allVisitorsObj).map(v => JSON.parse(v));
-        io.emit('live_traffic_update', visitorsArray);
+        io.to('admin_room').emit('live_traffic_update', visitorsArray);
       }
     } catch (err) { console.error("Redis leave page error:", err); }
   });
@@ -534,7 +537,7 @@ io.on('connection', (socket) => {
         await pubClient.hDel('live_visitors', socket.id);
         const allVisitorsObj = await pubClient.hGetAll('live_visitors');
         const visitorsArray = Object.values(allVisitorsObj).map(v => JSON.parse(v));
-        io.emit('live_traffic_update', visitorsArray);
+        io.to('admin_room').emit('live_traffic_update', visitorsArray);
       }
     } catch (err) { console.error("Redis disconnect error:", err); }
   });

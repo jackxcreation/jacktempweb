@@ -1,18 +1,22 @@
+// routes/settings.js
 const express = require('express');
 const router = express.Router();
-const Setting = require('../models/Setting');
+const { Setting } = require('../models'); // 🔥 Unified model import
+
+// 🚨 IMPORT AUTH & RBAC MIDDLEWARES
+const { protect } = require('../middleware/authMiddleware');
+const { checkPermission } = require('../middleware/rbacMiddleware');
 
 // ==========================================
-// 1. GET STORE SETTINGS (Public - For Footer)
+// 1. GET STORE SETTINGS (Public - For Footer & Storefront)
 // ==========================================
 router.get('/', async (req, res) => {
   try {
-    // Database mein humesha sirf EK hi settings document rahega
-    let settings = await Setting.findOne();
-    
+    let settings = await Setting.findOne().lean();
+
     // Agar database ekdum khali hai, toh default values se ek create kar do
     if (!settings) {
-      settings = new Setting({
+      const newSettings = new Setting({
         shopLinks: [
           { title: "Electronics", url: "/shop/electronics" },
           { title: "Men's Fashion", url: "/shop/fashion" },
@@ -24,9 +28,10 @@ router.get('/', async (req, res) => {
           { title: "Contact Us", url: "/contact" }
         ]
       });
-      await settings.save();
+      await newSettings.save();
+      settings = newSettings.toObject();
     }
-    
+
     res.json(settings);
   } catch (error) {
     console.error("Fetch Settings Error:", error);
@@ -35,9 +40,9 @@ router.get('/', async (req, res) => {
 });
 
 // ==========================================
-// 2. UPDATE STORE SETTINGS (Admin Only)
+// 2. UPDATE STORE SETTINGS (Admin Only - RBAC Enforced)
 // ==========================================
-router.put('/', async (req, res) => {
+router.put('/', protect, checkPermission('settings:all'), async (req, res) => {
   try {
     const { footerAbout, socialLinks, shopLinks, supportLinks } = req.body;
 
