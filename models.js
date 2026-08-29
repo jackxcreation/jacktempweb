@@ -5,10 +5,12 @@ const mongoose = require('mongoose');
 // ==========================================
 const productSchema = new mongoose.Schema({
   title: { type: String, required: [true, 'Product title is required'], trim: true, maxlength: 200, index: true }, 
-  price: String, // Kept for legacy display compatibility if needed
-  mrp: String,   // Kept for legacy display compatibility if needed
   
-  // 🔥 AUDIT FIX: Integer paise fields and numeric inventory for strict validation & sorting
+  // 🔥 ROOT CAUSE FIX: Changed price and mrp from String to strictly Number
+  price: { type: Number, default: 0 }, 
+  mrp: { type: Number, default: 0 }, 
+  
+  // Integer paise fields and numeric inventory for strict validation & sorting
   pricePaise: { type: Number, required: [true, 'Price in paise is required'], min: 0, default: 0, index: true }, 
   mrpPaise: { type: Number, required: [true, 'MRP in paise is required'], min: 0, default: 0 }, 
   inventory: { type: Number, required: [true, 'Inventory is required'], default: 0, min: 0 },
@@ -20,8 +22,8 @@ const productSchema = new mongoose.Schema({
   views: { type: Number, default: 0, index: true },       
   sales: { type: Number, default: 0, index: true },       
   isTrending: { type: Boolean, default: false },         
-  trendingScore: { type: Number, default: 0, index: true }, // 🔥 FIX: Added for cron updates and correct sorting
-  conversion: { type: Number, default: 0, index: true }, // 🔥 FIX: Added conversion field to make the trending formula work accurately
+  trendingScore: { type: Number, default: 0, index: true }, 
+  conversion: { type: Number, default: 0, index: true }, 
   
   image: { type: String, required: [true, 'Main product image is required'], trim: true }, 
   images: { type: [String], default: [] }, 
@@ -42,7 +44,41 @@ const productSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now, index: true }
 }, {
   timestamps: true,
-  strict: true // Automatically strip out any unallowed fields passed in req.body
+  strict: true 
+});
+
+// ==========================================
+// 🔥 BULLETPROOF DATA CONVERSION HOOKS (Saves you from String/Number crashes)
+// ==========================================
+// 1. Convert before creating a new product
+productSchema.pre('save', function (next) {
+  if (this.price !== undefined) this.price = Number(this.price) || 0;
+  if (this.mrp !== undefined) this.mrp = Number(this.mrp) || 0;
+  if (this.inventory !== undefined) this.inventory = Number(this.inventory) || 0;
+
+  // Auto-calculate paise if not provided by admin panel
+  if (this.price && !this.pricePaise) this.pricePaise = Math.round(this.price * 100);
+  if (this.mrp && !this.mrpPaise) this.mrpPaise = Math.round(this.mrp * 100);
+
+  next();
+});
+
+// 2. Convert before updating an existing product via Admin panel
+productSchema.pre('findOneAndUpdate', function (next) {
+  const update = this.getUpdate();
+  if (update.$set) {
+    if (update.$set.price !== undefined) update.$set.price = Number(update.$set.price) || 0;
+    if (update.$set.mrp !== undefined) update.$set.mrp = Number(update.$set.mrp) || 0;
+    if (update.$set.inventory !== undefined) update.$set.inventory = Number(update.$set.inventory) || 0;
+
+    if (update.$set.price !== undefined && update.$set.pricePaise === undefined) {
+      update.$set.pricePaise = Math.round(update.$set.price * 100);
+    }
+    if (update.$set.mrp !== undefined && update.$set.mrpPaise === undefined) {
+      update.$set.mrpPaise = Math.round(update.$set.mrp * 100);
+    }
+  }
+  next();
 });
 
 // ==========================================
@@ -56,7 +92,7 @@ productSchema.index({ category: 1, views: -1 });
 productSchema.index({ title: 'text', description: 'text' });
 
 // ==========================================
-// 2. USER SCHEMA (TERA ADVANCED PRO SCHEMA + SECURITY)
+// 2. USER SCHEMA
 // ==========================================
 const addressSchema = new mongoose.Schema({
   flat: { type: String, required: true },
@@ -94,31 +130,21 @@ const userSchema = new mongoose.Schema({
 const orderSchema = new mongoose.Schema({
   userId: { type: String, required: true, index: true },
   items: Array, 
-  totalAmount: String, // Kept for backward compatibility
+  totalAmount: String, 
   
-  // 🔥 AUDIT FIX: Integer paise total field for strict financial reconciliation
   totalPaise: { type: Number, default: 0 },
 
   status: { 
     type: String, 
     enum: [
-      'Pending', 
-      'Paid', 
-      'Processing', 
-      'Shipped', 
-      'OutForDelivery', 
-      'Delivered', 
-      'ReturnRequested', 
-      'ReturnApproved', 
-      'Returned', 
-      'Refunded', 
-      'Cancelled'
+      'Pending', 'Paid', 'Processing', 'Shipped', 'OutForDelivery', 
+      'Delivered', 'ReturnRequested', 'ReturnApproved', 'Returned', 
+      'Refunded', 'Cancelled'
     ], 
     default: "Pending", 
     index: true 
   },
   
-  // 🔥 FIX: Added tracking fields to canonical schema to support public tracking & logistics queries
   trackingId: { type: String, unique: true, sparse: true, index: true },
   courierPartner: { type: String, default: 'Delhivery Express' },
   estimatedDelivery: { type: Date, default: null },
@@ -180,20 +206,19 @@ const ticketSchema = new mongoose.Schema({
 });
 
 // ==========================================
-// 8. ABANDONED CART SCHEMA (🔥 ENTERPRISE SCALE UPGRADE)
+// 8. ABANDONED CART SCHEMA
 // ==========================================
 const abandonedCartSchema = new mongoose.Schema({
   user: { userId: String, name: String, email: String, phone: String },
   items: Array, 
   totalValue: Number, 
   
-  // 🔥 ENTERPRISE STATE TRACKING FLAGS (Replaced adminNote hack)
   abandonedEmailSentAt: { type: Date, default: null },
   campaignId: { type: String, default: 'cart_recovery_v1' },
   attemptCount: { type: Number, default: 0 },
   lastAttemptAt: { type: Date, default: null },
   
-  adminNote: { type: String, default: "" }, // Strictly for human staff notes
+  adminNote: { type: String, default: "" }, 
   updatedAt: { type: Date, default: Date.now, index: true }
 }, { timestamps: true });
 
@@ -213,7 +238,7 @@ const warehouseSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // ==========================================
-// 10. PRICE ALERT SCHEMA (🔥 PRICE-DROP ALERTS)
+// 10. PRICE ALERT SCHEMA
 // ==========================================
 const priceAlertSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
@@ -225,7 +250,7 @@ const priceAlertSchema = new mongoose.Schema({
 priceAlertSchema.index({ user: 1, product: 1 }, { unique: true });
 
 // ==========================================
-// 11. STOCK ALERT SCHEMA (🔥 BACK-IN-STOCK ALERTS)
+// 11. STOCK ALERT SCHEMA
 // ==========================================
 const stockAlertSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
@@ -236,7 +261,7 @@ const stockAlertSchema = new mongoose.Schema({
 stockAlertSchema.index({ user: 1, product: 1 }, { unique: true });
 
 // ==========================================
-// 🔥 EXPORT ALL MODELS (SAFE OVERWRITE FIX) 🔥
+// 🔥 EXPORT ALL MODELS
 // ==========================================
 module.exports = {
   Product: mongoose.models.Product || mongoose.model('Product', productSchema),

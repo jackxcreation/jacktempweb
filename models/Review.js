@@ -1,4 +1,8 @@
 const mongoose = require('mongoose');
+// Purana import hata kar ye likho:
+const Review = require('../models/Review');
+const Product = require('../models/Product');
+const Order = require('../models/Order');
 
 const reviewSchema = new mongoose.Schema({
   product: {

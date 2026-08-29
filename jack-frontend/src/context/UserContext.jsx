@@ -241,12 +241,12 @@ export const UserProvider = ({ children }) => {
     } catch (error) { console.error("Error fetching orders:", error); }
   };
 
-  // 🔥 FIXED: placeOrder now maps items to productId + quantity and drops unverified totalAmount
+  // 🔥 FIXED: placeOrder now handles both raw cart items and pre-mapped items gracefully
   const placeOrder = async (items, totalAmount, address, paymentMethod, trafficSource) => {
     if (!user) return { success: false, error: "Please login first" };
 
     const orderItems = items.map((item) => ({
-      productId: item.id || item._id,
+      productId: item.productId || item.id || item._id, // 🔥 Bulletproof mapping
       quantity: Number(item.quantity),
     }));
 

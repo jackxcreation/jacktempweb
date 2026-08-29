@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const Redis = require('ioredis'); // 🔥 ADDED: Redis for distributed cluster-safe view tracking
+const Redis = require('ioredis'); 
 const { Product, User, Order } = require('../models');
-const { z } = require('zod'); // 🔥 Zod for strict input validation
+const { z } = require('zod'); 
 
 // 🚨 IMPORT SECURE MIDDLEWARES & RBAC
 const { protect } = require('../middleware/authMiddleware');
@@ -17,14 +17,21 @@ redisClient.on('error', (err) => console.error('Redis View Tracker Error:', err)
 // ==========================================
 // 🛡️ ZOD VALIDATION SCHEMA FOR PRODUCTS
 // ==========================================
+// 🔥 PHASE 4 FIX: Coerced types to allow strings (from frontend forms) to be safely converted to numbers
 const productValidationSchema = z.object({
   title: z.string().min(2, "Title is required").max(200, "Title is too long"),
   description: z.string().max(2000, "Description is too long").optional(),
-  pricePaise: z.number().int().nonnegative("Price must be a positive number"),
-  mrpPaise: z.number().int().nonnegative("MRP must be a positive number").optional(),
+  
+  // Safe fallback for old systems that might still send these
+  price: z.coerce.number().nonnegative().optional(),
+  mrp: z.coerce.number().nonnegative().optional(),
+
+  pricePaise: z.coerce.number().int().nonnegative("Price must be a positive number"),
+  mrpPaise: z.coerce.number().int().nonnegative("MRP must be a positive number").optional(),
   category: z.string().min(1, "Category is required"),
   brand: z.string().optional(),
-  inventory: z.number().int().nonnegative().default(0),
+  inventory: z.coerce.number().int().nonnegative().default(0), // Automatically handles string "50" -> number 50
+  
   image: z.string().url("Must be a valid image URL").optional(),
   images: z.array(z.string().url()).optional(),
   sku: z.string().optional(),
@@ -99,9 +106,8 @@ router.get('/api/products', async (req, res) => {
 
     let products = [];
     let totalCount = 0;
-    let usedAtlasSearch = false; // 🔥 FIX: Explicit flag to track Atlas Search execution & fallback safely
+    let usedAtlasSearch = false; 
 
-    // Build filter array for Atlas Search & Mongoose Query
     const finalMaxPrice = extractedMaxPrice || maxPrice;
 
     // Attempt MongoDB Atlas Search if clean search query is provided
@@ -135,7 +141,7 @@ router.get('/api/products', async (req, res) => {
                     text: {
                       query: cleanSearchQuery,
                       path: ["title", "description", "brand", "category"],
-                      fuzzy: { maxEdits: 1, prefixLength: 2 } // Typo tolerance enabled
+                      fuzzy: { maxEdits: 1, prefixLength: 2 } 
                     }
                   }
                 ],
@@ -180,7 +186,6 @@ router.get('/api/products', async (req, res) => {
       }
 
       if (cleanSearchQuery) {
-        // 🔥 FIX: Using escapeRegex to prevent ReDoS & regex injection attacks
         const safeRegex = new RegExp(escapeRegex(cleanSearchQuery), 'i');
         query.$or = [
           { title: safeRegex },
@@ -217,7 +222,7 @@ router.get('/api/products', async (req, res) => {
 router.get('/api/products/trending/top', async (req, res) => {
   try {
     const trendingProducts = await Product.find()
-      .sort({ trendingScore: -1 }) // Lightning-fast lookup via precomputed score index
+      .sort({ trendingScore: -1 }) 
       .limit(8)
       .lean();
       

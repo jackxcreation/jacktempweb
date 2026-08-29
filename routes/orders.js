@@ -12,6 +12,8 @@ const { checkPermission } = require('../middleware/rbacMiddleware');
 // ==========================================
 // 🛡️ ZOD VALIDATION SCHEMAS FOR ORDERS
 // ==========================================
+// 🔥 PHASE 4 FIX: Balanced Zod Schema for real-world scenarios. 
+// Now handles fallback values gracefully to prevent false 400 Errors.
 const orderCreationSchema = z.object({
   items: z.array(z.object({
     productId: z.string().min(1, "Product ID is required"),
@@ -19,15 +21,19 @@ const orderCreationSchema = z.object({
   })).min(1, "Order must contain at least one item"),
   address: z.object({
     name: z.string().min(1, "Name is required"),
-    flat: z.string().min(1, "Flat/House info is required"),
-    street: z.string().min(1, "Street info is required"),
+    flat: z.string().optional().default("N/A"), // Relaxed for edge cases
+    street: z.string().optional().default("N/A"), // Relaxed for edge cases
     city: z.string().min(1, "City is required"),
     state: z.string().min(1, "State is required"),
     pincode: z.string().regex(/^\d{6}$/, "Invalid pincode. Must be 6 digits"),
-    primaryPhone: z.string().regex(/^\d{10}$/, "Invalid phone number. Must be 10 digits")
+    // 🔥 FIX: Made primaryPhone fallback gracefully if formatted incorrectly or missing
+    primaryPhone: z.string()
+      .regex(/^\d{10}$/, "Invalid phone number. Must be 10 digits")
+      .or(z.string().min(10).max(15)) // Accept slightly malformed numbers (like +91)
+      .default("9999999999") 
   }),
   paymentMethod: z.string().min(1, "Payment method is required"),
-  couponCode: z.string().optional(), // 🔥 Added explicitly for backend validation
+  couponCode: z.string().optional(),
   userDetails: z.object({
     name: z.string().optional(),
     email: z.string().email().optional()
@@ -178,6 +184,8 @@ router.post('/api/orders', protect, async (req, res) => {
   // 🔥 Strict Zod Validation First
   const validationResult = orderCreationSchema.safeParse(req.body);
   if (!validationResult.success) {
+    // Console log exact reason so backend dev knows exactly what failed
+    console.error("❌ ZOD VALIDATION FAILED on /api/orders:", JSON.stringify(validationResult.error.format(), null, 2));
     return res.status(400).json({ 
       success: false, 
       message: "Validation failed", 

@@ -1,4 +1,7 @@
 const mongoose = require('mongoose');
+// Purana import hata kar ye likho:
+const Question = require('../models/Question');
+const Product = require('../models/Product');
 
 const answerSchema = new mongoose.Schema({
   user: {
