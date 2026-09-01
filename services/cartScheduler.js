@@ -1,4 +1,5 @@
 const { Queue } = require('bullmq');
+const Redis = require('ioredis');
 const AbandonedCart = require('../models/AbandonedCart');
 
 // ==========================================
@@ -8,9 +9,19 @@ if (process.env.NODE_ENV === 'production' && !process.env.REDIS_URL) {
     throw new Error('FATAL: REDIS_URL environment variable is required in production for BullMQ queues.');
 }
 
-const connection = {
-  url: process.env.REDIS_URL || 'redis://localhost:6379'
-};
+// 🔥 Robust Upstash / Cloud Redis connection config using REDIS_URL and TLS
+const connection = process.env.REDIS_URL 
+  ? new Redis(process.env.REDIS_URL, {
+      tls: {
+        rejectUnauthorized: false
+      },
+      maxRetriesPerRequest: null
+    })
+  : {
+      host: 'localhost',
+      port: 6379,
+      maxRetriesPerRequest: null
+    };
 
 const abandonedCartQueue = new Queue('abandoned-cart-queue', { connection });
 

@@ -1,16 +1,17 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
+const jwt = require('jsonwebtoken'); 
 const crypto = require('crypto'); 
 const rateLimit = require('express-rate-limit'); 
 const User = require('../models/User');
 const { protect } = require('../middleware/authMiddleware'); 
-const { z } = require('zod'); // 🔥 ADDED: Zod for strict input validation
+const { z } = require('zod'); 
 
 const { Resend } = require('resend');
 const { 
   getResetOtpTemplate, 
+  getPASSWORDChangedTemplate, 
   getPasswordChangedTemplate, 
   getLoginAlertTemplate 
 } = require('../emailTemplates'); 
@@ -28,7 +29,8 @@ const registerSchema = z.object({
 
 const loginSchema = z.object({
   email: z.string().email("Invalid email address"),
-  password: z.string().min(1, "Password is required")
+  password: z.string().min(1, "Password is required"),
+  twoFactorCode: z.string().optional()
 });
 
 const socialLoginSchema = z.object({
@@ -62,12 +64,16 @@ const unlockAccountSchema = z.object({
   pin: z.string().min(1, "Security PIN is required")
 });
 
+const rotatePasswordSchema = z.object({
+  currentPassword: z.string().min(1, "Current password is required"),
+  newPassword: z.string().min(6, "New password must be at least 6 characters long")
+});
+
 // ==================================================
 // 🛡️ ACCOUNT-LEVEL FAILED LOGIN TRACKER (Anti-Brute Force)
 // ==================================================
 const failedLoginAttempts = new Map();
 
-// Cleanup old tracking data every 15 minutes to prevent memory leaks
 setInterval(() => {
   const now = Date.now();
   for (const [email, data] of failedLoginAttempts.entries()) {
@@ -110,7 +116,7 @@ const clearFailedAttempts = (email) => {
 };
 
 // ==================================================
-// 🛡️ DEDICATED UNLOCK ATTEMPT TRACKER (Anti-Brute Force)
+// 🛡️ DEDICATED UNLOCK ATTEMPT TRACKER
 // ==================================================
 const failedUnlockAttempts = new Map();
 
@@ -159,59 +165,58 @@ const clearFailedUnlock = (email) => {
 // 🛡️ PHASE 9: ENDPOINT-SPECIFIC RATE LIMITERS
 // ==================================================
 const loginLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000, // 5 minutes
-  max: 5, // Max 5 login attempts per 5 minutes per IP
+  windowMs: 5 * 60 * 1000, 
+  max: 5, 
   message: { error: "Too many login attempts from this IP. Please try again after 5 minutes." }
 });
 
 const otpLimiter = rateLimit({
-  windowMs: 10 * 60 * 1000, // 10 minutes
-  max: 3, // Max 3 OTP requests per 10 minutes per IP
+  windowMs: 10 * 60 * 1000, 
+  max: 3, 
   message: { error: "Too many OTP requests. Please wait before trying again." }
 });
 
 const resetLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // Max 5 attempts for password reset/verify
+  windowMs: 15 * 60 * 1000, 
+  max: 5, 
   message: { error: "Too many password reset attempts. Please try later." }
 });
 
 const registerLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 5, // Max 5 account creations per IP per hour
+  windowMs: 60 * 60 * 1000, 
+  max: 5, 
   message: { error: "Too many accounts created from this IP. Please try later." }
 });
 
 const unlockLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, 
-  max: 5, // Max 5 unlock requests per 15 minutes per IP
+  max: 5, 
   message: { error: "Too many unlock requests from this IP. Please try later." }
 });
 
-// 🔥 Helper Function to Generate JWT Safely (BUG FIXED HERE)
-const generateSecureToken = (user) => {
+const generateSecureToken = (user, sessionId) => {
   if (!process.env.JWT_SECRET) {
     console.error("🚨 CRITICAL: JWT_SECRET is missing in .env!");
     throw new Error("Server Configuration Error");
   }
   return jwt.sign(
-    { id: user._id, role: user.role }, 
+    { id: user._id, role: user.role, sid: sessionId }, 
     process.env.JWT_SECRET, 
-    { expiresIn: '7d' } // 🚨 Fixed: Removed algorithms: ['HS256'] from options
+    { expiresIn: '7d' } 
   );
 };
 
 // ==================================================
-// 🛡️ HELPER: Set Separated Secure HttpOnly Cookies (Admin vs Customer)
+// 🛡️ HELPER: Set Separated Secure HttpOnly Cookies
 // ==================================================
 const setAuthCookie = (res, token, role) => {
   const cookieName = role === 'admin' ? 'admin_token' : 'token';
-  const maxAgeValue = role === 'admin' ? 8 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000; // 8 hours for admin, 7 days for customer
+  const maxAgeValue = role === 'admin' ? 8 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000; 
 
   res.cookie(cookieName, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
     maxAge: maxAgeValue
   });
 };
@@ -241,7 +246,8 @@ router.post('/register', registerLimiter, async (req, res) => {
       name, 
       email: cleanEmail, 
       password: hashedPassword, 
-      role: 'customer' 
+      role: 'customer',
+      auditLogs: [{ action: 'REGISTER', details: 'User account created', ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress }]
     });
 
     await newUser.save();
@@ -254,7 +260,7 @@ router.post('/register', registerLimiter, async (req, res) => {
 });
 
 // ==================================================
-// 2. USER / ADMIN LOGIN (ZOD VALIDATED) 🔥
+// 2. USER / ADMIN LOGIN (HARDENED WITH SESSIONS & 2FA) 🔥
 // ==================================================
 router.post('/login', loginLimiter, async (req, res) => {
   try {
@@ -263,10 +269,9 @@ router.post('/login', loginLimiter, async (req, res) => {
       return res.status(400).json({ success: false, error: "Validation failed", errors: validationResult.error.format() });
     }
 
-    const { email, password } = validationResult.data;
+    const { email, password, twoFactorCode } = validationResult.data;
     const cleanEmail = email.toLowerCase().trim();
     
-    // 🔥 Check Account-Level Rate Limit (5 failed attempts / 15 mins per account)
     const lockoutStatus = checkAccountLockout(cleanEmail);
     if (lockoutStatus.isLocked) {
       return res.status(429).json({ 
@@ -274,9 +279,8 @@ router.post('/login', loginLimiter, async (req, res) => {
       });
     }
 
-    const user = await User.findOne({ email: cleanEmail }).select('+password');
+    const user = await User.findOne({ email: cleanEmail }).select('+password +twoFactorSecret');
     
-    // 🛡️ SECURITY FIX: Prevent email enumeration by returning identical generic error
     if (!user) {
       recordFailedAttempt(cleanEmail);
       return res.status(401).json({ error: "Invalid email or password." });
@@ -292,34 +296,75 @@ router.post('/login', loginLimiter, async (req, res) => {
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      recordFailedAttempt(cleanEmail); // 🔥 Increment failed count per account on incorrect password
+      recordFailedAttempt(cleanEmail); 
+      user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
+      
+      // 🔥 SAFE ARRAY FALLBACK TO PREVENT UNDEFINED PUSH CRASH
+      user.auditLogs = user.auditLogs || [];
+      user.auditLogs.push({ action: 'FAILED_LOGIN', details: 'Incorrect password entered', ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress });
+      
+      await user.save();
       return res.status(401).json({ error: "Invalid email or password." });
     }
 
-    // 🔥 Clear failed attempts tracking on successful login
-    clearFailedAttempts(cleanEmail);
+    // 🔥 Check 2FA if enabled
+    if (user.twoFactorEnabled) {
+      if (!twoFactorCode) {
+        return res.status(200).json({ requiresTwoFactor: true, message: "2FA verification code required." });
+      }
+      if (twoFactorCode !== user.twoFactorSecret) {
+        return res.status(400).json({ error: "Invalid 2FA code." });
+      }
+    }
 
-    const token = generateSecureToken(user);
-    
-    // 🔥 SET SEPARATED SECURE HTTP-ONLY COOKIE (admin_token vs token)
+    clearFailedAttempts(cleanEmail);
+    user.failedLoginAttempts = 0;
+
+    // 🔥 Generate Session ID & Track Active Session
+    const sessionId = crypto.randomBytes(16).toString('hex');
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'Unknown Location';
+    const userAgent = req.headers['user-agent'] || 'Unknown Device';
+    const time = new Date();
+
+    // 🔥 SAFE ARRAY INITIALIZATIONS
+    user.activeSessions = user.activeSessions || [];
+    user.loginHistory = user.loginHistory || [];
+    user.auditLogs = user.auditLogs || [];
+
+    user.activeSessions.push({
+      sessionId,
+      ipAddress: ip,
+      device: userAgent,
+      loginAt: time
+    });
+
+    user.loginHistory.push({
+      ipAddress: ip,
+      device: userAgent,
+      status: 'SUCCESS',
+      timestamp: time
+    });
+
+    user.auditLogs.push({
+      action: 'LOGIN',
+      details: `Successful login from device: ${userAgent}`,
+      ip
+    });
+
+    const token = generateSecureToken(user, sessionId);
     setAuthCookie(res, token, user.role);
 
     const lockToken = crypto.randomBytes(32).toString('hex');
     user.resetPasswordToken = lockToken;
-    user.resetPasswordExpire = Date.now() + 3000000; // 50 Mins
+    user.resetPasswordExpire = Date.now() + 3000000; 
     await user.save();
 
-    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'Unknown Location';
-    const userAgent = req.headers['user-agent'] || 'Unknown Device';
-    const time = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-    
+    const timeString = time.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
     const lockLink = `https://thejackessentials.com/secure-account?token=${lockToken}`;
-    
     const accountAgeInMinutes = (Date.now() - new Date(user.createdAt || Date.now()).getTime()) / 60000;
-    const isBrandNewUser = accountAgeInMinutes < 2;
 
-    if (process.env.RESEND_API_KEY && !isBrandNewUser) {
-      const htmlContent = getLoginAlertTemplate(user.name || 'User', userAgent, time, ip, lockLink);
+    if (process.env.RESEND_API_KEY && accountAgeInMinutes >= 2) {
+      const htmlContent = getLoginAlertTemplate(user.name || 'User', userAgent, timeString, ip, lockLink);
       resend.emails.send({
         from: 'Jack Essentials Security <updates@thejackessentials.com>', 
         to: [user.email],
@@ -329,6 +374,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     }
 
     user.password = undefined;
+    user.twoFactorSecret = undefined;
 
     res.json({ message: "Authentication successful.", token, user });
   } catch (error) {
@@ -338,7 +384,7 @@ router.post('/login', loginLimiter, async (req, res) => {
 });
 
 // ==================================================
-// 3. SOCIAL LOGIN (ZOD VALIDATED) 🔥
+// 3. SOCIAL LOGIN (HARDENED WITH SESSION TRACKING) 🔥
 // ==================================================
 router.post('/social-login', loginLimiter, async (req, res) => {
   try {
@@ -357,40 +403,35 @@ router.post('/social-login', loginLimiter, async (req, res) => {
       return res.status(403).json({ error: "Account is LOCKED.", isLocked: true, email: user.email });
     }
 
-    if (!user) {
-      user = new User({ name, email: cleanEmail, googleId, role: 'customer' });
-      await user.save();
-      isNewUser = true;
-    } else if (!user.googleId) {
-      user.googleId = googleId;
-      await user.save();
-    }
-
-    const token = generateSecureToken(user);
-    
-    // 🔥 SET SEPARATED SECURE HTTP-ONLY COOKIE
-    setAuthCookie(res, token, user.role);
-    
-    const lockToken = crypto.randomBytes(32).toString('hex');
-    user.resetPasswordToken = lockToken;
-    user.resetPasswordExpire = Date.now() + 3000000;
-    await user.save();
-
+    const sessionId = crypto.randomBytes(16).toString('hex');
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'Unknown Location';
     const userAgent = req.headers['user-agent'] || 'Unknown Device';
-    const time = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-    const lockLink = `https://thejackessentials.com/secure-account?token=${lockToken}`;
 
-    if (process.env.RESEND_API_KEY && !isNewUser) {
-      const htmlContent = getLoginAlertTemplate(user.name || 'User', userAgent, time, ip, lockLink);
-      resend.emails.send({
-        from: 'Jack Essentials Security <updates@thejackessentials.com>', 
-        to: [user.email],
-        subject: '⚠️ Security Alert: New Login via Google/Social',
-        html: htmlContent
-      }).catch(err => {});
+    if (!user) {
+      user = new User({ 
+        name, 
+        email: cleanEmail, 
+        googleId, 
+        role: 'customer',
+        activeSessions: [{ sessionId, ipAddress: ip, device: userAgent, loginAt: new Date() }],
+        auditLogs: [{ action: 'SOCIAL_REGISTER', details: 'Registered via Google OAuth', ip }]
+      });
+      await user.save();
+      isNewUser = true;
+    } else {
+      if (!user.googleId) user.googleId = googleId;
+      user.activeSessions = user.activeSessions || [];
+      user.auditLogs = user.auditLogs || [];
+
+      user.activeSessions.push({ sessionId, ipAddress: ip, device: userAgent, loginAt: new Date() });
+      user.auditLogs.push({ action: 'SOCIAL_LOGIN', details: 'Logged in via Google OAuth', ip });
+      await user.save();
     }
 
+    const token = generateSecureToken(user, sessionId);
+    setAuthCookie(res, token, user.role);
+
+    user.password = undefined;
     res.json({ message: "Social Login Successful", token, user, isNewUser });
   } catch (error) {
     console.error("Social Login Error:", error);
@@ -399,7 +440,7 @@ router.post('/social-login', loginLimiter, async (req, res) => {
 });
 
 // ==================================================
-// 4. 🔥 PASSWORD RESET: SEND SECURE OTP (ZOD VALIDATED)
+// 4. PASSWORD RESET: SEND SECURE OTP
 // ==================================================
 router.post('/send-otp', otpLimiter, async (req, res) => {
   try {
@@ -409,15 +450,18 @@ router.post('/send-otp', otpLimiter, async (req, res) => {
     }
 
     const cleanEmail = validationResult.data.email.toLowerCase().trim();
-    
     const userExists = await User.findOne({ email: cleanEmail });
     if (!userExists) return res.status(404).json({ error: "Account not found." });
 
     const otp = crypto.randomInt(100000, 999999).toString();
     const salt = await bcrypt.genSalt(10);
     const hashedOTP = await bcrypt.hash(otp, salt);
-    const expiresAt = Date.now() + 600000; // 10 Mins
+    const expiresAt = Date.now() + 600000; 
     
+    userExists.auditLogs = userExists.auditLogs || [];
+    userExists.auditLogs.push({ action: 'OTP_REQUESTED', details: 'Password reset OTP requested', ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress });
+    await userExists.save();
+
     await User.collection.updateOne(
       { _id: userExists._id },
       { $set: { resetOTP: hashedOTP, resetOTPExpires: expiresAt } }
@@ -441,7 +485,7 @@ router.post('/send-otp', otpLimiter, async (req, res) => {
 });
 
 // ==================================================
-// 5. 🔥 PASSWORD RESET: VERIFY OTP (ZOD VALIDATED)
+// 5. PASSWORD RESET: VERIFY OTP
 // ==================================================
 router.post('/verify-otp', resetLimiter, async (req, res) => {
   try {
@@ -455,16 +499,11 @@ router.post('/verify-otp', resetLimiter, async (req, res) => {
     const cleanOtp = String(otp).trim(); 
     
     const user = await User.findOne({ email: cleanEmail }).lean();
-    
     if (!user || !user.resetOTP || !user.resetOTPExpires) {
       return res.status(400).json({ error: "No OTP request found for this email." });
     }
 
     if (Date.now() > user.resetOTPExpires) {
-      await User.collection.updateOne(
-        { _id: user._id },
-        { $unset: { resetOTP: "", resetOTPExpires: "" } }
-      );
       return res.status(400).json({ error: "OTP has expired. Please request a new one." });
     }
 
@@ -481,7 +520,7 @@ router.post('/verify-otp', resetLimiter, async (req, res) => {
 });
 
 // ==================================================
-// 6. 🔥 RESET PASSWORD (ZOD VALIDATED)
+// 6. RESET PASSWORD
 // ==================================================
 router.post('/reset-password', resetLimiter, async (req, res) => {
   try {
@@ -494,8 +533,7 @@ router.post('/reset-password', resetLimiter, async (req, res) => {
     const cleanEmail = email.toLowerCase().trim();
     const cleanOtp = String(otp).trim();
     
-    const user = await User.findOne({ email: cleanEmail }).lean();
-    
+    const user = await User.findOne({ email: cleanEmail });
     if (!user || !user.resetOTP || Date.now() > user.resetOTPExpires) {
       return res.status(400).json({ error: "Session expired. Please request a new OTP." });
     }
@@ -508,18 +546,17 @@ router.post('/reset-password', resetLimiter, async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
 
-    await User.collection.updateOne(
-      { _id: user._id },
-      { 
-        $set: { password: hashedPassword },
-        $unset: { resetOTP: "", resetOTPExpires: "" }
-      }
-    );
+    user.password = hashedPassword;
+    user.resetOTP = undefined;
+    user.resetOTPExpires = undefined;
+    user.activeSessions = [];
+    user.auditLogs = user.auditLogs || [];
+    user.auditLogs.push({ action: 'PASSWORD_RESET', details: 'Password reset successfully via OTP', ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress });
+    await user.save();
 
     if (process.env.RESEND_API_KEY) {
       const loginLink = "https://thejackessentials.com/login"; 
       const successHtml = getPasswordChangedTemplate(user.name, loginLink);
-      
       await resend.emails.send({
         from: 'Jack Essentials Security <updates@thejackessentials.com>',
         to: [user.email],
@@ -536,7 +573,125 @@ router.post('/reset-password', resetLimiter, async (req, res) => {
 });
 
 // ==================================================
-// 7. 🔥 SECURE LOCK ACCOUNT (ZOD VALIDATED) 🔥
+// 6.1 🔥 PASSWORD ROTATION (Logged-in User)
+// ==================================================
+router.post('/rotate-password', protect, async (req, res) => {
+  try {
+    const validationResult = rotatePasswordSchema.safeParse(req.body);
+    if (!validationResult.success) {
+      return res.status(400).json({ success: false, error: "Validation failed", errors: validationResult.error.format() });
+    }
+
+    const { currentPassword, newPassword } = validationResult.data;
+    const user = await User.findById(req.user._id).select('+password');
+
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ error: "Incorrect current password." });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(newPassword, salt);
+    user.auditLogs = user.auditLogs || [];
+    user.auditLogs.push({ action: 'PASSWORD_ROTATE', details: 'Password rotated successfully from account settings', ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress });
+    await user.save();
+
+    res.json({ success: true, message: "Password rotated successfully." });
+  } catch (error) {
+    console.error("Password Rotation Error:", error);
+    res.status(500).json({ error: "Failed to rotate password." });
+  }
+});
+
+// ==================================================
+// 6.2 🔥 2FA TOGGLE & SETUP ENDPOINTS
+// ==================================================
+router.post('/2fa/toggle', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+    user.twoFactorEnabled = !user.twoFactorEnabled;
+    if (user.twoFactorEnabled) {
+      user.twoFactorSecret = crypto.randomInt(100000, 999999).toString();
+    } else {
+      user.twoFactorSecret = undefined;
+    }
+    user.auditLogs = user.auditLogs || [];
+    user.auditLogs.push({ action: '2FA_TOGGLE', details: `2FA set to ${user.twoFactorEnabled}`, ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress });
+    await user.save();
+
+    res.json({ 
+      success: true, 
+      twoFactorEnabled: user.twoFactorEnabled, 
+      tempSecret: user.twoFactorSecret, 
+      message: `2FA is now ${user.twoFactorEnabled ? 'Enabled' : 'Disabled'}` 
+    });
+  } catch (error) {
+    console.error("2FA Toggle Error:", error);
+    res.status(500).json({ error: "Failed to update 2FA settings." });
+  }
+});
+
+// ==================================================
+// 6.3 🔥 ACTIVE SESSIONS & SECURITY CENTER ENDPOINTS
+// ==================================================
+router.get('/security/audit-center', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select('activeSessions loginHistory auditLogs twoFactorEnabled isLocked');
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    res.json({
+      success: true,
+      twoFactorEnabled: user.twoFactorEnabled || false,
+      isLocked: user.isLocked || false,
+      activeSessions: user.activeSessions || [],
+      loginHistory: user.loginHistory || [],
+      auditLogs: user.auditLogs || []
+    });
+  } catch (error) {
+    console.error("Fetch Security Center Error:", error);
+    res.status(500).json({ error: "Failed to fetch security analytics." });
+  }
+});
+
+router.post('/sessions/revoke', protect, async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    const user = await User.findById(req.user._id);
+
+    user.activeSessions = user.activeSessions || [];
+    user.activeSessions = user.activeSessions.filter(s => s.sessionId !== sessionId);
+    user.auditLogs = user.auditLogs || [];
+    user.auditLogs.push({ action: 'SESSION_REVOKE', details: `Revoked session ID: ${sessionId}`, ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress });
+    await user.save();
+
+    res.json({ success: true, message: "Session revoked successfully." });
+  } catch (error) {
+    console.error("Revoke Session Error:", error);
+    res.status(500).json({ error: "Failed to revoke session." });
+  }
+});
+
+router.post('/sessions/logout-all', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+    user.activeSessions = [];
+    user.auditLogs = user.auditLogs || [];
+    user.auditLogs.push({ action: 'LOGOUT_ALL_SESSIONS', details: 'Terminated all active sessions across devices', ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress });
+    await user.save();
+
+    const cookieOptions = { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax' };
+    res.clearCookie('token', cookieOptions);
+    res.clearCookie('admin_token', cookieOptions);
+
+    res.json({ success: true, message: "All sessions terminated successfully." });
+  } catch (error) {
+    console.error("Logout All Error:", error);
+    res.status(500).json({ error: "Failed to terminate all sessions." });
+  }
+});
+
+// ==================================================
+// 7. SECURE LOCK ACCOUNT
 // ==================================================
 router.post('/lock-account', async (req, res) => {
   try {
@@ -546,7 +701,6 @@ router.post('/lock-account', async (req, res) => {
     }
 
     const { token, newSecurityCode } = validationResult.data;
-
     const user = await User.findOne({ resetPasswordToken: token });
     if (!user || user.resetPasswordExpire < Date.now()) {
       return res.status(400).json({ error: "Lock link is invalid or expired. Please login again." });
@@ -559,6 +713,9 @@ router.post('/lock-account', async (req, res) => {
     user.securityCode = hashedPin;
     user.resetPasswordToken = undefined; 
     user.resetPasswordExpire = undefined;
+    user.activeSessions = []; 
+    user.auditLogs = user.auditLogs || [];
+    user.auditLogs.push({ action: 'EMERGENCY_LOCK', details: 'Account manually locked via security alert link', ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress });
     await user.save();
     
     res.json({ success: true, message: "Account locked securely.", userId: user._id });
@@ -569,7 +726,7 @@ router.post('/lock-account', async (req, res) => {
 });
 
 // ==================================================
-// 8. 🔥 HARDENED UNLOCK ACCOUNT API (ZOD VALIDATED) 🔥
+// 8. HARDENED UNLOCK ACCOUNT API
 // ==================================================
 router.post('/unlock-account', unlockLimiter, async (req, res) => {
   try {
@@ -581,18 +738,14 @@ router.post('/unlock-account', unlockLimiter, async (req, res) => {
     const { email, pin } = validationResult.data;
     const cleanEmail = email.toLowerCase().trim();
 
-    // 🛡️ 1. Check Account-Level Temporary Lockout for Unlock attempts
     const lockoutStatus = checkUnlockLockout(cleanEmail);
     if (lockoutStatus.isLocked) {
-      console.warn(`🚨 SECURITY AUDIT: Brute-force attempt blocked on locked account: ${cleanEmail} from IP: ${req.headers['x-forwarded-for'] || req.socket.remoteAddress}`);
       return res.status(429).json({ 
         error: `Too many incorrect PIN attempts. Account unlock is temporarily blocked. Try again after ${lockoutStatus.remainingTime} minutes.` 
       });
     }
 
-    const user = await User.findOne({ email: cleanEmail });
-    
-    // 🛡️ 2. Generic error to prevent enumeration or revealing status
+    const user = await User.findOne({ email: cleanEmail }).select('+securityCode');
     if (!user || !user.isLocked) {
       recordFailedUnlock(cleanEmail);
       return res.status(400).json({ error: "Invalid unlock request or account is not locked." });
@@ -600,35 +753,31 @@ router.post('/unlock-account', unlockLimiter, async (req, res) => {
 
     const isMatch = await bcrypt.compare(pin, user.securityCode);
     if (!isMatch) {
-      recordFailedUnlock(cleanEmail); // 🔥 Increment failed counter per account
-      console.warn(`⚠️ SECURITY AUDIT: Failed PIN entry for locked account: ${cleanEmail} from IP: ${req.headers['x-forwarded-for'] || req.socket.remoteAddress}`);
+      recordFailedUnlock(cleanEmail);
       return res.status(400).json({ error: "Incorrect Security PIN." });
     }
 
-    // 🔥 3. Clear tracking on successful unlock
     clearFailedUnlock(cleanEmail);
 
-    await User.collection.updateOne(
-      { _id: user._id },
-      {
-        $set: { isLocked: false },
-        $unset: { securityCode: "" }
-      }
-    );
+    const sessionId = crypto.randomBytes(16).toString('hex');
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-    const token = generateSecureToken(user);
-    
-    // 🔥 SET SEPARATED SECURE HTTP-ONLY COOKIE ON UNLOCK TOO
+    user.isLocked = false;
+    user.securityCode = undefined;
+    user.activeSessions = user.activeSessions || [];
+    user.auditLogs = user.auditLogs || [];
+
+    user.activeSessions.push({ sessionId, ipAddress: ip, device: req.headers['user-agent'] || 'Unlock Device', loginAt: new Date() });
+    user.auditLogs.push({ action: 'ACCOUNT_UNLOCKED', details: 'Account successfully unlocked via Security PIN', ip });
+    await user.save();
+
+    const token = generateSecureToken(user, sessionId);
     setAuthCookie(res, token, user.role);
     
-    const updatedUser = await User.findById(user._id);
-    updatedUser.password = undefined;
-    updatedUser.securityCode = undefined;
+    user.password = undefined;
+    user.securityCode = undefined;
 
-    // 🔥 4. Audit Log Successful Unlock Event
-    console.info(`✅ SECURITY AUDIT: Account successfully unlocked for: ${cleanEmail} via IP: ${req.headers['x-forwarded-for'] || req.socket.remoteAddress}`);
-
-    res.json({ success: true, message: "Account Unlocked Successfully!", token, user: updatedUser });
+    res.json({ success: true, message: "Account Unlocked Successfully!", token, user });
   } catch (error) { 
     console.error("Unlock Account Critical Error:", error);
     res.status(500).json({ error: "Failed to process account unlock." }); 
@@ -636,13 +785,21 @@ router.post('/unlock-account', unlockLimiter, async (req, res) => {
 });
 
 // ==================================================
-// 9. 🔥 LOGOUT ENDPOINT (Clears Both Admin and Customer Cookies)
+// 9. LOGOUT ENDPOINT
 // ==================================================
-router.post('/logout', (req, res) => {
+router.post('/logout', protect, async (req, res) => {
+  try {
+    if (req.user && req.user.sessionId) {
+      await User.findByIdAndUpdate(req.user._id, {
+        $pull: { activeSessions: { sessionId: req.user.sessionId } }
+      });
+    }
+  } catch (e) {}
+
   const cookieOptions = {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict'
+    sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax'
   };
 
   res.clearCookie('token', cookieOptions);
@@ -652,11 +809,11 @@ router.post('/logout', (req, res) => {
 });
 
 // ==================================================
-// 10. 🔥 SESSION VALIDATION ENDPOINT (/auth/me)
+// 10. SESSION VALIDATION ENDPOINT (/auth/me)
 // ==================================================
 router.get('/me', protect, async (req, res) => {
   try {
-    const user = req.user; // protect middleware already fetched and attached user
+    const user = req.user; 
     if (!user || user.isActive === false) {
       return res.status(401).json({ success: false, message: 'User not found or inactive' });
     }
@@ -667,6 +824,7 @@ router.get('/me', protect, async (req, res) => {
       email: user.email,
       role: user.role || 'customer',
       isActive: user.isActive,
+      twoFactorEnabled: user.twoFactorEnabled || false,
       recentlyViewed: user.recentlyViewed || [],
       addresses: user.addresses || []
     });

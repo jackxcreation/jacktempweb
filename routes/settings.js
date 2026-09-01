@@ -44,21 +44,36 @@ router.get('/', async (req, res) => {
 // ==========================================
 router.put('/', protect, checkPermission('settings:all'), async (req, res) => {
   try {
-    const { footerAbout, socialLinks, shopLinks, supportLinks } = req.body;
+    const { footerAbout, socialLinks, shopLinks, supportLinks, storeShippingConfig } = req.body;
 
     // Pehle settings document dhoodo, nahi mile toh naya banao
     let settings = await Setting.findOne();
 
     if (settings) {
       // Existing data ko update karo
-      settings.footerAbout = footerAbout || settings.footerAbout;
+      settings.footerAbout = footerAbout !== undefined ? footerAbout : settings.footerAbout;
       settings.socialLinks = socialLinks || settings.socialLinks;
       settings.shopLinks = shopLinks || settings.shopLinks;
       settings.supportLinks = supportLinks || settings.supportLinks;
+
+      // 🔥 NAYA: Dynamic Store & Shipping Configuration update handle karega
+      if (storeShippingConfig) {
+        settings.storeShippingConfig = {
+          ...(settings.storeShippingConfig?.toObject ? settings.storeShippingConfig.toObject() : settings.storeShippingConfig || {}),
+          ...storeShippingConfig
+        };
+      }
+
       await settings.save();
     } else {
       // Naya create karo agar nahi milta
-      settings = new Setting({ footerAbout, socialLinks, shopLinks, supportLinks });
+      settings = new Setting({ 
+        footerAbout, 
+        socialLinks, 
+        shopLinks, 
+        supportLinks,
+        storeShippingConfig: storeShippingConfig || {} 
+      });
       await settings.save();
     }
 

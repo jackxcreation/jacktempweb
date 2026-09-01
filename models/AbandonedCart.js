@@ -4,7 +4,8 @@ const abandonedCartSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: true,
+    index: true
   },
   items: [{
     productId: {
@@ -18,6 +19,50 @@ const abandonedCartSchema = new mongoose.Schema({
     },
     pricePaise: Number
   }],
+  
+  // 🔥 TOTAL CART VALUE IN PAISE/RUPEES FOR SCORING & METRICS
+  totalValue: {
+    type: Number,
+    default: 0
+  },
+
+  // 🔥 INTELLIGENT CART RECOVERY & AI COPILOT FIELDS
+  score: { 
+    type: Number, 
+    default: 0 
+  },
+  isHighValue: { 
+    type: Boolean, 
+    default: false 
+  },
+  isPreviousBuyer: { 
+    type: Boolean, 
+    default: false 
+  },
+  recoveryLikelihood: { 
+    type: String, 
+    enum: ['Low', 'Medium', 'High'], 
+    default: 'Medium' 
+  },
+  recoveryStatus: { 
+    type: String, 
+    enum: ['Pending', 'Contacted', 'Converted'], 
+    default: 'Pending', 
+    index: true 
+  },
+  recoveredRevenue: { 
+    type: Number, 
+    default: 0 
+  },
+  campaign: { 
+    type: String, 
+    default: 'Standard Reminder' 
+  },
+  aiSuggestion: { 
+    type: String, 
+    default: '' 
+  },
+
   recoveryEmailSent: {
     type: Boolean,
     default: false

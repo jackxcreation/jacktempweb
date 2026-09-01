@@ -12,7 +12,7 @@ export const ProductProvider = ({ children }) => {
   const getToken = () => localStorage.getItem('adminToken') || localStorage.getItem('token');
 
   // ==========================================
-  // 1. DATABASE SE SARE PRODUCTS MANGWANA (GET) - 🔥 PHASE 8: Cached & Cancellable
+  // 1. DATABASE SE LIGHTWEIGHT INITIAL PRODUCTS (GET) - 🔥 OPTIMIZED TO PREVENT MEMORY CHOKE
   // ==========================================
   const { 
     data: productsData = [], 
@@ -21,33 +21,43 @@ export const ProductProvider = ({ children }) => {
   } = useQuery({
     queryKey: ['products'], // Cache key
     queryFn: async ({ signal }) => {
-      // 🔥 PHASE 8 & OWASP SYNC: Passed limit=100 query parameter and paginated flag to match backend hard cap and structured response
-      const response = await fetch(`${API_URL}/products?limit=100&paginated=true`, { signal });
+      // 🔥 Scalability Fix: Capped initial lightweight fetch to 20 items to prevent memory bloat on startup
+      const response = await fetch(`${API_URL}/products?limit=20&paginated=true`, { signal });
       if (!response.ok) throw new Error('Network response was not ok');
       const result = await response.json();
       // Handle both paginated object structure and legacy array response safely
       return Array.isArray(result) ? result : (result.products || []);
     },
-    staleTime: 1000 * 60 * 5, // 5 minutes caching (Avoids loading all data repeatedly)
+    staleTime: 1000 * 60 * 5, // 5 minutes caching
   });
 
   const products = Array.isArray(productsData) ? productsData : [];
 
   // ==========================================
-  // 1.1 FLIPKART-SCALE SERVER-SIDE FILTERED PRODUCTS FETCHING 🔥 (TANSTACK QUERY READY)
+  // 1.1 FLIPKART/AMAZON-SCALE SERVER-SIDE PAGINATED & FILTERED FETCHING 🔥 (ENTERPRISE READY)
   // ==========================================
   const fetchFilteredProducts = async (params = {}) => {
     try {
-      const queryParams = new URLSearchParams(params).toString();
+      // 🔥 Amazon-like query parameters structure supporting page, limit, search, category, warehouse, stock, status
+      const queryParams = new URLSearchParams({
+        page: params.page || 1,
+        limit: params.limit || 50,
+        search: params.search || '',
+        category: params.category || '',
+        warehouse: params.warehouse || '',
+        stock: params.stock || '',
+        status: params.status || '',
+        ...params,
+        paginated: 'true'
+      }).toString();
       
-      // Check if we can query via queryClient cache or fetch directly from backend Atlas Search endpoint
-      const response = await fetch(`${API_URL}/products?${queryParams}&paginated=true`);
-      if (!response.ok) throw new Error('Failed to fetch filtered products');
+      const response = await fetch(`${API_URL}/products?${queryParams}`);
+      if (!response.ok) throw new Error('Failed to fetch server-side paginated products');
       const result = await response.json();
       
       return Array.isArray(result) ? { products: result, total: result.length, page: 1, pages: 1 } : result;
     } catch (error) {
-      console.error("❌ Error fetching filtered products from server:", error);
+      console.error("❌ Error fetching server-side filtered products:", error);
       return { products: [], total: 0, page: 1, pages: 1 };
     }
   };
@@ -122,7 +132,6 @@ export const ProductProvider = ({ children }) => {
   };
 
   return (
-    // Puraane API structure ke sath naya fetchFilteredProducts bhi provide kar diya hai
     <ProductContext.Provider value={{ products, addProduct, deleteProduct, loading, fetchProducts, fetchFilteredProducts }}>
       {children}
     </ProductContext.Provider>

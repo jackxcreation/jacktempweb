@@ -8,7 +8,16 @@ if (process.env.NODE_ENV === 'production' && !process.env.REDIS_URL) {
     throw new Error('FATAL: REDIS_URL environment variable is required in production.');
 }
 
-const redisClient = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+// 🔥 Robust Upstash / Cloud Redis connection config using REDIS_URL and TLS
+const redisClient = process.env.REDIS_URL 
+  ? new Redis(process.env.REDIS_URL, {
+      tls: {
+        rejectUnauthorized: false
+      },
+      maxRetriesPerRequest: null
+    })
+  : new Redis('redis://localhost:6379', { maxRetriesPerRequest: null });
+
 redisClient.on('error', (err) => console.error('Redis Cache Error:', err));
 
 const pincodeLimiter = rateLimit({

@@ -24,11 +24,55 @@ const ticketSchema = new mongoose.Schema({
     default: 'open',
     index: true 
   },
+
+  // 🔥 ENTERPRISE SUPPORT HELPDESK FIELDS (NEW)
+  aiCategory: { 
+    type: String, 
+    enum: ['Shipping', 'Billing', 'Product Issue', 'Returns & Refund', 'General Inquiry', 'Other'], 
+    default: 'General Inquiry',
+    index: true 
+  },
+  priority: { 
+    type: String, 
+    enum: ['Low', 'Medium', 'High', 'Urgent'], 
+    default: 'Medium',
+    index: true 
+  },
+  sentiment: { 
+    type: String, 
+    enum: ['Positive', 'Neutral', 'Negative'], 
+    default: 'Neutral' 
+  },
+  assignedAgent: { 
+    type: String, 
+    trim: true, 
+    default: 'Unassigned',
+    index: true 
+  },
+  slaDeadline: { 
+    type: Date, 
+    default: () => new Date(Date.now() + 24 * 60 * 60 * 1000) // Default 24h SLA
+  },
+  firstResponseAt: { 
+    type: Date, 
+    default: null 
+  },
+  resolvedAt: { 
+    type: Date, 
+    default: null 
+  },
+  csatRating: { 
+    type: Number, 
+    min: 1, 
+    max: 5, 
+    default: null 
+  },
+
   messages: [{
     sender: { 
       type: String, 
       required: true,
-      enum: ['user', 'admin', 'support'] 
+      enum: ['user', 'admin', 'support', 'bot'] 
     },
     text: { 
       type: String, 

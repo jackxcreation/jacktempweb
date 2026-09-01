@@ -426,7 +426,9 @@ const OrderDetails = ({ isLoggedIn, setIsLoggedIn }) => {
                   {!isCancelled && !isRTO && currentStepIndex < 2 && (
                     <button 
                       onClick={() => {
-                        if(window.confirm('Are you sure you want to cancel this order? This cannot be undone.')) cancelOrder(order.id || order._id);
+                        if(window.confirm('Are you sure you want to cancel this order? This cannot be undone.')) {
+                          cancelOrder(order.id || order._id, { headers: { 'Idempotency-Key': crypto.randomUUID() } });
+                        }
                       }}
                       className="w-full py-4 border-2 border-red-100 bg-red-50 text-red-600 font-bold rounded-2xl hover:bg-red-500 hover:text-white transition-all active:scale-95 text-sm"
                     >

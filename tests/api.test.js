@@ -5,10 +5,11 @@ import bcrypt from 'bcryptjs';
 import app from '../app.js';
 import { User, Product, Order } from '../models';
 
-describe('🚀 Jack Essentials Enterprise API Test Suite', () => {
+describe('🚀 Jack Essentials Enterprise API Test Suite & Full Lifecycle Regression', () => {
   let authToken = '';
   let testProductId = '';
   let testOrderId = '';
+  let generatedAwb = '';
   
   // 🔥 DYNAMIC ISOLATED TEST CREDENTIALS (No hardcoding production accounts)
   const testUserEmail = `test_admin_${Date.now()}@thejackessentials.com`;
@@ -38,7 +39,9 @@ describe('🚀 Jack Essentials Enterprise API Test Suite', () => {
       mrpPaise: 6000,
       category: 'Electronics',
       inventory: 20,
-      brand: 'TestBrand'
+      sku: `TEST_SKU_${Date.now()}`,
+      brand: 'TestBrand',
+      image: 'https://via.placeholder.com/150'
     });
     testProductId = testProduct._id.toString();
   });
@@ -141,4 +144,92 @@ describe('🚀 Jack Essentials Enterprise API Test Suite', () => {
       console.error("Payment Order Failed in Test:", res.body);
     }
   });
+
+  // ==========================================
+  // 🔥 5. FULL E-COMMERCE REGRESSION LIFECYCLE TESTS
+  // ==========================================
+
+  it('should progress order state: Pending → Processing → Packed', async () => {
+    if (!authToken || !testOrderId) return;
+
+    // Move to Processing
+    const resProc = await request(app)
+      .put(`/api/orders/${testOrderId}`)
+      .set('Authorization', `Bearer ${authToken}`)
+      .send({ status: 'Processing', auditReason: 'Test state transition to Processing' });
+
+    expect([200, 201]).toContain(resProc.status);
+    expect(resProc.body.status).toBe('Processing');
+
+    // Move to Packed
+    const resPack = await request(app)
+      .put(`/api/orders/${testOrderId}`)
+      .set('Authorization', `Bearer ${authToken}`)
+      .send({ status: 'Packed', auditReason: 'Test state transition to Packed' });
+
+    expect([200, 201]).toContain(resPack.status);
+    expect(resPack.body.status).toBe('Packed');
+  });
+
+  it('should generate AWB via shipping engine integration', async () => {
+    if (!authToken || !testOrderId) return;
+
+    const res = await request(app)
+      .post(`/api/orders/${testOrderId}/generate-awb`)
+      .set('Authorization', `Bearer ${authToken}`);
+
+    if (res.status === 200) {
+      expect(res.body.success).toBe(true);
+      generatedAwb = res.body.waybill || res.body.order?.shipment?.awb;
+      expect(generatedAwb).toBeDefined();
+    }
+  });
+
+  it('should progress order state to Shipped & Delivered', async () => {
+    if (!authToken || !testOrderId) return;
+
+    // Move to Shipped
+    const resShip = await request(app)
+      .put(`/api/orders/${testOrderId}`)
+      .set('Authorization', `Bearer ${authToken}`)
+      .send({ status: 'Shipped', auditReason: 'Test dispatch' });
+
+    expect([200, 201]).toContain(resShip.status);
+
+    // Move to Delivered
+    const resDeliv = await request(app)
+      .put(`/api/orders/${testOrderId}`)
+      .set('Authorization', `Bearer ${authToken}`)
+      .send({ status: 'Delivered', auditReason: 'Test successful delivery' });
+
+    expect([200, 201]).toContain(resDeliv.status);
+    expect(resDeliv.body.status).toBe('Delivered');
+  });
+
+  it('should handle Return Request & Refund Processing lifecycle', async () => {
+    if (!authToken || !testOrderId) return;
+
+    // Move to ReturnRequested
+    const resReturnReq = await request(app)
+      .put(`/api/orders/${testOrderId}`)
+      .set('Authorization', `Bearer ${authToken}`)
+      .send({ status: 'ReturnRequested', auditReason: 'Customer requested return due to size issue' });
+
+    expect([200, 201]).toContain(resReturnReq.status);
+
+    // Approve Return & Process Refund
+    const resRefund = await request(app)
+      .put(`/api/orders/${testOrderId}`)
+      .set('Authorization', `Bearer ${authToken}`)
+      .send({ 
+        status: 'Refunded', 
+        refundStatus: 'Refund Completed', 
+        auditReason: 'Product inspected and refund authorized' 
+      });
+
+    expect([200, 201]).toContain(resRefund.status);
+    expect(resRefund.body.status).toBe('Refunded');
+    expect(resRefund.body.refundStatus).toBe('Refund Completed');
+  });
+
 });

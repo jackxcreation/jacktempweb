@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { User, Product } = require('../models'); 
+const { User, Product, Order, Ticket, Review } = require('../models'); 
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken'); // 🔥 ADDED FOR AUTHENTICATION
@@ -152,6 +152,67 @@ router.get('/api/users', protect, admin, async (req, res) => {
     const users = await User.find({}, 'name email createdAt role').lean();
     res.json(users);
   } catch (error) { res.status(500).json({ message: "Error fetching users" }); }
+});
+
+// ==========================================
+// 🔥 NEW: CUSTOMER 360 CRM PROFILE API
+// ==========================================
+router.get('/api/users/:id/360-profile', protect, admin, async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const user = await User.findById(userId).populate('wishlist').populate('recentlyViewed').lean();
+    if (!user) return res.status(404).json({ success: false, message: "Customer not found" });
+
+    // Fetch customer orders
+    const orders = await Order.find({ userId: userId.toString() }).sort({ createdAt: -1 }).lean();
+
+    // Calculate Lifetime Value & Average Order Value
+    const totalOrdersCount = orders.length;
+    const lifetimeValuePaise = orders.reduce((sum, o) => sum + (o.totalPaise || 0), 0);
+    const averageOrderValuePaise = totalOrdersCount > 0 ? lifetimeValuePaise / totalOrdersCount : 0;
+
+    // Calculate Return & RTO Rates
+    const returnedOrdersCount = orders.filter(o => ['Returned', 'ReturnRequested', 'ReturnApproved'].includes(o.status)).length;
+    const rtoOrdersCount = orders.filter(o => o.status === 'RTO').length;
+    const returnRate = totalOrdersCount > 0 ? ((returnedOrdersCount / totalOrdersCount) * 100).toFixed(1) : 0;
+    const rtoRate = totalOrdersCount > 0 ? ((rtoOrdersCount / totalOrdersCount) * 100).toFixed(1) : 0;
+
+    // Fetch customer support tickets
+    const tickets = await Ticket.find({ userId: userId.toString() }).sort({ createdAt: -1 }).lean();
+
+    // Fetch customer reviews
+    const reviews = await Review.find({ userId: userId.toString() }).sort({ createdAt: -1 }).lean();
+
+    // Build Activity Timeline from orders, tickets, and audit logs
+    const timeline = [];
+    orders.forEach(o => timeline.push({ type: 'order', date: o.createdAt || o.date, title: `Placed Order #${(o._id || o.id).toString().slice(-8).toUpperCase()}`, subtitle: `Amount: ₹${o.totalAmount || o.totalPaise/100} • Status: ${o.status}` }));
+    tickets.forEach(t => timeline.push({ type: 'ticket', date: t.createdAt, title: `Support Ticket Created`, subtitle: `Status: ${t.status} • Order: #${t.orderId || 'N/A'}` }));
+    if (user.auditLogs) {
+      user.auditLogs.forEach(a => timeline.push({ type: 'audit', date: a.timestamp, title: `Security Action: ${a.action}`, subtitle: a.details }));
+    }
+    timeline.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    res.json({
+      success: true,
+      profile: user,
+      metrics: {
+        lifetimeValue: `₹${(lifetimeValuePaise / 100).toLocaleString('en-IN')}`,
+        averageOrderValue: `₹${(averageOrderValuePaise / 100).toLocaleString('en-IN')}`,
+        totalOrders: totalOrdersCount,
+        returnRate: `${returnRate}%`,
+        rtoRate: `${rtoRate}%`
+      },
+      orders,
+      wishlist: user.wishlist || [],
+      recentlyViewed: user.recentlyViewed || [],
+      tickets,
+      reviews,
+      timeline
+    });
+  } catch (error) {
+    console.error("Customer 360 Error:", error);
+    res.status(500).json({ success: false, message: "Failed to generate Customer 360 profile" });
+  }
 });
 
 router.post('/api/users/register', async (req, res) => {

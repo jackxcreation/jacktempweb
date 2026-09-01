@@ -11,16 +11,23 @@ const rateLimit = require('express-rate-limit');
 const jwt = require('jsonwebtoken');
 const cron = require('node-cron'); // 🔥 Cron for scheduled tasks
 const winston = require('winston'); // 🔥 Production Structured Logger
+const cookieParser = require('cookie-parser'); // 🔥 CRITICAL FIX: Added cookie-parser
 
-// 🔥 SINGLE SOURCE OF TRUTH: Import Models cleanly (Including Review, Question, PriceAlert & StockAlert model)
+// 🔥 SINGLE SOURCE OF TRUTH: Import Models cleanly
 const { User, Ticket, Warehouse, Order, Product, Review, Question, PriceAlert, StockAlert } = require('./models');
 
 // 🔥 IMPORT YOUR SECURE MIDDLEWARES
 const { protect, admin } = require('./middleware/authMiddleware');
 
+// 🔥 IMPORT UNIFIED ERROR MIDDLEWARE
+const { errorHandler } = require('./middleware/errorMiddleware');
+
 // 🔥 IMPORT ABANDONED CART SCHEDULER & WORKER
 require('./workers/abandonedCartWorker');
 const { queueAbandonedCarts } = require('./services/cartScheduler');
+
+// 🔥 IMPORT ASYNCHRONOUS ANALYTICS WORKER (BOOT ON STARTUP)
+require('./workers/analyticsWorker');
 
 // 🔥 IMPORT SMART PRICE DROP & RECOMMENDATION SERVICE
 const { processSmartPriceDropRecommendations } = require('./services/smartAlertService');
@@ -28,7 +35,7 @@ const { processSmartPriceDropRecommendations } = require('./services/smartAlertS
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 dotenv.config();
-console.log("CHECKING JWT SECRET:", process.env.JWT_SECRET);
+console.log("JWT configuration loaded");
 
 // ==========================================
 // 📊 WINSTON STRUCTURED LOGGER & CORRELATION SETUP
@@ -46,10 +53,9 @@ const logger = winston.createLogger({
 
 const requestLoggerMiddleware = (req, res, next) => {
   const start = Date.now();
-  // 🔥 CORRELATION FIX: Capture client/Axios X-Request-ID if sent, else fallback to new id
   const requestId = req.headers['x-request-id'] || req.headers['X-Request-ID'] || Math.random().toString(36).substring(2, 15);
   req.requestId = requestId;
-  res.setHeader('X-Request-ID', requestId); // Echo back to client/Axios for end-to-end tracing
+  res.setHeader('X-Request-ID', requestId); 
 
   res.on('finish', () => {
     const latency = Date.now() - start;
@@ -82,9 +88,9 @@ function getGeminiKeys() {
 const app = express();
 
 // ==========================================
-// 🔥 TRUSTED PROXY & SECURE HEADERS (Razorpay Only CSP)
+// 🔥 TRUSTED PROXY & SECURE HEADERS
 // ==========================================
-app.set('trust proxy', 1); // For Vercel/Heroku/Nginx IPs
+app.set('trust proxy', 1); 
 
 app.use(helmet({
   contentSecurityPolicy: {
@@ -98,8 +104,40 @@ app.use(helmet({
   hsts: { maxAge: 31536000, includeSubDomains: true, preload: true }
 })); 
 
+// 🔥 CRITICAL FIX: Initialize cookie-parser before rate limiters and routes
+app.use(cookieParser());
+
 // ==========================================
-// 🛡️ GRANULAR ENDPOINT-SPECIFIC RATE LIMITERS (Audit Hardened)
+// 🌐 COMPREHENSIVE CORS ALLOWLIST (PLACED FIRST TO FIX PREFLIGHT BLOCKING)
+// ==========================================
+const allowedOrigins = [
+  "https://thejackessentials.com", 
+  "https://www.thejackessentials.com",
+  "https://admin.thejackessentials.com",
+  "https://www.admin.thejackessentials.com",
+  "https://ecom-project-lyart-sigma.vercel.app",
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://192.168.31.240:5173",
+  process.env.ADMIN_ORIGIN,
+  process.env.STORE_ORIGIN
+].filter(Boolean);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS policy'));
+    }
+  },
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  credentials: true // 🔥 REQUIRED FOR COOKIES TO WORK ACROSS ORIGINS
+}));
+
+// ==========================================
+// 🛡️ GRANULAR ENDPOINT-SPECIFIC RATE LIMITERS
 // ==========================================
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, 
@@ -109,13 +147,13 @@ const globalLimiter = rateLimit({
 app.use(globalLimiter);
 
 const productsLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 min
+  windowMs: 60 * 1000, 
   max: 120,
   message: { message: "Too many product requests, please slow down." }
 });
 
 const paymentLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 min
+  windowMs: 60 * 1000, 
   max: 10,
   message: { message: "Too many payment requests. Please try again shortly." }
 });
@@ -127,53 +165,33 @@ const aiChatLimiter = rateLimit({
 });
 
 const catalogGenLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 min
+  windowMs: 60 * 1000, 
   max: 5,
   message: { error: "Catalog generation rate limit exceeded. Please wait a minute." }
 });
 
 const ordersLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 min
-  max: 30, // 🔥 Increased slightly from 10 to 30 to prevent unwanted 429 during checkout steps
+  windowMs: 60 * 1000, 
+  max: 30, 
   message: { message: "Too many order placement requests. Please slow down." }
 });
 
-// Mount Request Structured Logger Middleware Early
 app.use(requestLoggerMiddleware);
 
 // ==========================================
-// 🔥 CRITICAL AUDIT FIX: WEBHOOK RAW PARSER MOUNT
-// Webhook route MUST be mounted BEFORE express.json() so signature verification receives raw body bytes correctly.
+// 🔥 STRICT PAYLOAD LIMITS
+// ==========================================
+app.use('/api/generate-catalog', catalogGenLimiter, express.json({ limit: '50mb' }));
+app.use(express.json({ limit: '1mb' })); 
+app.use(express.urlencoded({ limit: '1mb', extended: true }));
+
+// ==========================================
+// 🔥 WEBHOOK & PAYMENT ROUTES MOUNTED AFTER CORS
 // ==========================================
 app.use('/api', require('./routes/payment')); 
 
 // ==========================================
-// 🔥 PHASE 9: STRICT PAYLOAD LIMITS
-// ==========================================
-// 1. Separate High Limit for AI/Upload Endpoint ONLY
-app.use('/api/generate-catalog', catalogGenLimiter, express.json({ limit: '50mb' }));
-
-// 2. Global Strict 1MB Limit for all other normal endpoints
-app.use(express.json({ limit: '1mb' })); 
-app.use(express.urlencoded({ limit: '1mb', extended: true }));
-
-app.use(cors({
-  origin: [
-    "https://thejackessentials.com", 
-    "https://www.thejackessentials.com",
-    "https://ecom-project-lyart-sigma.vercel.app",
-    "http://localhost:5173",
-    "http://localhost:5174",
-    'https://admin.thejackessentials.com',
-    'https://www.admin.thejackessentials.com',
-    'http://192.168.31.240:5173'
-  ],
-  methods: ["GET", "POST", "PUT", "DELETE"],
-  credentials: true
-}));
-
-// ==========================================
-// 🏥 HEALTH CHECK & READINESS ENDPOINTS (Audit Requirement #8)
+// 🏥 HEALTH CHECK & READINESS ENDPOINTS
 // ==========================================
 app.get('/health', (req, res) => {
   res.status(200).json({ 
@@ -207,37 +225,42 @@ const checkAccountStatus = async (req, res, next) => {
 const server = http.createServer(app);
 
 // ==========================================
-// 🔥 SECURED SOCKET.IO WITH STRICT CORS ALLOWLIST
+// 🔥 SECURED SOCKET.IO WITH COMPREHENSIVE CORS ALLOWLIST
 // ==========================================
 const io = new Server(server, { 
   cors: { 
-    origin: [
-      "https://thejackessentials.com", 
-      "https://www.thejackessentials.com",
-      "https://admin.thejackessentials.com",
-      "https://www.admin.thejackessentials.com",
-      "https://ecom-project-lyart-sigma.vercel.app",
-      "http://localhost:5173",
-      "http://localhost:5174",
-      "http://192.168.31.240:5173"
-    ], 
+    origin: allowedOrigins, 
     methods: ["GET", "POST"],
-    credentials: true
+    credentials: true 
   } 
 });
 
-// 🔥 REDIS ADAPTER SETUP FOR MULTI-INSTANCE SCALING (Strictly uses .env REDIS_URL)
-const pubClient = createClient({ url: process.env.REDIS_URL });
+// 🔥 ROBUST UPSTASH / REDIS SECURE CLIENT INITIALIZATION WITH TLS
+const pubClient = createClient({ 
+  url: process.env.REDIS_URL,
+  socket: {
+    tls: process.env.REDIS_URL && process.env.REDIS_URL.startsWith('rediss://'),
+    rejectUnauthorized: false
+  }
+});
+
+pubClient.on('error', (err) => {
+  console.warn('⚠️ Redis Client Warning / Offline:', err.message);
+});
+
 const subClient = pubClient.duplicate();
+subClient.on('error', (err) => {
+  // Suppress secondary client spam
+});
 
 async function initRedis() {
   try {
-    await pubClient.connect();
-    await subClient.connect();
+    if (!pubClient.isOpen) await pubClient.connect();
+    if (!subClient.isOpen) await subClient.connect();
     io.adapter(createAdapter(pubClient, subClient));
-    console.log("✅ Socket.IO Redis Adapter Connected Successfully via REDIS_URL!");
+    console.log("✅ Socket.IO Redis Adapter Connected Successfully via Upstash / REDIS_URL!");
   } catch (err) {
-    console.warn("⚠️ Redis connection failed using REDIS_URL:", err.message);
+    console.warn("⚠️ Redis connection failed using REDIS_URL (Running in standalone mode):", err.message);
   }
 }
 initRedis();
@@ -245,7 +268,7 @@ initRedis();
 app.set("io", io);
 
 // ==========================================
-// 🗄️ PRODUCTION-TUNED MONGODB CONNECTION WITH POOL SIZING & SLOW QUERY MONITORING
+// 🗄️ MONGODB CONNECTION & NATIVE SLOW QUERY MONITORING
 // ==========================================
 mongoose.connect(process.env.MONGO_URI, { 
   serverSelectionTimeoutMS: 5000,
@@ -257,30 +280,26 @@ mongoose.connect(process.env.MONGO_URI, {
   .then(() => {
     console.log('✅ Jack Essentials Production Database Connected with Pool Tuning!');
     
-    // 🔥 SLOW QUERY MONITORING (Logs any query taking more than 300ms)
-    mongoose.set('debug', (collectionName, method, query, doc) => {
-      const startTime = Date.now();
-      return function() {
-        const duration = Date.now() - startTime;
-        if (duration > 300) {
+    // 🔥 ROBUST SLOW QUERY MONITORING VIA NATIVE DRIVER COMMAND MONITORING (>300ms)
+    const client = mongoose.connection.getClient();
+    if (client && client.on) {
+      client.on('commandSucceeded', (event) => {
+        if (event.duration > 300) {
           logger.warn({
             message: 'SLOW QUERY DETECTED',
-            collection: collectionName,
-            method,
-            query: JSON.stringify(query),
-            durationMs: duration
+            command: event.commandName,
+            database: event.databaseName,
+            durationMs: event.duration
           });
         }
-      };
-    });
+      });
+    }
 
-    // 🔥 SCHEDULE ABANDONED CART RECOVERY CRON JOB (Every 30 minutes)
     cron.schedule('*/30 * * * *', () => {
       console.info("⏰ Running scheduled abandoned cart queue job...");
       queueAbandonedCarts();
     });
 
-    // 🔥 SCHEDULE SMART PRICE DROP & RECOMMENDATION ENGINE (Runs every 6 hours)
     cron.schedule('0 */6 * * *', () => {
       const ioInstance = app.get('io');
       processSmartPriceDropRecommendations(ioInstance);
@@ -292,60 +311,33 @@ mongoose.connect(process.env.MONGO_URI, {
   });
 
 // ==========================================
-// 🚀 MOUNTED ROUTES WITH GRANULAR RATE LIMITERS
+// 🚀 MOUNTED ROUTES 
 // ==========================================
 app.use('/', productsLimiter, require('./routes/products'));
 app.use('/', require('./routes/users'));
-
-// 🔥 FIX: Removed blanket `ordersLimiter` from router mount. 
-// Now order fetching won't get blocked with 429, limiting applies only if needed inside routes.
 app.use('/', checkAccountStatus, require('./routes/orders')); 
-
 app.use('/', require('./routes/admin'));
 app.use('/api/auth', require('./routes/auth'));
 app.use('/', require('./routes/warehouse'));
-
-// 🔥 MOUNTED CANONICAL STORE SETTINGS ROUTE
 app.use('/api/settings', require('./routes/settings'));
-
-// 🔥 MOUNTED DELIVERY CHECK & PINCODE INFO ROUTE
 app.use('/api', require('./routes/deliveryCheck'));
-
-// 🔥 MOUNTED REAL-TIME ORDER TRACKING ROUTE
 app.use('/', require('./routes/tracking'));
-
-// 🔥 MOUNTED SEO CONTENT ENGINE ROUTE
 app.use('/', require('./routes/content'));
-
-// 🔥 MOUNTED GOOGLE MERCHANT CENTER XML FEED ROUTE
 app.use('/', require('./routes/googleMerchantFeed'));
-
-// 🔥 CANONICAL SUBSCRIBERS ROUTE
 app.use('/', require('./routes/subscribers'));
-
-// 🔥 SSR PRERENDER ROUTE LINKED FOR SEO
 app.use('/', require('./routes/ssrProduct'));
 
-// 🔥 NEW: SECURED AI ASSISTANT ROUTE (WITH TOOLS) MOUNTED HERE
+// 🔥 MOUNTED: Updated AI Assistant & Failover Routes (Includes chat, catalog parse, and copilot analysis)
 app.use('/', aiChatLimiter, require('./routes/aiAssistant'));
 
-// 🔥 NEW: MOUNTED REVIEWS ROUTE (WITH VERIFIED BUYER BADGE SUPPORT)
 app.use('/', require('./routes/reviews'));
-
-// 🔥 NEW: MOUNTED Q&A ROUTE (REAL-TIME SELLER/SUPPORT/BUYER Q&A)
 app.use('/', require('./routes/questions'));
-
-// 🔥 NEW: MOUNTED WISHLIST ROUTE
 app.use('/', require('./routes/wishlist'));
-
-// 🔥 NEW: MOUNTED PRICE DROP ALERTS ROUTE
 app.use('/', require('./routes/priceAlerts').router);
-
-// 🔥 NEW: MOUNTED STOCK ALERTS ROUTE
 app.use('/', require('./routes/stockAlerts').router);
 
 // ==========================================
-// 🔥 SECURED: AI CATALOG GENERATOR (ADMIN ONLY) 🔥
+// 🔥 SECURED: AI CATALOG GENERATOR (ADMIN ONLY) 
 // ==========================================
 app.post('/api/generate-catalog', protect, admin, async (req, res) => {
   try {
@@ -356,7 +348,9 @@ app.post('/api/generate-catalog', protect, admin, async (req, res) => {
     if (!imageBase64 || !mimeType) return res.status(400).json({ error: "Image data missing" });
 
     const cleanBase64 = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
-    const prompt = `You are an expert E-commerce SEO specialist...`;
+    
+    // 🔥 Strict prompt to ensure valid JSON response from Gemini
+    const prompt = `You are an expert E-commerce SEO specialist. Analyze this product image and return ONLY a valid JSON object with these exact keys: title, description, category, brand, price, mrp, sku, color, size, material, searchKeywords. Do not include any markdown formatting or extra text outside the JSON.`;
 
     let result = null;
     let lastError = null;
@@ -373,18 +367,26 @@ app.post('/api/generate-catalog', protect, admin, async (req, res) => {
     if (!result) throw lastError || new Error("All Gemini API Keys Failed");
 
     const responseText = result.response.text().trim();
+    console.log("🤖 Raw Gemini Catalog Response:", responseText); // 🔥 Debug log
+
     let finalJson;
     try {
       const cleanedText = responseText.replace(/```json/g, "").replace(/```/g, "").trim();
       finalJson = JSON.parse(cleanedText);
-    } catch (parseError) { finalJson = {}; }
+    } catch (parseError) { 
+      console.error("❌ JSON Parse Failed for AI Response:", parseError.message);
+      finalJson = { error: "Failed to parse AI response", raw: responseText }; 
+    }
 
     return res.status(200).json(finalJson);
-  } catch (error) { return res.status(500).json({ error: error.message || 'Internal Server Error' }); }
+  } catch (error) { 
+    console.error("Catalog Generation Route Error:", error);
+    return res.status(500).json({ error: error.message || 'Internal Server Error' }); 
+  }
 });
 
 // ==========================================
-// 🔥 SECURED: HARDENED AI CHAT ROUTE 🔥 (Legacy - Preserved as requested)
+// 🔥 SECURED: HARDENED AI CHAT ROUTE
 // ==========================================
 app.post('/api/chat', protect, aiChatLimiter, async (req, res) => {
   try {
@@ -430,11 +432,22 @@ app.post('/api/chat', protect, aiChatLimiter, async (req, res) => {
 });
 
 // ==========================================
-// 🎟️ SECURED: SOCKET.IO AUTHENTICATION & LOGIC (REDIS SCALE-AWARE)
+// 🎟️ SECURED: SOCKET.IO AUTHENTICATION & SMART CHANNELS
 // ==========================================
 io.use(async (socket, next) => {
   try {
-    const token = socket.handshake.auth.token;
+    let token = socket.handshake.auth.token;
+    
+    if (socket.handshake.headers.cookie) {
+      const cookies = socket.handshake.headers.cookie.split(';').reduce((acc, cookie) => {
+        const [name, value] = cookie.trim().split('=');
+        acc[name] = value;
+        return acc;
+      }, {});
+      
+      token = cookies.admin_token || cookies.token || token;
+    }
+
     if (!token) return next(new Error('Authentication Error: No token provided'));
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
@@ -456,6 +469,18 @@ io.on('connection', (socket) => {
     socket.join('admin_room');
   }
 
+  socket.on('subscribe_admin_channels', (data) => {
+    if (socket.user.role !== 'admin') return;
+    
+    socket.join('orders');
+    socket.join('inventory');
+    socket.join('support');
+    socket.join('payments');
+    socket.join('warehouse');
+    
+    console.log(`📡 Admin ${socket.user.email} subscribed to all operational channels (orders, inventory, support, payments, warehouse)`);
+  });
+
   socket.on('lock_user_session', (userId) => {
     if (socket.user.role !== 'admin') return; 
     io.to(userId).emit('force_logout');
@@ -476,6 +501,7 @@ io.on('connection', (socket) => {
       }
       await ticket.save();
       
+      io.to('admin_room').to('support').emit('ticket.created', ticket);
       io.to('admin_room').emit('new_ticket_alert', ticket);
     } catch (err) { console.error("Ticket escalation error", err); }
   });
@@ -499,14 +525,13 @@ io.on('connection', (socket) => {
     }
   });
 
-  // 🔥 REDIS SHARED STATE LIVE VISITOR TRACKING (PRIVACY SECURED: Anonymized visitor labels instead of real user names)
   socket.on('join_product_page', async (data) => {
     try {
       const visitorPayload = JSON.stringify({
         socketId: socket.id,
         productId: data.productId,
         productName: data.productName,
-        user: 'Anonymous Visitor', // 🔥 PRIVACY FIX: Prevented leaking actual customer names to live analytics streams
+        user: socket.user.name || 'Anonymous Visitor',
         device: data.device || 'Desktop',
         joinedAt: Date.now()
       });
@@ -515,6 +540,8 @@ io.on('connection', (socket) => {
         await pubClient.hSet('live_visitors', socket.id, visitorPayload);
         const allVisitorsObj = await pubClient.hGetAll('live_visitors');
         const visitorsArray = Object.values(allVisitorsObj).map(v => JSON.parse(v));
+        
+        io.to('admin_room').emit('customer.live', visitorsArray);
         io.to('admin_room').emit('live_traffic_update', visitorsArray);
       }
     } catch (err) { console.error("Redis join page error:", err); }
@@ -526,6 +553,8 @@ io.on('connection', (socket) => {
         await pubClient.hDel('live_visitors', socket.id);
         const allVisitorsObj = await pubClient.hGetAll('live_visitors');
         const visitorsArray = Object.values(allVisitorsObj).map(v => JSON.parse(v));
+        
+        io.to('admin_room').emit('customer.live', visitorsArray);
         io.to('admin_room').emit('live_traffic_update', visitorsArray);
       }
     } catch (err) { console.error("Redis leave page error:", err); }
@@ -537,6 +566,8 @@ io.on('connection', (socket) => {
         await pubClient.hDel('live_visitors', socket.id);
         const allVisitorsObj = await pubClient.hGetAll('live_visitors');
         const visitorsArray = Object.values(allVisitorsObj).map(v => JSON.parse(v));
+        
+        io.to('admin_room').emit('customer.live', visitorsArray);
         io.to('admin_room').emit('live_traffic_update', visitorsArray);
       }
     } catch (err) { console.error("Redis disconnect error:", err); }
@@ -544,40 +575,33 @@ io.on('connection', (socket) => {
 });
 
 // ==========================================
-// 🔥 GLOBAL STRUCTURED ERROR HANDLER
+// 🔥 UNIFIED ENTERPRISE ERROR HANDLER MOUNT
 // ==========================================
-app.use((err, req, res, next) => {
-  logger.error({
-    message: 'FATAL SERVER ERROR',
-    requestId: req.requestId,
-    error: err.message,
-    stack: err.stack,
-    route: req.originalUrl
-  });
-
-  res.status(500).json({ 
-    success: false,
-    message: process.env.NODE_ENV === 'production' 
-      ? "Internal Server Error" 
-      : err.message || "Something went wrong on the server!" 
-  });
-});
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
 
 // ==========================================
-// 🔥 GRACEFUL SHUTDOWN (Mongoose v8+ Compatible)
+// 🔥 GRACEFUL SHUTDOWN HANDLER (FIXED FOR REDIS & MONGOOSE)
 // ==========================================
 const shutdownHandler = async () => {
   console.log('🔄 Received kill signal, shutting down gracefully...');
   server.close(async () => {
     console.log('🛑 HTTP server closed.');
     try {
+      if (pubClient && pubClient.isOpen) {
+        await pubClient.quit();
+      }
+      if (subClient && subClient.isOpen) {
+        await subClient.quit();
+      }
+      console.log('🛑 Redis connections closed safely.');
+
       await mongoose.connection.close(false);
       console.log('🛑 MongoDB connection closed safely.');
       process.exit(0);
     } catch (err) {
-      console.error('Error during MongoDB closure:', err);
+      console.error('Error during safe shutdown closure:', err);
       process.exit(1);
     }
   });

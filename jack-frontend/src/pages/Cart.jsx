@@ -1,4 +1,4 @@
-import React, { useState, useMemo, memo } from 'react';
+import React, { useState, useMemo, memo, useCallback } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom'; 
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
@@ -142,8 +142,15 @@ const Cart = ({ isLoggedIn, setIsLoggedIn }) => {
   
   const [couponCode, setCouponCode] = useState('');
   const [isCouponApplied, setIsCouponApplied] = useState(false);
-  const [couponFeedback, setCouponFeedback] = useState({ message: '', isError: false });
   const [isCheckoutLoading, setIsCheckoutLoading] = useState(false);
+
+  // 🔥 NAYA FIX: Unified Premium Toast System for Cart Page
+  const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
+
+  const showToast = useCallback((message, type = 'success') => {
+    setToast({ show: true, message, type });
+    setTimeout(() => setToast({ show: false, message: '', type: 'success' }), 4000);
+  }, []);
 
   // Memoized Advanced Financial Matrix (Working purely with Paise integers)
   const financialMetrics = useMemo(() => {
@@ -168,10 +175,10 @@ const Cart = ({ isLoggedIn, setIsLoggedIn }) => {
 
     if (cleanCode === 'JACK150') {
       setIsCouponApplied(true);
-      setCouponFeedback({ message: 'Coupon "JACK150" applied successfully! ₹150 saved.', isError: false });
+      showToast('Coupon "JACK150" applied successfully! ₹150 saved.', 'success');
     } else {
       setIsCouponApplied(false);
-      setCouponFeedback({ message: 'Invalid Coupon Code! Try using "JACK150"', isError: true });
+      showToast('Invalid Coupon Code! Try using "JACK150"', 'error');
     }
   };
 
@@ -191,8 +198,23 @@ const Cart = ({ isLoggedIn, setIsLoggedIn }) => {
   };
 
   return (
-    <div className="min-h-screen bg-[#F8F9FA] font-sans pb-24 selection:bg-[#FF4500] selection:text-white antialiased">
+    <div className="min-h-screen bg-[#F8F9FA] font-sans pb-24 selection:bg-[#FF4500] selection:text-white antialiased relative">
       <Navbar isLoggedIn={isLoggedIn} setIsLoggedIn={setIsLoggedIn} />
+
+      {/* 🔥 PREMIUM TOAST NOTIFICATION 🔥 */}
+      <AnimatePresence>
+        {toast.show && (
+          <motion.div 
+            initial={{ opacity: 0, y: -50, scale: 0.9 }} 
+            animate={{ opacity: 1, y: 0, scale: 1 }} 
+            exit={{ opacity: 0, y: -20, scale: 0.9 }} 
+            className={`fixed top-6 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 px-6 py-4 rounded-2xl shadow-2xl font-bold text-sm max-w-md w-[90%] ${toast.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'}`}
+          >
+            {toast.type === 'success' ? <FiCheckCircle size={24} className="shrink-0" /> : <FiAlertCircle size={24} className="shrink-0" />}
+            <span className="leading-snug">{toast.message}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <main className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 mt-8 outline-none" tabIndex="-1">
         
@@ -261,10 +283,7 @@ const Cart = ({ isLoggedIn, setIsLoggedIn }) => {
                     type="text" 
                     placeholder="Promo code (Try JACK150)" 
                     value={couponCode}
-                    onChange={(e) => {
-                      setCouponCode(e.target.value);
-                      if(couponFeedback.message) setCouponFeedback({ message: '', isError: false });
-                    }}
+                    onChange={(e) => setCouponCode(e.target.value)}
                     disabled={isCouponApplied}
                     className="flex-1 border border-slate-200 rounded-xl px-4 py-3 text-xs sm:text-sm font-bold uppercase tracking-wider focus:border-slate-900 outline-none transition-all disabled:bg-slate-50 disabled:text-slate-400 focus:ring-4 focus:ring-slate-100"
                     aria-label="Coupon registration code field"
@@ -277,21 +296,6 @@ const Cart = ({ isLoggedIn, setIsLoggedIn }) => {
                     {isCouponApplied ? 'APPLIED' : 'APPLY'}
                   </button>
                 </form>
-                
-                {couponFeedback.message && (
-                  <motion.div 
-                    initial={{ opacity: 0, y: -5 }} 
-                    animate={{ opacity: 1, y: 0 }}
-                    className={`text-xs font-bold mt-3 flex items-center gap-1.5 p-2.5 rounded-lg border ${
-                      couponFeedback.isError 
-                        ? 'text-red-600 bg-red-50/60 border-red-100' 
-                        : 'text-emerald-600 bg-emerald-50/60 border-emerald-100'
-                    }`}
-                  >
-                    {couponFeedback.isError ? <FiAlertCircle size={14} /> : <FiCheckCircle size={14} />}
-                    <span>{couponFeedback.message}</span>
-                  </motion.div>
-                )}
               </div>
 
               {/* Order Summary Calculations Card */}

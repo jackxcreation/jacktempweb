@@ -1,47 +1,109 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const Redis = require('ioredis'); 
-const { Product, User, Order } = require('../models');
+const { Product, User, Order, Warehouse } = require('../models');
 const { z } = require('zod'); 
+const { logger } = require('../utils/logger'); // 🔥 Production Winston Logger
 
-// 🚨 IMPORT SECURE MIDDLEWARES & RBAC
+// 🚨 IMPORT SECURE MIDDLEWARES & ZERO-TRUST RBAC
 const { protect } = require('../middleware/authMiddleware');
 const { checkPermission } = require('../middleware/rbacMiddleware');
 
 // ==========================================
-// 🔥 INITIALIZE REDIS CLIENT FOR VIEW TRACKING
+// 🔥 SECURE UPSTASH / REDIS CLIENT INITIALIZATION FOR VIEW TRACKING
 // ==========================================
-const redisClient = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+const redisClient = process.env.REDIS_URL 
+  ? new Redis(process.env.REDIS_URL, {
+      tls: {
+        rejectUnauthorized: false
+      },
+      maxRetriesPerRequest: null
+    })
+  : new Redis('redis://localhost:6379', { maxRetriesPerRequest: null });
+
 redisClient.on('error', (err) => console.error('Redis View Tracker Error:', err));
 
 // ==========================================
 // 🛡️ ZOD VALIDATION SCHEMA FOR PRODUCTS
 // ==========================================
-// 🔥 PHASE 4 FIX: Coerced types to allow strings (from frontend forms) to be safely converted to numbers
 const productValidationSchema = z.object({
   title: z.string().min(2, "Title is required").max(200, "Title is too long"),
   description: z.string().max(2000, "Description is too long").optional(),
   
-  // Safe fallback for old systems that might still send these
+  // Safe fallback for old systems
   price: z.coerce.number().nonnegative().optional(),
   mrp: z.coerce.number().nonnegative().optional(),
 
-  pricePaise: z.coerce.number().int().nonnegative("Price must be a positive number"),
+  pricePaise: z.coerce.number().int().nonnegative("Price must be a positive number").optional(),
   mrpPaise: z.coerce.number().int().nonnegative("MRP must be a positive number").optional(),
   category: z.string().min(1, "Category is required"),
   brand: z.string().optional(),
-  inventory: z.coerce.number().int().nonnegative().default(0), // Automatically handles string "50" -> number 50
+  inventory: z.coerce.number().int().nonnegative().default(0), 
   
-  image: z.string().url("Must be a valid image URL").optional(),
-  images: z.array(z.string().url()).optional(),
+  image: z.string().optional(),
+  // 🔥 ROBUST IMAGES TRANSFORMER: Accepts either array or comma-separated string from the canonical editor
+  images: z.union([
+    z.array(z.string()), 
+    z.string()
+  ]).optional().transform((val) => {
+    if (typeof val === 'string') {
+      return val.split(',').map(s => s.trim()).filter(Boolean);
+    }
+    return val;
+  }),
+
   sku: z.string().optional(),
   weight: z.string().optional(),
   color: z.string().optional(),
   size: z.string().optional(),
   material: z.string().optional(),
   manufacturerName: z.string().optional(),
-  warehouseId: z.string().optional(),
-  discount: z.string().optional()
+  warehouseId: z.string().optional().nullable(),
+  discount: z.string().optional(),
+
+  // 🔥 ADVANCED CATALOG & COMPLIANCE FIELDS 🔥
+  subCategory: z.string().optional(),
+  listingStatus: z.enum(['Active', 'Inactive', 'Draft']).optional(),
+  minimumOrderQty: z.coerce.number().int().nonnegative().optional(),
+  
+  shippingProvider: z.string().optional(),
+  handlingLocal: z.coerce.number().optional(),
+  handlingZonal: z.coerce.number().optional(),
+  handlingNational: z.coerce.number().optional(),
+  
+  length: z.coerce.number().optional(),
+  breadth: z.coerce.number().optional(),
+  height: z.coerce.number().optional(),
+  
+  hsnCode: z.string().optional(),
+  tax: z.coerce.number().optional(),
+  countryOfOrigin: z.string().optional(),
+  
+  manufactureDetails: z.string().optional(),
+  packerDetails: z.string().optional(),
+  importDetails: z.string().optional(),
+  eanUpc: z.string().optional(),
+  
+  searchKeywords: z.string().optional(),
+  packOf: z.coerce.number().int().optional(),
+  variant: z.string().optional(),
+  
+  modelNo: z.string().optional(),
+  itemsIncluded: z.string().optional(),
+  noOfTools: z.string().optional(),
+  toolFeatures: z.string().optional(),
+  powerConsumption: z.string().optional(),
+  otherPowerFeatures: z.string().optional(),
+  
+  domesticWarranty: z.string().optional(),
+  internationalWarranty: z.string().optional(),
+  warrantySummary: z.string().optional(),
+  warrantyServiceType: z.string().optional(),
+  coveredInWarranty: z.string().optional(),
+  notCoveredInWarranty: z.string().optional(),
+  
+  auditReason: z.string().max(300).optional() // 🔥 Audit Reason for enterprise compliance
 });
 
 // ==========================================
@@ -52,36 +114,64 @@ const escapeRegex = (text) => {
 };
 
 // ==========================================
+// 🛡️ CENTRALIZED AUDIT HELPER (WHO, WHAT, WHEN, WHERE, BEFORE, AFTER, WHY)
+// ==========================================
+const logAdminAction = async (req, action, details, beforeState = null, afterState = null) => {
+  try {
+    if (!req.user) return;
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'Unknown IP';
+    const auditEntry = {
+      action,
+      details,
+      ip,
+      timestamp: new Date()
+    };
+
+    await User.findByIdAndUpdate(req.user._id, {
+      $push: { auditLogs: auditEntry }
+    });
+
+    logger.info({
+      message: `AUDIT TRAIL: [${action}]`,
+      requestId: req.requestId,
+      admin: req.user.email,
+      role: req.user.role,
+      ip,
+      before: beforeState,
+      after: afterState,
+      details
+    });
+  } catch (err) {
+    console.error("Failed to record product audit log:", err);
+  }
+};
+
+// ==========================================
 // 📦 1. PRODUCT APIs
 // ==========================================
 
 // 1. Get All Products (🔥 Flipkart-scale Server-side Atlas Search, Powerful Multi-Facet Filtering, Pagination & Sorting)
 router.get('/api/products', async (req, res) => {
   try {
-    let { category, brand, minPrice, maxPrice, sort, search, warehouseId, rating, availability, color, size } = req.query;
+    let { category, brand, minPrice, maxPrice, sort, search, warehouseId, warehouse, rating, availability, stock, status, color, size } = req.query;
     
-    // ==========================================
-    // 🧠 NATURAL LANGUAGE SMART SEARCH PARSER (e.g. "best phone under 20k")
-    // ==========================================
+    const targetWarehouse = warehouseId || warehouse;
+    const targetStatus = status;
+
     let cleanSearchQuery = search ? search.trim() : "";
     let extractedMaxPrice = maxPrice ? Number(maxPrice) : null;
     let dynamicSort = sort;
 
     if (cleanSearchQuery) {
       const lowerQuery = cleanSearchQuery.toLowerCase();
-
-      // 1. Detect "under X" or "below X" (e.g. "under 20k", "under 50000")
       const underPriceMatch = lowerQuery.match(/(?:under|below|less than)\s*(?:rs\.?|₹)?\s*(\d+)\s*(k)?/i);
       if (underPriceMatch) {
         let amount = parseInt(underPriceMatch[1], 10);
-        if (underPriceMatch[2]) amount *= 1000; // Convert '20k' to '20000'
-        extractedMaxPrice = amount * 100; // Convert to paise
-        
-        // Strip price text so Atlas Search focuses strictly on product keywords
+        if (underPriceMatch[2]) amount *= 1000;
+        extractedMaxPrice = amount * 100;
         cleanSearchQuery = cleanSearchQuery.replace(underPriceMatch[0], "").trim();
       }
 
-      // 2. Detect Intent Keywords for Ranking/Sorting ("best", "top", "cheapest")
       if (lowerQuery.includes('best') || lowerQuery.includes('top')) {
         if (!sort || sort === 'popular') dynamicSort = 'rating';
       } else if (lowerQuery.includes('cheapest') || lowerQuery.includes('low price')) {
@@ -89,16 +179,14 @@ router.get('/api/products', async (req, res) => {
       }
     }
 
-    // 🔥 OWASP Hard Cap & Pagination Setup
     const limit = Math.min(
-      Math.max(parseInt(req.query.limit) || 24, 1),
-      100 // Maximum 100 items per request
+      Math.max(parseInt(req.query.limit) || 50, 1),
+      100
     );
     const page = Math.max(parseInt(req.query.page) || 1, 1);
     const skip = (page - 1) * limit;
 
-    // 3. Dynamic Sorting Matrix
-    let sortCriteria = { createdAt: -1 }; // Default newest
+    let sortCriteria = { createdAt: -1 };
     if (dynamicSort === 'price-low') sortCriteria = { pricePaise: 1 };
     else if (dynamicSort === 'price-high') sortCriteria = { pricePaise: -1 };
     else if (dynamicSort === 'rating') sortCriteria = { rating: -1 };
@@ -106,22 +194,21 @@ router.get('/api/products', async (req, res) => {
 
     let products = [];
     let totalCount = 0;
-    let usedAtlasSearch = false; 
-
     const finalMaxPrice = extractedMaxPrice || maxPrice;
 
-    // Attempt MongoDB Atlas Search if clean search query is provided
     if (cleanSearchQuery && cleanSearchQuery.length > 0) {
-      usedAtlasSearch = true;
       try {
         const atlasFilters = [
-          ...(warehouseId ? [{ text: { query: warehouseId, path: "warehouseId" } }] : []),
+          ...(targetWarehouse ? [{ text: { query: targetWarehouse, path: "warehouseId" } }] : []),
           ...(category && category !== 'All' ? [{ text: { query: category, path: "category" } }] : []),
           ...(brand ? [{ text: { query: brand, path: "brand" } }] : []),
+          ...(targetStatus ? [{ text: { query: targetStatus, path: "listingStatus" } }] : []),
           ...(color ? [{ text: { query: color, path: "color" } }] : []),
           ...(size ? [{ text: { query: size, path: "size" } }] : []),
           ...(rating ? [{ range: { path: "rating", gte: Number(rating) } }] : []),
-          ...(availability === 'in-stock' ? [{ range: { path: "inventory", gt: 0 } }] : []),
+          ...(availability === 'in-stock' || stock === 'in-stock' ? [{ range: { path: "inventory", gt: 0 } }] : []),
+          ...(stock === 'out-of-stock' ? [{ range: { path: "inventory", lte: 0 } }] : []),
+          ...(stock === 'low-stock' ? [{ range: { path: "inventory", gt: 0, lte: 10 } }] : []),
           ...(((minPrice || finalMaxPrice) ? [{
             range: {
               path: "pricePaise",
@@ -134,13 +221,13 @@ router.get('/api/products', async (req, res) => {
         const pipeline = [
           {
             $search: {
-              index: "default", // Name of your Atlas Search index
+              index: "default", 
               compound: {
                 must: [
                   {
                     text: {
                       query: cleanSearchQuery,
-                      path: ["title", "description", "brand", "category"],
+                      path: ["title", "description", "brand", "category", "searchKeywords"],
                       fuzzy: { maxEdits: 1, prefixLength: 2 } 
                     }
                   }
@@ -164,20 +251,27 @@ router.get('/api/products', async (req, res) => {
           products = searchResult[0].data || [];
         }
       } catch (atlasErr) {
-        console.warn("Atlas Search fallback triggered due to index state:", atlasErr.message);
+        console.warn("Atlas Search fallback triggered:", atlasErr.message);
       }
     }
 
-    // 🔥 FIX: Reliable fallback standard Mongoose query if Atlas Search wasn't used, returned 0 results, or failed
     if (!products || products.length === 0) {
       const query = {};
-      if (warehouseId) query.warehouseId = warehouseId;
+      if (targetWarehouse) query.warehouseId = targetWarehouse;
       if (category && category !== 'All') query.category = category;
+      if (targetStatus) query.listingStatus = targetStatus;
       if (brand) query.brand = new RegExp(brand, 'i');
       if (color) query.color = new RegExp(color, 'i');
       if (size) query.size = new RegExp(size, 'i');
       if (rating) query.rating = { $gte: Number(rating) };
-      if (availability === 'in-stock') query.inventory = { $gt: 0 };
+      
+      if (availability === 'in-stock' || stock === 'in-stock') {
+        query.inventory = { $gt: 0 };
+      } else if (stock === 'out-of-stock') {
+        query.inventory = { $lte: 0 };
+      } else if (stock === 'low-stock') {
+        query.inventory = { $gt: 0, $lte: 10 };
+      }
 
       if (minPrice || finalMaxPrice) {
         query.pricePaise = {};
@@ -189,7 +283,8 @@ router.get('/api/products', async (req, res) => {
         const safeRegex = new RegExp(escapeRegex(cleanSearchQuery), 'i');
         query.$or = [
           { title: safeRegex },
-          { description: safeRegex }
+          { description: safeRegex },
+          { searchKeywords: safeRegex }
         ];
       }
 
@@ -199,8 +294,7 @@ router.get('/api/products', async (req, res) => {
       ]);
     }
 
-    // Check if client expects paginated meta structure or array based on headers/query
-    if (req.query.paginated === 'true' || category || search || sort || req.query.page) {
+    if (req.query.paginated === 'true' || category || search || sort || req.query.page || targetWarehouse || stock || targetStatus) {
       return res.json({
         success: true,
         total: totalCount,
@@ -210,7 +304,6 @@ router.get('/api/products', async (req, res) => {
       });
     }
 
-    // Fallback array format for standard backward compatibility
     res.json(products.map(p => ({ ...p, id: p._id.toString() })));
   } catch (error) { 
     console.error("Fetch Products Error:", error);
@@ -218,7 +311,7 @@ router.get('/api/products', async (req, res) => {
   }
 });
 
-// 🔥 2. Get Trending Products (Top 8 using Precomputed Trending Score)
+// 🔥 2. Get Trending Products
 router.get('/api/products/trending/top', async (req, res) => {
   try {
     const trendingProducts = await Product.find()
@@ -251,18 +344,15 @@ router.get('/api/products/similar/:id', async (req, res) => {
   }
 });
 
-// 🔥 4. Get Single Product (And Distributed Redis TTL View Counter Cooldown)
+// 🔥 4. Get Single Product
 router.get('/api/products/:id', async (req, res) => {
   try {
     const productId = req.params.id;
-    
-    // Generate a unique visitor hash/key using IP and Product ID
     const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown_ip';
     const redisKey = `view:${productId}:${clientIp}`;
 
     let productQuery = Product.findById(productId);
 
-    // 🔥 ENTERPRISE FIX: Use Redis SET with NX and EX (30 mins = 1800s) to prevent spam across clustered servers
     const viewLock = await redisClient.set(redisKey, '1', 'EX', 1800, 'NX');
     if (viewLock === 'OK') {
       productQuery = Product.findByIdAndUpdate(
@@ -273,7 +363,6 @@ router.get('/api/products/:id', async (req, res) => {
     }
 
     const product = await productQuery.lean();
-
     if (!product) return res.status(404).json({ message: "Product not found" });
     
     res.json({ ...product, id: product._id.toString() });
@@ -284,10 +373,8 @@ router.get('/api/products/:id', async (req, res) => {
 });
 
 // ==========================================
-// 🔥 ADVANCED RECOMMENDATION ENGINE APIS
+// 🔥 RECOMMENDATION ENGINE APIS
 // ==========================================
-
-// Frequently Bought Together
 router.get('/api/recommendations/frequently-bought/:id', async (req, res) => {
   try {
     const product = await Product.findById(req.params.id);
@@ -305,7 +392,6 @@ router.get('/api/recommendations/frequently-bought/:id', async (req, res) => {
   }
 });
 
-// Customers Also Viewed
 router.get('/api/recommendations/also-viewed/:id', async (req, res) => {
   try {
     const product = await Product.findById(req.params.id);
@@ -323,7 +409,6 @@ router.get('/api/recommendations/also-viewed/:id', async (req, res) => {
   }
 });
 
-// Trending Near You
 router.get('/api/recommendations/trending', async (req, res) => {
   try {
     const trending = await Product.find({ isTrending: true })
@@ -337,12 +422,9 @@ router.get('/api/recommendations/trending', async (req, res) => {
   }
 });
 
-// Because You Bought X (Enterprise Purchase History Recommendation Engine)
 router.get('/api/recommendations/because-you-bought/:userId', protect, async (req, res) => {
   try {
     const userId = req.params.userId;
-    
-    // 1. Fetch user past orders to inspect actual purchase history
     const pastOrders = await Order.find({ userId }).lean();
     
     let purchasedProductIds = [];
@@ -360,7 +442,6 @@ router.get('/api/recommendations/because-you-bought/:userId', protect, async (re
       }
     });
 
-    // If order items only store IDs, fetch product metadata to extract category/brand
     if (purchasedProductIds.length > 0 && (categories.size === 0 || brands.size === 0)) {
       const purchasedProducts = await Product.find({ _id: { $in: purchasedProductIds } }).lean();
       purchasedProducts.forEach(p => {
@@ -385,13 +466,11 @@ router.get('/api/recommendations/because-you-bought/:userId', protect, async (re
       recommended = await Product.find(query).sort({ rating: -1, views: -1 }).limit(4).lean();
     }
 
-    // Fallback to top-rated products if no purchase history exists or recommendations are empty
     if (!recommended || recommended.length === 0) {
       const topRated = await Product.find().sort({ rating: -1 }).limit(4).lean();
       return res.json(topRated.map(p => ({ ...p, id: p._id.toString() })));
     }
 
-    // Fill up to 4 items with top-rated if less than 4 recommendations are found
     if (recommended.length < 4) {
       const existingIds = recommended.map(p => p._id).concat(purchasedProductIds);
       const additional = await Product.find({ _id: { $nin: existingIds } }).sort({ rating: -1 }).limit(4 - recommended.length).lean();
@@ -406,12 +485,27 @@ router.get('/api/recommendations/because-you-bought/:userId', protect, async (re
 });
 
 // ==========================================
-// 🛡️ CATALOG & ADMIN PROTECTED ROUTES (RBAC ENFORCED & WHITELISTED)
+// 🛡️ CATALOG & ADMIN PROTECTED ROUTES (ZERO-TRUST GRANULAR RBAC ENFORCED & AUDIT LOGGED)
 // ==========================================
 
-// 5. Create New Product - 🔥 CATALOG / ADMIN RBAC
-router.post('/api/products', protect, checkPermission('products:all'), async (req, res) => {
+// 5. Create New Product - 🔥 GRANULAR RBAC ('products:create') & AUDIT LOGGED + WAREHOUSE LINKING FIX
+router.post('/api/products', protect, checkPermission('products:create'), async (req, res) => {
   try {
+    if (req.body.price !== undefined && req.body.pricePaise === undefined) {
+      req.body.pricePaise = Math.round(Number(req.body.price) * 100);
+    }
+    if (req.body.mrp !== undefined && req.body.mrpPaise === undefined) {
+      req.body.mrpPaise = Math.round(Number(req.body.mrp) * 100);
+    }
+
+    // If warehouseId is missing or empty, fetch the default active warehouse automatically
+    if (!req.body.warehouseId || req.body.warehouseId === "null" || req.body.warehouseId === "") {
+      const defaultWarehouse = await Warehouse.findOne({ isActive: true }).sort({ priority: 1 });
+      if (defaultWarehouse) {
+        req.body.warehouseId = defaultWarehouse._id.toString();
+      }
+    }
+
     const validationResult = productValidationSchema.safeParse(req.body);
     if (!validationResult.success) {
       return res.status(400).json({ 
@@ -421,8 +515,33 @@ router.post('/api/products', protect, checkPermission('products:all'), async (re
       });
     }
 
-    const newProduct = new Product(validationResult.data);
+    const productData = validationResult.data;
+
+    // 🔥 AUTOMATIC WAREHOUSE INVENTORY MAPPING (Fixes 0 items in warehouse view)
+    if (productData.warehouseId && mongoose.Types.ObjectId.isValid(productData.warehouseId)) {
+      const warehouseObjId = new mongoose.Types.ObjectId(productData.warehouseId);
+      productData.warehouseInventories = [{
+        warehouse: warehouseObjId,
+        inventory: productData.inventory || 0,
+        inventoryState: {
+          available: productData.inventory || 0,
+          sellable: productData.inventory || 0
+        }
+      }];
+    }
+
+    const newProduct = new Product(productData);
     const savedProduct = await newProduct.save();
+
+    // 🔥 AUDIT LOG RECORDED FOR PRODUCT CREATION
+    await logAdminAction(
+      req,
+      'PRODUCT_CREATED',
+      `Created product: "${savedProduct.title}" (SKU: ${savedProduct.sku || 'N/A'})`,
+      null,
+      { id: savedProduct._id, title: savedProduct.title, price: savedProduct.price, inventory: savedProduct.inventory }
+    );
+
     res.status(201).json({ ...savedProduct._doc, id: savedProduct._id.toString() });
   } catch (error) { 
     console.error("Save Product Error:", error);
@@ -430,9 +549,16 @@ router.post('/api/products', protect, checkPermission('products:all'), async (re
   }
 });
 
-// 6. Update Existing Product - 🔥 EXPLICIT FIELD WHITELISTING (Mass-Assignment Prevention)
-router.put('/api/products/:id', protect, checkPermission('products:all'), async (req, res) => {
+// 6. Update Existing Product - 🔥 GRANULAR RBAC ('products:edit') & AUDIT LOGGED (PRICE/STOCK/TITLE/IMAGE CHANGES)
+router.put('/api/products/:id', protect, checkPermission('products:edit'), async (req, res) => {
   try {
+    if (req.body.price !== undefined && req.body.pricePaise === undefined) {
+      req.body.pricePaise = Math.round(Number(req.body.price) * 100);
+    }
+    if (req.body.mrp !== undefined && req.body.mrpPaise === undefined) {
+      req.body.mrpPaise = Math.round(Number(req.body.mrp) * 100);
+    }
+
     const validationResult = productValidationSchema.partial().safeParse(req.body);
     if (!validationResult.success) {
       return res.status(400).json({ 
@@ -442,30 +568,30 @@ router.put('/api/products/:id', protect, checkPermission('products:all'), async 
       });
     }
 
-    const { 
-      title, description, pricePaise, mrpPaise, category, 
-      brand, inventory, image, images, sku, weight, size, 
-      color, material, manufacturerName, warehouseId, discount 
-    } = validationResult.data;
+    const existingProduct = await Product.findById(req.params.id).lean();
+    if (!existingProduct) return res.status(404).json({ message: "Product not found" });
 
+    const updateData = validationResult.data;
     const whitelistedUpdateData = {};
-    if (title !== undefined) whitelistedUpdateData.title = title;
-    if (description !== undefined) whitelistedUpdateData.description = description;
-    if (pricePaise !== undefined) whitelistedUpdateData.pricePaise = pricePaise;
-    if (mrpPaise !== undefined) whitelistedUpdateData.mrpPaise = mrpPaise;
-    if (category !== undefined) whitelistedUpdateData.category = category;
-    if (brand !== undefined) whitelistedUpdateData.brand = brand;
-    if (inventory !== undefined) whitelistedUpdateData.inventory = inventory;
-    if (image !== undefined) whitelistedUpdateData.image = image;
-    if (images !== undefined) whitelistedUpdateData.images = images;
-    if (sku !== undefined) whitelistedUpdateData.sku = sku;
-    if (weight !== undefined) whitelistedUpdateData.weight = weight;
-    if (size !== undefined) whitelistedUpdateData.size = size;
-    if (color !== undefined) whitelistedUpdateData.color = color;
-    if (material !== undefined) whitelistedUpdateData.material = material;
-    if (manufacturerName !== undefined) whitelistedUpdateData.manufacturerName = manufacturerName;
-    if (warehouseId !== undefined) whitelistedUpdateData.warehouseId = warehouseId;
-    if (discount !== undefined) whitelistedUpdateData.discount = discount;
+    Object.keys(updateData).forEach(key => {
+      if (updateData[key] !== undefined) {
+        whitelistedUpdateData[key] = updateData[key];
+      }
+    });
+
+    // Keep warehouse mapping synced if inventory or warehouseId updates
+    if (whitelistedUpdateData.inventory !== undefined || whitelistedUpdateData.warehouseId !== undefined) {
+      const targetWarehouseId = whitelistedUpdateData.warehouseId || existingProduct.warehouseId;
+      const targetInventory = whitelistedUpdateData.inventory !== undefined ? whitelistedUpdateData.inventory : existingProduct.inventory;
+      
+      if (targetWarehouseId && mongoose.Types.ObjectId.isValid(targetWarehouseId)) {
+        whitelistedUpdateData.warehouseInventories = [{
+          warehouse: new mongoose.Types.ObjectId(targetWarehouseId),
+          inventory: targetInventory,
+          inventoryState: { available: targetInventory, sellable: targetInventory }
+        }];
+      }
+    }
 
     const updatedProduct = await Product.findByIdAndUpdate(
       req.params.id, 
@@ -474,6 +600,32 @@ router.put('/api/products/:id', protect, checkPermission('products:all'), async 
     ).lean();
     
     if (!updatedProduct) return res.status(404).json({ message: "Product not found" });
+
+    // 🔥 DETAILED AUDIT LOG RECORDING (PRICE, STOCK, TITLE, IMAGES COMPARISON)
+    let changeSummary = [];
+    if (whitelistedUpdateData.pricePaise !== undefined && whitelistedUpdateData.pricePaise !== existingProduct.pricePaise) {
+      changeSummary.push(`Price: ₹${(existingProduct.pricePaise/100).toFixed(2)} → ₹${(whitelistedUpdateData.pricePaise/100).toFixed(2)}`);
+    }
+    if (whitelistedUpdateData.inventory !== undefined && whitelistedUpdateData.inventory !== existingProduct.inventory) {
+      changeSummary.push(`Stock: ${existingProduct.inventory} → ${whitelistedUpdateData.inventory}`);
+    }
+    if (whitelistedUpdateData.title && whitelistedUpdateData.title !== existingProduct.title) {
+      changeSummary.push(`Title changed`);
+    }
+    if (whitelistedUpdateData.images && JSON.stringify(whitelistedUpdateData.images) !== JSON.stringify(existingProduct.images)) {
+      changeSummary.push(`Images updated`);
+    }
+
+    const auditDetail = changeSummary.length > 0 ? changeSummary.join(', ') : `Updated product properties`;
+
+    await logAdminAction(
+      req,
+      'PRODUCT_UPDATED',
+      `Updated product "${updatedProduct.title}". Details: ${auditDetail}. Reason: ${updateData.auditReason || 'No reason provided'}`,
+      { price: existingProduct.pricePaise, inventory: existingProduct.inventory, title: existingProduct.title },
+      { price: updatedProduct.pricePaise, inventory: updatedProduct.inventory, title: updatedProduct.title }
+    );
+
     res.json({ ...updatedProduct, id: updatedProduct._id.toString() });
   } catch (error) {
     console.error("Update Product Error:", error);
@@ -481,14 +633,53 @@ router.put('/api/products/:id', protect, checkPermission('products:all'), async 
   }
 });
 
-// 7. Delete Product - 🔥 CATALOG / ADMIN RBAC
-router.delete('/api/products/:id', protect, checkPermission('products:all'), async (req, res) => {
+// 7. Safe Delete / Soft Delete - 🔥 GRANULAR RBAC & AUDIT LOGGED
+router.delete('/api/products/:id', protect, checkPermission('products:edit'), async (req, res) => {
   try {
-    await Product.findByIdAndDelete(req.params.id);
-    res.json({ message: "Product deleted successfully" });
+    const productId = req.params.id;
+    const { auditReason, force } = req.body;
+
+    const product = await Product.findById(productId);
+    if (!product) {
+      return res.status(404).json({ success: false, message: "Product not found" });
+    }
+
+    const activeOrders = await Order.find({
+      'items.productId': productId,
+      status: { $nin: ['Delivered', 'Cancelled', 'Returned', 'Refunded', 'RTO'] }
+    }).lean();
+
+    if (activeOrders.length > 0 && !force) {
+      return res.status(400).json({
+        success: false,
+        requiresConfirmation: true,
+        message: `Safety Block: This product is part of ${activeOrders.length} active/unfulfilled order(s). Deleting it will break fulfillment.`,
+        activeOrdersCount: activeOrders.length
+      });
+    }
+
+    const previousStatus = product.listingStatus;
+    product.listingStatus = 'Inactive';
+    product.inventory = 0;
+    await product.save();
+
+    // 🔥 AUDIT LOG RECORDED FOR SOFT DELETE / ARCHIVE
+    await logAdminAction(
+      req,
+      'PRODUCT_ARCHIVED',
+      `Safely archived/soft deleted product "${product.title}" (SKU: ${product.sku || 'N/A'}). Reason: ${auditReason || 'No reason provided'}`,
+      { listingStatus: previousStatus, inventory: product.inventory },
+      { listingStatus: 'Inactive', inventory: 0 }
+    );
+
+    res.json({ 
+      success: true, 
+      message: "Product safely moved to recycle bin (Soft Deleted) with audit logging.",
+      auditReason: auditReason || "No reason provided"
+    });
   } catch (error) { 
-    console.error("Delete Product Error:", error);
-    res.status(500).json({ message: "Error deleting product" }); 
+    console.error("Safe Delete Product Error:", error);
+    res.status(500).json({ message: "Error processing safe deletion" }); 
   }
 });
 

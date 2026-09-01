@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { API_URL } from '../config'; 
+import { normalizeError, notifyUser, reportTelemetry } from '../utils/errorNormalizer';
 
 const axiosInstance = axios.create({
   // 🔥 PHASE 1 FIX: Backend URL strictly uses API_URL. 
@@ -29,6 +30,16 @@ axiosInstance.interceptors.request.use(
       ? crypto.randomUUID() 
       : `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
+    // 🔥 ENTERPRISE IDEMPOTENCY: Automatically inject Idempotency-Key for POST/PUT/PATCH/DELETE requests
+    const method = config.method?.toLowerCase();
+    if (['post', 'put', 'patch', 'delete'].includes(method)) {
+      if (!config.headers['Idempotency-Key']) {
+        config.headers['Idempotency-Key'] = crypto.randomUUID 
+          ? crypto.randomUUID() 
+          : `idemp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      }
+    }
+
     return config;
   },
   (error) => {
@@ -37,35 +48,79 @@ axiosInstance.interceptors.request.use(
 );
 
 // ==========================================
-// 🔥 RESPONSE INTERCEPTOR (401 Auto-Logout & Errors)
+// 🔥 RESPONSE INTERCEPTOR (401 Auto-Logout & Unified Error Normalizer Pipeline)
 // ==========================================
 axiosInstance.interceptors.response.use(
   (response) => {
     return response;
   },
   (error) => {
+    // Normalize raw Axios error into standard enterprise error envelope
+    const normalizedErr = normalizeError(error);
+
+    // Report error to Telemetry / Logging sink
+    reportTelemetry(normalizedErr);
+
+    // Handle 401 / 403 Authentication Expiry
     if (error.response && (error.response.status === 401 || error.response.status === 403)) {
       console.warn("🚨 Session expired or Unauthorized. Forcing auto-logout.");
       
-      // LocalStorage data delete karo 
       localStorage.removeItem('jack_user');
       localStorage.removeItem('token'); 
 
-      // Doosre React Contexts ko notify karne ke liye event fire karo
       window.dispatchEvent(new Event('jack_auth_change'));
 
-      // User ko login page par redirect karo
       if (window.location.pathname !== '/login') {
         window.location.href = '/login';
       }
+    } else {
+      // Trigger unified UI Toast notification for normalized user-facing errors
+      notifyUser(normalizedErr);
     }
 
     if (error.code === 'ECONNABORTED') {
       console.error(`⚠️ Request timeout for ${error.config?.url}. Server might be slow.`);
     }
 
-    return Promise.reject(error);
+    return Promise.reject(normalizedErr);
   }
 );
+
+// ==========================================
+// 🔥 CRM & EMAIL MARKETING API HELPER FUNCTIONS
+// (Preserved completely without deleting anything)
+// ==========================================
+
+/**
+ * Naya Email Campaign launch karne ke liye function
+ * @param {Object} campaignConfig - { campaignId, segmentName, campaignType, customMessage, productData }
+ */
+export const launchEmailCampaign = async (campaignConfig) => {
+  try {
+    const response = await axiosInstance.post('/api/crm/campaign', {
+      action: 'LAUNCH',
+      campaignConfig
+    });
+    return response.data;
+  } catch (error) {
+    throw error.response?.data || error.message;
+  }
+};
+
+/**
+ * Email Open, Click ya Purchase (ROI) track karne ke liye function
+ * @param {Object} eventData - { campaignId, userId, eventType, orderValue }
+ */
+export const trackCampaignEvent = async (eventData) => {
+  try {
+    const response = await axiosInstance.post('/api/crm/campaign', {
+      action: 'TRACK',
+      eventData
+    });
+    return response.data;
+  } catch (error) {
+    throw error.response?.data || error.message;
+  }
+};
 
 export default axiosInstance;

@@ -1,5 +1,29 @@
 const mongoose = require('mongoose');
 
+// ==========================================
+// 🔥 SECURITY SUB-SCHEMAS FOR ENTERPRISE SECURITY CENTER
+// ==========================================
+const sessionSchema = new mongoose.Schema({
+  sessionId: { type: String, required: true },
+  ipAddress: { type: String, default: 'Unknown' },
+  device: { type: String, default: 'Unknown Device' },
+  loginAt: { type: Date, default: Date.now }
+});
+
+const loginHistorySchema = new mongoose.Schema({
+  ipAddress: { type: String, default: 'Unknown' },
+  device: { type: String, default: 'Unknown Device' },
+  status: { type: String, enum: ['SUCCESS', 'FAILED'], default: 'SUCCESS' },
+  timestamp: { type: Date, default: Date.now }
+});
+
+const auditLogSchema = new mongoose.Schema({
+  action: { type: String, required: true },
+  details: { type: String, default: '' },
+  ip: { type: String, default: 'Unknown' },
+  timestamp: { type: Date, default: Date.now }
+});
+
 // 🔥 PRO FEATURE 1: Address Sub-Schema (Strictly Typed & Required)
 const addressSchema = new mongoose.Schema({
   flat: { type: String, required: [true, "Flat/House info is required"], trim: true, maxlength: 100 },
@@ -37,27 +61,39 @@ const userSchema = new mongoose.Schema({
   },
   password: { 
     type: String, 
-    // Password is NOT required if user logs in via Google
     select: false // 🔥 Security: Database query karne par password default hide rahega
   }, 
   googleId: {
-    type: String, // Google Auth ke liye zaroori
+    type: String, 
     index: true
   },
   role: { 
     type: String, 
-    enum: ['admin', 'manager', 'catalog', 'support', 'customer'], 
+    enum: [
+      'admin', 'super_admin', 'operations_manager', 'catalog_manager', 
+      'warehouse_manager', 'customer_support', 'finance_manager', 
+      'marketing_manager', 'content_manager', 'analyst', 'read_only_auditor', 
+      'manager', 'catalog', 'support', 'customer'
+    ], 
     default: 'customer',
     index: true
   },
   
+  // 🔥 ENTERPRISE SECURITY CENTER FIELDS 🔥
+  twoFactorEnabled: { type: Boolean, default: false },
+  twoFactorSecret: { type: String, select: false },
+  activeSessions: [sessionSchema],
+  loginHistory: [loginHistorySchema],
+  auditLogs: [auditLogSchema],
+  failedLoginAttempts: { type: Number, default: 0 },
+
   // 🔥 PRO FEATURE 2: Store Customer's Addresses 🔥
   addresses: [addressSchema], 
 
   // 🔥 PRO FEATURE 3: E-commerce Core Features 🔥
   wishlist: [{
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Product' // Link this to your Product Model
+    ref: 'Product' 
   }],
   recentlyViewed: [{
     type: mongoose.Schema.Types.ObjectId,
@@ -72,14 +108,13 @@ const userSchema = new mongoose.Schema({
   
   isActive: {
     type: Boolean,
-    default: true // Agar account delete/deactivate karna ho toh ise false kar denge
+    default: true 
   }
   
 }, { 
   // 🔥 PRO FEATURE 5: Auto Timestamps 🔥
   timestamps: true,
-  strict: true // Automatically strips out any unallowed fields passed in req.body
+  strict: true 
 });
 
-// YAHAN CHANGE KIYA HAI 🔥 - Ab error nahi aayega!
 module.exports = mongoose.models.User || mongoose.model('User', userSchema);

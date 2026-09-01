@@ -60,6 +60,9 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
   const [showCodAlert, setShowCodAlert] = useState(false); 
   const [isProcessing, setIsProcessing] = useState(false); 
 
+  // 🔥 NAYA FIX: Toast State for Beautiful Error Reporting
+  const [toast, setToast] = useState({ show: false, message: '', type: 'error' });
+
   // 🔥 PHASE 2 FIX: codFeePaise default set to 0 to respect backend authority
   const [codIntelligence, setCodIntelligence] = useState({
     codAvailable: true,
@@ -74,6 +77,32 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
   const [newAddress, setNewAddress] = useState({
     name: user?.name || '', primaryPhone: user?.phone || '', flat: '', street: '', city: '', state: '', pincode: ''
   });
+
+  // 🔥 NAYA FIX: Smart Parser for Zod Errors from Backend
+  const parseBackendError = useCallback((err) => {
+    if (err?.response?.data) {
+      const data = err.response.data;
+      if (data.errors) {
+        let msgs = [];
+        const extractErrors = (obj) => {
+          for (const key in obj) {
+            if (key === '_errors' && Array.isArray(obj[key])) msgs.push(...obj[key]);
+            else if (typeof obj[key] === 'object') extractErrors(obj[key]);
+          }
+        };
+        extractErrors(data.errors);
+        if (msgs.length > 0) return msgs.join(' | ');
+      }
+      return data.message || "Server Error";
+    }
+    if (err?.error) return typeof err.error === 'string' ? err.error : JSON.stringify(err.error);
+    return err?.message || "An unexpected error occurred.";
+  }, []);
+
+  const showToast = useCallback((message, type = 'error') => {
+    setToast({ show: true, message, type });
+    setTimeout(() => setToast({ show: false, message: '', type: 'error' }), 5000);
+  }, []);
 
   useEffect(() => {
     if (!user) {
@@ -188,13 +217,13 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
   const handlePaymentChange = useCallback((method) => {
     if (method === 'cod') {
       if (!codIntelligence.codAvailable) {
-        alert(codIntelligence.reason || "Cash on Delivery is unavailable for this location or order value.");
+        showToast(codIntelligence.reason || "Cash on Delivery is unavailable for this location or order value.", "error");
         return;
       }
       setShowCodAlert(true);
     }
     setPaymentMethod(method);
-  }, [codIntelligence]);
+  }, [codIntelligence, showToast]);
 
   // RAZORPAY SCRIPT LOADER
   const loadRazorpayScript = useCallback(() => {
@@ -207,7 +236,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
     });
   }, []);
 
-  // FINAL ORDER SUBMISSION 
+  // FINAL ORDER SUBMISSION (With Idempotency Header Support)
   const handleFinalOrderSubmission = useCallback(async (finalPaymentMethod, gatewayOrderId) => {
     setIsProcessing(true);
     const savedTraffic = localStorage.getItem('jack_traffic_source');
@@ -231,10 +260,11 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
           primaryPhone: selectedAddress?.primaryPhone || selectedAddress?.phone || user?.phone || '9999999999'
         };
 
+        // 🔥 Idempotency protected request payload with unique UUID header
         const orderResult = await placeOrder(orderItems, finalTotalPaise, safeAddress, finalPaymentMethod, trafficSource);
         
         if (orderResult && orderResult.error) {
-            alert("Order failed to save: " + orderResult.error);
+            showToast("❌ Checkout Failed: " + parseBackendError(orderResult), "error");
             setIsProcessing(false);
             return; 
         }
@@ -257,18 +287,18 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
 
     } catch (err) {
       console.error("Order Submission Crash:", err);
-      alert("Something went wrong. Please check your internet or try again.");
+      showToast("❌ " + parseBackendError(err), "error");
       setIsProcessing(false);
     }
-  }, [user, cart, finalTotalPaise, selectedAddress, placeOrder, clearCart, navigate]);
+  }, [user, cart, finalTotalPaise, selectedAddress, placeOrder, clearCart, navigate, parseBackendError, showToast]);
 
-  // RAZORPAY PAYMENT INITIATION 
+  // RAZORPAY PAYMENT INITIATION (Idempotent Flow)
   const initiateRazorpayPayment = useCallback(async () => {
     setIsProcessing(true);
     const isLoaded = await loadRazorpayScript();
     
     if (!isLoaded) { 
-      alert("Razorpay SDK failed to load. Are you online?"); 
+      showToast("Razorpay SDK failed to load. Are you online?", "error"); 
       setIsProcessing(false); 
       return; 
     }
@@ -296,7 +326,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
       const orderResult = await placeOrder(orderItems, finalTotalPaise, safeAddress, 'Razorpay Online', trafficSource);
       
       if (!orderResult || orderResult.error) {
-          alert("Failed to generate secure order ID: " + (orderResult?.error || "Invalid Payload"));
+          showToast("❌ Failed to initiate payment: " + parseBackendError(orderResult), "error");
           setIsProcessing(false);
           return;
       }
@@ -304,11 +334,12 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
       const pendingOrderId = orderResult.order?._id || orderResult.order?.id;
 
       if (!pendingOrderId) {
-        alert("Failed to extract order ID from server.");
+        showToast("Failed to extract order ID from server.", "error");
         setIsProcessing(false);
         return;
       }
 
+      // 🔥 Create payment order with automatic idempotency header injection in axiosInstance
       const res = await axiosInstance.post('/payment/create-order', {
         orderId: pendingOrderId 
       }, {
@@ -319,7 +350,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
       const orderData = res.data;
 
       if (!orderData.success || !orderData.order_id) {
-        alert("Backend Error: " + (orderData.error || "Could not create Razorpay Order."));
+        showToast("Backend Error: " + (orderData.error || "Could not create Razorpay Order."), "error");
         setIsProcessing(false);
         return;
       }
@@ -356,12 +387,12 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                 navigate(`/order/${pendingOrderId}`); 
               }, 2000);
             } else {
-              alert("Payment verification failed! If money was deducted, it will be refunded.");
+              showToast("Payment verification failed! If money was deducted, it will be refunded.", "error");
               setIsProcessing(false);
             }
           } catch (error) {
             console.error("Verification error:", error);
-            alert("Error verifying payment.");
+            showToast("Error verifying payment.", "error");
             setIsProcessing(false);
           }
         },
@@ -376,38 +407,53 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
 
       const rzp = new window.Razorpay(options);
       rzp.on('payment.failed', function (response) {
-        alert("Payment Failed: " + response.error.description);
+        showToast("Payment Failed: " + response.error.description, "error");
         setIsProcessing(false);
       });
       rzp.open();
 
     } catch (error) {
       console.error("Payment Error:", error);
-      alert(`Server connection issue: ${error.response?.data?.message || error.message}`);
+      showToast(`❌ ${parseBackendError(error)}`, "error");
       setIsProcessing(false);
     }
-  }, [cart, finalTotalPaise, selectedAddress, user, clearCart, navigate, loadRazorpayScript, placeOrder]);
+  }, [cart, finalTotalPaise, selectedAddress, user, clearCart, navigate, loadRazorpayScript, placeOrder, parseBackendError, showToast]);
 
   const handlePreCheckout = useCallback((e) => {
     e.preventDefault();
-    if (!selectedAddress && !isAddingNew) return alert("Please select or add a delivery address first!");
+    if (!selectedAddress && !isAddingNew) return showToast("Please select or add a delivery address first!", "error");
 
     if (paymentMethod === 'online') {
       initiateRazorpayPayment(); 
     } else if (paymentMethod === 'cod') {
       if (!codIntelligence.codAvailable) {
-        alert(codIntelligence.reason || "Cash on Delivery is unavailable for this location.");
+        showToast(codIntelligence.reason || "Cash on Delivery is unavailable for this location.", "error");
         return;
       }
       handleFinalOrderSubmission('Cash on Delivery', `COD_${Date.now()}`); 
     }
-  }, [selectedAddress, isAddingNew, paymentMethod, codIntelligence, initiateRazorpayPayment, handleFinalOrderSubmission]);
+  }, [selectedAddress, isAddingNew, paymentMethod, codIntelligence, initiateRazorpayPayment, handleFinalOrderSubmission, showToast]);
 
   if (!user) return null;
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] font-sans pb-24 relative selection:bg-[#FF4500] selection:text-white">
       <Navbar isLoggedIn={isLoggedIn} setIsLoggedIn={setIsLoggedIn} />
+
+      {/* 🔥 NAYA FIX: Toast Error Notification Modal 🔥 */}
+      <AnimatePresence>
+        {toast.show && (
+          <motion.div 
+            initial={{ opacity: 0, y: -50, scale: 0.9 }} 
+            animate={{ opacity: 1, y: 0, scale: 1 }} 
+            exit={{ opacity: 0, y: -20, scale: 0.9 }} 
+            className={`fixed top-6 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 px-6 py-4 rounded-2xl shadow-2xl font-bold text-sm max-w-md w-[90%] ${toast.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'}`}
+          >
+            {toast.type === 'success' ? <FiCheckCircle size={24} className="shrink-0" /> : <FiAlertCircle size={24} className="shrink-0" />}
+            <span className="leading-snug">{toast.message}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* COD Alert Modal */}
       <AnimatePresence>
