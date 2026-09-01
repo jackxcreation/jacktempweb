@@ -108,7 +108,7 @@ app.use(helmet({
 app.use(cookieParser());
 
 // ==========================================
-// 🌐 COMPREHENSIVE CORS ALLOWLIST (PLACED FIRST TO FIX PREFLIGHT BLOCKING)
+// 🌐 COMPREHENSIVE CORS ALLOWLIST & PREFLIGHT SUPPORT
 // ==========================================
 const allowedOrigins = [
   "https://thejackessentials.com", 
@@ -123,7 +123,7 @@ const allowedOrigins = [
   process.env.STORE_ORIGIN
 ].filter(Boolean);
 
-app.use(cors({
+const corsOptions = {
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
     if (allowedOrigins.indexOf(origin) !== -1) {
@@ -133,8 +133,12 @@ app.use(cors({
     }
   },
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  credentials: true // 🔥 REQUIRED FOR COOKIES TO WORK ACROSS ORIGINS
-}));
+  allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID", "Idempotency-Key"],
+  credentials: true // 🔥 REQUIRED FOR COOKIES & HEADERS TO WORK ACROSS ORIGINS
+};
+
+app.use(cors(corsOptions));
+app.options(/(.*)/, cors(corsOptions));// 🔥 Explicit preflight handling for cross-domain stability
 
 // ==========================================
 // 🛡️ GRANULAR ENDPOINT-SPECIFIC RATE LIMITERS
