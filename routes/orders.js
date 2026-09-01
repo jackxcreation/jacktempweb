@@ -122,6 +122,9 @@ const logAdminAction = async (req, action, details, beforeState = null, afterSta
 router.post('/api/orders/:id/generate-awb', protect, checkPermission('orders:ship'), requireIdempotency, async (req, res) => {
   try {
     const { id } = req.params;
+    // 🔥 FIX: Extract provider from request body
+    const { provider } = req.body; 
+    
     const order = await Order.findById(id);
     
     if (!order) return res.status(404).json({ success: false, message: "Order not found", requestId: req.requestId });
@@ -133,45 +136,52 @@ router.post('/api/orders/:id/generate-awb', protect, checkPermission('orders:shi
         message: "AWB already exists (Idempotent Replay)", 
         waybill: order.shipment.awb,
         provider: order.shipment.provider,
-        order: { ...order._doc, id: order._id.toString() }
+        order: order.toJSON()
       });
     }
 
-    const shipmentResult = await shippingEngine.generateAWB(order);
+    // 🔥 MASTER FIX: Convert Mongoose Document to Plain JS Object
+    // Isse Axios ya shipping engine deep cloning ke waqt '_defaultToObjectOptions' error nahi dega.
+    const orderPayload = order.toObject();
 
-    const previousShipment = order.shipment || {};
+    // Plain payload pass kiya jaa raha hai
+    const shipmentResult = await shippingEngine.generateAWB(orderPayload, provider);
+
+    const previousShipment = order.shipment ? { ...order.shipment } : {};
+    
     order.shipment = {
-        provider: shipmentResult.provider,
+        provider: shipmentResult.provider || provider || 'unknown',
         awb: shipmentResult.waybill || shipmentResult.awb,
         providerOrderId: shipmentResult.providerOrderId || '',
         trackingStatus: shipmentResult.trackingStatus || 'Manifested',
         lastSyncedAt: new Date(),
         cancellationStatus: false
     };
+    
     await order.save();
 
     await logAdminAction(
       req,
       'GENERATE_AWB',
-      `Generated AWB via [${String(shipmentResult.provider || 'delhivery').toUpperCase()}] - AWB: ${shipmentResult.waybill || shipmentResult.awb} for Order #${order._id}`,
+      `Generated AWB via [${String(order.shipment.provider).toUpperCase()}] - AWB: ${order.shipment.awb} for Order #${order._id}`,
       { shipment: previousShipment?.awb ? `Existing AWB: ${previousShipment.awb}` : 'No AWB assigned' },
-      { shipment: shipmentResult.waybill || shipmentResult.awb, provider: shipmentResult.provider }
+      { shipment: order.shipment.awb, provider: order.shipment.provider }
     );
 
     // 🔥 Emit shipment created event over channels
     const io = req.app.get("io");
     if (io) {
       try {
-        io.to('orders').emit('shipment.created', { orderId: order._id, awb: shipmentResult.waybill || shipmentResult.awb, provider: shipmentResult.provider });
+        io.to('orders').emit('shipment.created', { orderId: order._id, awb: order.shipment.awb, provider: order.shipment.provider });
       } catch (e) {}
     }
 
     res.status(200).json({ 
         success: true, 
         message: "AWB Generated Successfully", 
-        waybill: shipmentResult.waybill || shipmentResult.awb,
-        provider: shipmentResult.provider,
-        order: { ...order._doc, id: order._id.toString() }
+        waybill: order.shipment.awb,
+        provider: order.shipment.provider,
+        order: order.toJSON()
     });
 
   } catch (error) {
@@ -293,7 +303,7 @@ router.post('/api/orders', protect, requireIdempotency, async (req, res) => {
     }
 
     let calculatedServerTotalPaise = 0;
-    let totalCogsPaise = 0; // 🔥 NAYA FIELD: Total Cost of Goods
+    let totalCogsPaise = 0; 
     const verifiedOrderItems = [];
 
     for (const rawItem of items) {
@@ -362,7 +372,6 @@ router.post('/api/orders', protect, requireIdempotency, async (req, res) => {
 
       await product.save({ session });
 
-      // 🔥 NAYA FEATURE: Check Low Stock / Out of Stock for WebSocket Channel Emission
       const ioInstance = req.app.get("io");
       if (ioInstance) {
         if (newAvailable === 0) {
@@ -375,7 +384,6 @@ router.post('/api/orders', protect, requireIdempotency, async (req, res) => {
       const unitPricePaise = product.pricePaise || Math.round(parseFloat(product.price || 0) * 100);
       calculatedServerTotalPaise += unitPricePaise * orderQty;
 
-      // 🔥 NAYA CALCULATION: Order time par exact COGS save karna
       const unitCogsPaise = product.cogsPaise || Math.round(parseFloat(product.cogs || 0) * 100);
       totalCogsPaise += unitCogsPaise * orderQty;
 
@@ -383,13 +391,12 @@ router.post('/api/orders', protect, requireIdempotency, async (req, res) => {
         productId: product._id,
         title: product.title,
         pricePaise: unitPricePaise,
-        cogsPaise: unitCogsPaise, // 🔥 NAYA FIELD
+        cogsPaise: unitCogsPaise,
         quantity: orderQty,
         image: product.image || (product.images ? product.images[0] : '')
       });
     }
 
-    // Increment warehouse load counter if warehouse assigned
     if (selectedWarehouse) {
       await Warehouse.findByIdAndUpdate(selectedWarehouse._id, { $inc: { currentLoad: 1 } }, { session });
     }
@@ -397,27 +404,25 @@ router.post('/api/orders', protect, requireIdempotency, async (req, res) => {
     const payString = String(paymentMethod || '').toLowerCase();
     const isCod = payString.includes('cod') || payString.includes('cash');
 
-    // 🔥 FINANCIAL BREAKDOWN CALCULATIONS
-    let shippingCostPaise = 6000; // Base shipping 60 INR
+    let shippingCostPaise = 6000; 
     let discountPaise = 0;
     let paymentFeePaise = 0;
     let codFeePaise = 0;
-    let taxAmountPaise = Math.round(calculatedServerTotalPaise * 0.18); // Default 18% GST estimate
+    let taxAmountPaise = Math.round(calculatedServerTotalPaise * 0.18); 
 
     let finalTotalPaise = calculatedServerTotalPaise;
     
     if (!isCod) {
-      discountPaise = Math.round(calculatedServerTotalPaise * 0.10); // Prepaid 10% Discount
+      discountPaise = Math.round(calculatedServerTotalPaise * 0.10); 
       finalTotalPaise -= discountPaise;
-      paymentFeePaise = Math.round(finalTotalPaise * 0.02); // Prepaid 2% Razorpay/Gateway fee
+      paymentFeePaise = Math.round(finalTotalPaise * 0.02); 
     }
     
     if (isCod) {
-      codFeePaise = 5000; // COD Charge 50 INR
+      codFeePaise = 5000; 
       finalTotalPaise += codFeePaise;
     }
 
-    // 🔥 CONTRIBUTION CALCULATION (Real Profit Margin per order)
     let contributionPaise = finalTotalPaise - totalCogsPaise - shippingCostPaise - paymentFeePaise;
 
     const deviceInfo = req.headers['user-agent']?.includes('Mobile') ? 'Mobile Device' : 'Desktop / PC';
@@ -435,7 +440,6 @@ router.post('/api/orders', protect, requireIdempotency, async (req, res) => {
       trafficSource,
       fulfilledFromWarehouse: selectedWarehouse ? selectedWarehouse._id : null,
 
-      // 🔥 DB MEIN FINANCE FIELDS STORE KARNA
       cogsPaise: totalCogsPaise,
       shippingCostPaise: shippingCostPaise,
       paymentFeePaise: paymentFeePaise,
@@ -457,9 +461,6 @@ router.post('/api/orders', protect, requireIdempotency, async (req, res) => {
       );
     }
 
-    // 🔥 MASTER FIX: PREVENT RAZORPAY "order_" CONFLICT
-    // Changed "order_" prefix to "pending_tx_" so idempotency flow works correctly 
-    // and doesn't get rejected by Razorpay as a fake Order ID.
     const dummyGatewayOrderId = `pending_tx_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
     await PaymentIntent.create([{
       userId: secureUserId,
@@ -479,7 +480,6 @@ router.post('/api/orders', protect, requireIdempotency, async (req, res) => {
 
     const orderResponse = { ...savedOrder._doc, id: savedOrder._id.toString() };
 
-    // 🔥 PUSH ANALYTICS EVENT TO BULLMQ QUEUE (Non-blocking)
     trackEvent('ORDER_COMPLETED', {
       orderId: savedOrder._id,
       totalPaise: finalTotalPaise,
@@ -490,11 +490,10 @@ router.post('/api/orders', protect, requireIdempotency, async (req, res) => {
       userId: secureUserId
     });
 
-    // 🔥 SMART WEBSOCKET EMIT (Channel: orders)
     if (io) {
         try { 
           io.to('orders').emit('order.created', orderResponse);
-          io.emit("new_order", orderResponse); // Legacy fallback support
+          io.emit("new_order", orderResponse); 
         } catch(e){}
     }
 
@@ -569,7 +568,6 @@ router.put('/api/orders/:id', protect, checkPermission('orders:edit'), async (re
     const beforeStatus = existingOrder.status;
     const beforeRefund = existingOrder.refundStatus;
 
-    // 🔥 RTO FINANCIAL PENALTY CALCULATION
     const updateFields = {};
     if (status === 'RTO' && beforeStatus !== 'RTO') {
       updateFields.rtoCostPaise = existingOrder.shippingCostPaise || 6000;
@@ -638,7 +636,6 @@ router.put('/api/orders/:id', protect, checkPermission('orders:edit'), async (re
             timestamp: new Date()
           });
 
-          // 🔥 FINANCIAL UPDATE (Contribution zeroed out on cancel)
           updateFields.contributionPaise = 0;
         }
 
@@ -659,7 +656,6 @@ router.put('/api/orders/:id', protect, checkPermission('orders:edit'), async (re
             timestamp: new Date()
           });
 
-          // 🔥 TRACK RETURN/RTO ANALYTICS EVENT
           trackEvent('ORDER_RETURN_OR_RTO', {
             orderId: existingOrder._id,
             type: status,
@@ -676,14 +672,12 @@ router.put('/api/orders/:id', protect, checkPermission('orders:edit'), async (re
     if (status) updateFields.status = status;
     if (adminNotes !== undefined) updateFields.adminNotes = adminNotes;
     
-    // 🔥 FINANCIAL REFUND PENALTY & SOCKET EMIT
     if (refundStatus !== undefined) {
       updateFields.refundStatus = refundStatus;
       if (refundStatus === 'Refunded' || refundStatus === 'Processed' || refundStatus === 'Refund Completed') {
          updateFields.refundAmountPaise = existingOrder.totalPaise;
          updateFields.contributionPaise = 0 - (existingOrder.paymentFeePaise || 0) - (existingOrder.shippingCostPaise || 0);
          
-         // Log refund entry in Refund model
          if (existingOrder.paymentDetails?.gatewayOrderId) {
            const intent = await PaymentIntent.findOne({ gatewayOrderId: existingOrder.paymentDetails.gatewayOrderId }).session(session);
            if (intent) {
@@ -698,7 +692,6 @@ router.put('/api/orders/:id', protect, checkPermission('orders:edit'), async (re
            }
          }
 
-         // Emit refund created event
          if (io) {
            try { io.to('payments').emit('refund.created', { orderId: existingOrder._id, amountPaise: existingOrder.totalPaise }); } catch (e) {}
          }
@@ -738,11 +731,10 @@ router.put('/api/orders/:id', protect, checkPermission('orders:edit'), async (re
 
     const orderResponse = { ...updatedOrder._doc, id: updatedOrder._id.toString() };
     
-    // 🔥 SMART WEBSOCKET EMIT (Channel: orders)
     if(io) { 
       try { 
         io.to('orders').emit('order.status.changed', orderResponse);
-        io.emit("order_status_updated", orderResponse); // Legacy fallback support
+        io.emit("order_status_updated", orderResponse); 
       } catch(e){} 
     }
 

@@ -14,13 +14,23 @@ const axiosInstance = axios.create({
   withCredentials: true,
 });
 
+// Helper function to safely retrieve token across subdomains and storage keys
+const getAuthToken = () => {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('token') || 
+         localStorage.getItem('admin_token') || 
+         localStorage.getItem('jack_token') ||
+         document.cookie.replace(/(?:(?:^|.*;\s*)token\s*\=\s*([^;]*).*$)|^.*$/, "$1") ||
+         document.cookie.replace(/(?:(?:^|.*;\s*)admin_token\s*\=\s*([^;]*).*$)|^.*$/, "$1");
+};
+
 // ==========================================
 // 🔥 REQUEST INTERCEPTOR
 // ==========================================
 axiosInstance.interceptors.request.use(
   (config) => {
     // Backend still relies on Bearer token for strict authentication. 
-    const token = localStorage.getItem('token');
+    const token = getAuthToken();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -67,6 +77,7 @@ axiosInstance.interceptors.response.use(
       
       localStorage.removeItem('jack_user');
       localStorage.removeItem('token'); 
+      localStorage.removeItem('admin_token');
 
       window.dispatchEvent(new Event('jack_auth_change'));
 
@@ -97,7 +108,8 @@ axiosInstance.interceptors.response.use(
  */
 export const launchEmailCampaign = async (campaignConfig) => {
   try {
-    const response = await axiosInstance.post('/api/crm/campaign', {
+    // Fixed endpoint path to prevent double /api/api/ prefix duplication
+    const response = await axiosInstance.post('/crm/campaign', {
       action: 'LAUNCH',
       campaignConfig
     });
@@ -113,7 +125,8 @@ export const launchEmailCampaign = async (campaignConfig) => {
  */
 export const trackCampaignEvent = async (eventData) => {
   try {
-    const response = await axiosInstance.post('/api/crm/campaign', {
+    // Fixed endpoint path to prevent double /api/api/ prefix duplication
+    const response = await axiosInstance.post('/crm/campaign', {
       action: 'TRACK',
       eventData
     });
