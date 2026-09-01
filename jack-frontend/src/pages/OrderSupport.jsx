@@ -2,7 +2,7 @@
 import { useParams, Link } from 'react-router-dom';
 import { FiArrowLeft, FiBox, FiMessageSquare } from 'react-icons/fi';
 // 🔥 PHASE 1 FIX: Corrected import path for Chat component to prevent build failure
-import Chat from '../components/Chat'; 
+import Chat from "./Chat";
 // 🔥 PHASE 1 FIX: Imported the canonical axiosInstance
 import axiosInstance from '../api/axiosInstance'; // Make sure path matches your structure
 

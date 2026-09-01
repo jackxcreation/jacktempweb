@@ -5,7 +5,7 @@ import {
   FiMessageSquare, FiSearch, FiCreditCard, FiRefreshCw, FiShoppingBag, FiInfo
 } from 'react-icons/fi';
 import { Link } from 'react-router-dom';
-import Chat from '../components/Chat'; // 🔥 PHASE 1 FIX: Corrected import path
+import Chat from "./Chat"; // 🔥 PHASE 1 FIX: Corrected import path
 // 🔥 PHASE 1 FIX: Canonical Axios Instance
 import axiosInstance from '../api/axiosInstance';
 
