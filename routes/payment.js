@@ -52,7 +52,12 @@ router.post('/payment/create-order', jsonParser, protect, requireIdempotency, as
 
     // Idempotency check: Agar active PaymentIntent pehle se hai toh wahi return kar do
     const existingIntent = await PaymentIntent.findOne({ orderId: order._id, status: 'CREATED' });
-    if (existingIntent) {
+    
+    // 🔥 MASTER FIX 1: Strict Regex check to ensure it's a REAL Razorpay ID (No underscores allowed after 'order_')
+    // Agar database mein dummy ID hui (like order_1788245903295_770), toh yeh test fail hoga aur naya fresh order banega.
+    const isValidRazorpayId = existingIntent && /^order_[a-zA-Z0-9]+$/.test(existingIntent.gatewayOrderId);
+
+    if (isValidRazorpayId) {
       return res.json({
         success: true,
         order_id: existingIntent.gatewayOrderId,
@@ -76,9 +81,9 @@ router.post('/payment/create-order', jsonParser, protect, requireIdempotency, as
     order.paymentDetails = { gatewayOrderId: rzpOrder.id };
     await order.save();
 
-    // 🔥 ENTERPRISE PAYMENT ARCHITECTURE: Create or Update PaymentIntent
+    // 🔥 MASTER FIX 2: Find by order._id instead of rzpOrder.id so we overwrite any old dummy intents
     await PaymentIntent.findOneAndUpdate(
-      { gatewayOrderId: rzpOrder.id },
+      { orderId: order._id }, 
       {
         userId: req.user._id,
         orderId: order._id,
@@ -93,7 +98,7 @@ router.post('/payment/create-order', jsonParser, protect, requireIdempotency, as
 
     res.json({
       success: true,
-      order_id: rzpOrder.id,
+      order_id: rzpOrder.id, // 🔥 Yeh har baar 100% original Razorpay ID bheja karega
       amount: rzpOrder.amount, 
       currency: rzpOrder.currency
     });

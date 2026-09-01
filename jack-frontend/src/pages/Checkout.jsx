@@ -110,25 +110,8 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
     }
   }, [user, navigate, location]);
 
-  useEffect(() => {
-    if (user?.addresses && user.addresses.length > 0) {
-      // 🔥 SAFETY FIX: Ensure primaryPhone is populated even on saved addresses
-      const defaultAddr = {
-        ...user.addresses[0],
-        primaryPhone: user.addresses[0].primaryPhone || user.addresses[0].phone || user?.phone || '9999999999'
-      };
-      setSelectedAddress(defaultAddr);
-      setIsAddingNew(false);
-      if (defaultAddr.pincode) {
-        checkCodIntelligence(defaultAddr.pincode);
-      }
-    } else {
-      setIsAddingNew(true);
-    }
-  }, [user]);
-
-  // 🔥 CHECK COD INTELLIGENCE VIA BACKEND API
-  const checkCodIntelligence = async (pincode) => {
+  // 🔥 CHECK COD INTELLIGENCE VIA BACKEND API (Memoized for performance)
+  const checkCodIntelligence = useCallback(async (pincode) => {
     if (!pincode || pincode.length !== 6) return;
     try {
       const res = await axiosInstance.get(`/delivery-check?pincode=${pincode}&cartTotal=${cartTotalPaise}&userId=${user?._id || ''}`, {
@@ -146,7 +129,24 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
     } catch (err) {
       console.error("COD Intelligence Check Failed:", err);
     }
-  };
+  }, [cartTotalPaise, user]);
+
+  useEffect(() => {
+    if (user?.addresses && user.addresses.length > 0) {
+      // 🔥 SAFETY FIX: Ensure primaryPhone is populated even on saved addresses
+      const defaultAddr = {
+        ...user.addresses[0],
+        primaryPhone: user.addresses[0].primaryPhone || user.addresses[0].phone || user?.phone || '9999999999'
+      };
+      setSelectedAddress(defaultAddr);
+      setIsAddingNew(false);
+      if (defaultAddr.pincode) {
+        checkCodIntelligence(defaultAddr.pincode);
+      }
+    } else {
+      setIsAddingNew(true);
+    }
+  }, [user, checkCodIntelligence]);
 
   // Memoized Order Calculations (Working purely with Paise integers)
   const { cartTotalPaiseMetric, discountPaise, appliedCodFeePaise, finalTotalPaise } = useMemo(() => {
@@ -199,7 +199,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
         console.error("Pincode API failed", error); 
       }
     }
-  }, [cartTotalPaise, user]);
+  }, [checkCodIntelligence]);
 
   const handleAddressSubmit = useCallback((e) => {
     e.preventDefault();
@@ -212,7 +212,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
     checkCodIntelligence(formattedNewAddr.pincode);
     setStep(2); 
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, [newAddress, user, cartTotalPaise]);
+  }, [newAddress, user, checkCodIntelligence]);
 
   const handlePaymentChange = useCallback((method) => {
     if (method === 'cod') {
@@ -298,7 +298,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
     const isLoaded = await loadRazorpayScript();
     
     if (!isLoaded) { 
-      showToast("Razorpay SDK failed to load. Are you online?", "error"); 
+      showToast("Razorpay SDK failed to load. Please disable any Ad-Blockers and try again.", "error"); 
       setIsProcessing(false); 
       return; 
     }
@@ -355,13 +355,20 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
         return;
       }
 
+      if (!window.Razorpay) {
+        showToast("Razorpay failed to initialize. Please check your internet connection.", "error");
+        setIsProcessing(false);
+        return;
+      }
+
+      // 🔥 STRICT TYPE CASTING TO PREVENT 'undefined' CRASHES IN RAZORPAY SCRIPT
       const options = {
         key: import.meta.env.VITE_RAZORPAY_KEY_ID || "rzp_test_Sx5dYj7qO20PEX",
-        amount: orderData.amount, 
-        currency: orderData.currency,
+        amount: Number(orderData.amount), 
+        currency: String(orderData.currency || "INR"),
         name: STORE_NAME,
         description: "Order Payment",
-        order_id: orderData.order_id,
+        order_id: String(orderData.order_id), // 🔥 Bulletproof order_id passing
         handler: async function (response) {
           try {
             setIsProcessing(true);
@@ -405,9 +412,12 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
         modal: { ondismiss: function () { setIsProcessing(false); } }
       };
 
+      console.log("🚀 INITIATING RAZORPAY POPUP WITH OPTIONS:", options);
+
       const rzp = new window.Razorpay(options);
       rzp.on('payment.failed', function (response) {
-        showToast("Payment Failed: " + response.error.description, "error");
+        console.error("❌ RAZORPAY PAYMENT FAILED:", response.error);
+        showToast("Payment Failed: " + (response.error.description || "Unknown error"), "error");
         setIsProcessing(false);
       });
       rzp.open();

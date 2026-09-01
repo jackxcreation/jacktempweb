@@ -457,8 +457,10 @@ router.post('/api/orders', protect, requireIdempotency, async (req, res) => {
       );
     }
 
-    // 🔥 CREATE INITIAL PAYMENT INTENT RECORD
-    const dummyGatewayOrderId = `order_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    // 🔥 MASTER FIX: PREVENT RAZORPAY "order_" CONFLICT
+    // Changed "order_" prefix to "pending_tx_" so idempotency flow works correctly 
+    // and doesn't get rejected by Razorpay as a fake Order ID.
+    const dummyGatewayOrderId = `pending_tx_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
     await PaymentIntent.create([{
       userId: secureUserId,
       orderId: savedOrder._id,
