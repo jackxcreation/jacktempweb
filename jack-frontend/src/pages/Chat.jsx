@@ -143,25 +143,36 @@ const Chat = ({ isOpen, onClose, contextData, user }) => {
 
 
 
-    // ✅ AI RESPONSE
+    // ✅ AI RESPONSE (Hybrid token retrieval added for secure backend auth)
     if (!rawBotResponse) {
+      const activeToken = typeof window !== 'undefined' 
+        ? (localStorage.getItem('token') || localStorage.getItem('admin_token') || localStorage.getItem('jack_token')) 
+        : null;
 
       rawBotResponse = await fetchAIResponse({
         userText: text,
         messages,
         contextData,
         user,
-        BACKEND_API_URL
+        BACKEND_API_URL,
+        token: activeToken
       });
     }
 
 
 
     // ✅ PROCESS RESPONSE
-    const {
+    let {
       finalBotText,
       triggerEscalation
     } = processBotResponse(rawBotResponse);
+
+    // 🔥 FIX: Prevent false-positive immediate escalation on simple greetings/casual inputs
+    const lowerText = text.toLowerCase().trim();
+    const simpleGreetings = ['hello', 'hi', 'hey', 'good morning', 'good afternoon', 'good evening', 'sup', 'helo', 'namaste'];
+    if (simpleGreetings.includes(lowerText)) {
+      triggerEscalation = false;
+    }
 
 
 

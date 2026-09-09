@@ -208,15 +208,22 @@ Reply EXACTLY:
 `;
 };
 
-// ✅ AI RESPONSE FUNCTION
+// ✅ AI RESPONSE FUNCTION (Hybrid: Supports LocalStorage Token & HttpOnly Cookies)
 export const fetchAIResponse = async ({
   userText,
   messages,
   contextData,
   user,
   BACKEND_API_URL,
-  token // 🔥 ADDED: Optional secure token support for authorized requests
+  token // Optional explicitly passed token
 }) => {
+  // 🔥 HYBRID SYSTEM: Grab token from parameters, or fallback to localStorage variants automatically
+  const activeToken = token || (
+    typeof window !== 'undefined' 
+      ? (localStorage.getItem('token') || localStorage.getItem('admin_token') || localStorage.getItem('jack_token')) 
+      : null
+  );
+
   // ✅ DETECT LANGUAGE
   const languageStyle = detectLanguageStyle(userText);
 
@@ -243,14 +250,19 @@ export const fetchAIResponse = async ({
       content: m.text
     }));
 
+  // 🔥 Smart friendly fallback instead of blind human transfer on error/empty
+  const fallbackMessage = languageStyle === 'hinglish'
+    ? "Hello! Main Jack Essentials support se hoon, batayiye aaj main aapki kya madad kar sakta hoon?"
+    : "Hello! Welcome to Jack Essentials support. How can I assist you today?";
+
   try {
     const headers = {
       "Content-Type": "application/json"
     };
 
-    // Include auth token if available for secure backend route validation
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
+    // 1️⃣ Include auth token in headers if available for secure backend route validation
+    if (activeToken) {
+      headers["Authorization"] = `Bearer ${activeToken}`;
     }
 
     const response = await fetch(
@@ -258,6 +270,7 @@ export const fetchAIResponse = async ({
       {
         method: "POST",
         headers,
+        credentials: "include", // 2️⃣ Ensures HttpOnly Cookies are securely sent across cross-origin/subdomain requests
         body: JSON.stringify({
           message: userText,
           chatHistory,
@@ -274,7 +287,7 @@ export const fetchAIResponse = async ({
     return (
       data.reply ||
       data.text ||
-      "[TRANSFER_TO_AGENT]"
+      fallbackMessage
     );
 
   } catch (error) {
@@ -283,7 +296,7 @@ export const fetchAIResponse = async ({
       error
     );
 
-    return "[TRANSFER_TO_AGENT]";
+    return fallbackMessage;
   }
 };
 

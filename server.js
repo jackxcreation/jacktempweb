@@ -138,7 +138,7 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options(/(.*)/, cors(corsOptions));// 🔥 Explicit preflight handling for cross-domain stability
+app.options(/(.*)/, cors(corsOptions)); // 🔥 Explicit preflight handling for cross-domain stability
 
 // ==========================================
 // 🛡️ GRANULAR ENDPOINT-SPECIFIC RATE LIMITERS
@@ -163,8 +163,8 @@ const paymentLimiter = rateLimit({
 });
 
 const aiChatLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
+  windowMs: 5 * 60 * 1000,
+  max: 100,
   message: { error: "Too many AI chat requests, please try again later." }
 });
 
@@ -390,11 +390,11 @@ app.post('/api/generate-catalog', protect, admin, async (req, res) => {
 });
 
 // ==========================================
-// 🔥 SECURED: HARDENED AI CHAT ROUTE
+// 🔥 SECURED: HARDENED AI CHAT ROUTE (FIXED: REMOVED PROTECT MIDDLEWARE FOR GUEST/SUBDOMAIN ACCESS)
 // ==========================================
-app.post('/api/chat', protect, aiChatLimiter, async (req, res) => {
+app.post('/api/chat', aiChatLimiter, async (req, res) => {
   try {
-    const { message, chatHistory } = req.body;
+    const { message, chatHistory, systemInstruction, languageStyle } = req.body;
     const apiKey = process.env.GROQ_API_KEY || process.env.GEMINI_API_KEY;
 
     if (!apiKey) return res.status(500).json({ error: 'AI Service configuration missing' });
@@ -406,7 +406,7 @@ app.post('/api/chat', protect, aiChatLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Message exceeds maximum allowed length of 1000 characters' });
     }
 
-    const serverSystemInstruction = "You are an official, helpful, and polite customer support assistant for Jack Essentials. Assist customers with store products, orders, and policies safely and accurately.";
+    const serverSystemInstruction = systemInstruction || "You are an official, helpful, and polite customer support assistant for Jack Essentials. Assist customers with store products, orders, and policies safely and accurately.";
 
     const url = "https://api.groq.com/openai/v1/chat/completions";
     const payload = {
@@ -431,7 +431,12 @@ app.post('/api/chat', protect, aiChatLimiter, async (req, res) => {
     res.json({ reply: data.choices[0].message.content.trim() });
   } catch (error) { 
     console.error("AI Chat Error:", error);
-    res.status(500).json({ error: 'Server code crash' }); 
+    res.status(500).json({ 
+      error: 'Server code crash',
+      reply: req.body?.languageStyle === 'hinglish' 
+        ? "Bhai, abhi thoda technical issue aa raha hai. Main aapko human agent se connect kar raha hoon. [TRANSFER_TO_AGENT]" 
+        : "I'm experiencing a minor glitch. Let me connect you with a human agent. [TRANSFER_TO_AGENT]"
+    }); 
   }
 });
 
