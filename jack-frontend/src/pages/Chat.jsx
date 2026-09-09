@@ -1,224 +1,179 @@
+// components/support/Chat.jsx
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FiX, FiSend, FiCheckCircle } from 'react-icons/fi';
-import { io } from 'socket.io-client';
 import { API_URL } from '../config';
 
-// ✅ IMPORT BRAIN
-import {
-  predefinedOptions,
-  fetchAIResponse,
-  processBotResponse
-} from '../utils/chatBrain';
+import { fetchAIResponse, processBotResponse } from '../utils/chatBrain';
+import { useSupportSocket } from '../hooks/useSupportSocket';
+import ChatHeader from './ChatHeader';
+import ChatInput from './ChatInput';
+import MessageBubble from './MessageBubble';
+
+export const SUPPORT_STATUS = {
+  AI_ACTIVE: 'AI_ACTIVE',
+  ESCALATING: 'ESCALATING',
+  HUMAN_ACTIVE: 'HUMAN_ACTIVE',
+  RESOLVED: 'RESOLVED'
+};
 
 const Chat = ({ isOpen, onClose, contextData, user }) => {
-
   const [messages, setMessages] = useState([]);
-  const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const [isEscalated, setIsEscalated] = useState(false);
-
+  const [isEscalated, setIsEscalated] = useState(false); // Preserved for strict rules
+  const [supportStatus, setSupportStatus] = useState(SUPPORT_STATUS.AI_ACTIVE);
+  const [agent, setAgent] = useState(null);
+  
   const chatEndRef = useRef(null);
-  const socketRef = useRef(null);
-
-  // ✅ BACKEND API
+  const abortControllerRef = useRef(null);
   const BACKEND_API_URL = `${API_URL}/chat`;
 
-  useEffect(() => {
-
-    if (isOpen) {
-
-      const initialMessage = {
-        id: Date.now(),
-        sender: 'bot',
-        text: `Hi ${user?.name || 'there'}! Welcome to Jack Essentials Support. I am Jack, your AI Support Manager. Kaise help kar sakta hoon aaj aapki?`,
-        time: new Date().toLocaleTimeString([], {
-          hour: '2-digit',
-          minute: '2-digit'
-        })
-      };
-
-      if (messages.length === 0) {
-        setMessages([initialMessage]);
+  // Extracted robust socket management
+  const { escalate } = useSupportSocket({
+    API_URL,
+    isOpen,
+    user,
+    onAdminReply: (msg) => {
+      setMessages(prev => {
+        if (prev.some(m => m.id === msg.id)) return prev;
+        return [...prev, msg];
+      });
+      setIsEscalated(true);
+      setSupportStatus(SUPPORT_STATUS.HUMAN_ACTIVE);
+    },
+    onSystemEvent: (event) => {
+      if (event.type === 'agent_joined') {
+        setAgent(event.agent);
+        setSupportStatus(SUPPORT_STATUS.HUMAN_ACTIVE);
+        setMessages(prev => [...prev, { id: Date.now(), type: 'system', text: `${event.agent?.name || 'An agent'} joined the chat.` }]);
+      } else if (event.type === 'ticket_resolved') {
+        setSupportStatus(SUPPORT_STATUS.RESOLVED);
+        setMessages(prev => [...prev, { id: Date.now(), type: 'system', text: 'This support ticket has been resolved.' }]);
       }
-
-      socketRef.current = io(API_URL);
-
-      const userIdForSocket = user?.id || 'guest_user';
-
-      socketRef.current.emit(
-        'join_user_room',
-        userIdForSocket
-      );
-
-      socketRef.current.on(
-        'receive_admin_reply',
-        (data) => {
-
-          const adminMsg = {
-            id: Date.now(),
-            sender: 'admin',
-            text: data.text,
-            time: data.time
-          };
-
-          setMessages(prev => [...prev, adminMsg]);
-
-          setIsEscalated(true);
-        }
-      );
     }
+  });
 
+  // Initial Context Load
+  useEffect(() => {
+    if (isOpen && messages.length === 0) {
+      const initialGreeting = {
+        id: `init-${Date.now()}`,
+        sender: 'bot',
+        type: 'text',
+        text: `Hi ${user?.name || 'there'}! Welcome to Jack Essentials Support. I am Jack, your AI Support Manager. Kaise help kar sakta hoon aaj aapki?`,
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      };
+      
+      const initialMsgs = [initialGreeting];
+      
+      // If contextData exists, optionally prepend a context hint message (invisible/system or visual)
+      // Here we render it safely at the top of the chat area, per the requirement.
+      setMessages(initialMsgs);
+    }
+    
+    // Cleanup pending API calls on unmount or chat close
     return () => {
-
-      if (socketRef.current) {
-        socketRef.current.disconnect();
+      if (!isOpen && abortControllerRef.current) {
+        abortControllerRef.current.abort();
       }
     };
-
     // eslint-disable-next-line react-hooks/exhaustive-deps
-
   }, [isOpen, user]);
 
-
-
+  // Auto-scroll
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({
-      behavior: 'smooth'
-    });
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping]);
 
-
-
-  // ✅ UPDATED HANDLE SEND
-  const handleSend = async (
-    text,
-    predefinedReply = null
-  ) => {
-
+  const handleSend = async (text, predefinedReply = null) => {
     if (!text.trim()) return;
 
     const userMsg = {
-      id: Date.now(),
+      id: `usr-${Date.now()}-${Math.random()}`,
       sender: 'user',
+      type: 'text',
       text,
-      time: new Date().toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit'
-      })
+      status: 'sent',
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
     setMessages(prev => [...prev, userMsg]);
 
-    setInputText('');
-
-
-
-    // ✅ HUMAN ESCALATED
-    if (isEscalated) {
-
-      socketRef.current.emit(
-        'escalate_to_human',
-        {
-          userId: user?.id || 'guest_user',
-          userName: user?.name || 'Guest',
-          orderId: contextData?.id || null,
-          history: [
-            {
-              sender: 'user',
-              text
-            }
-          ]
-        }
-      );
-
+    // Handle Human Escapement Loop
+    if (isEscalated || supportStatus === SUPPORT_STATUS.HUMAN_ACTIVE || supportStatus === SUPPORT_STATUS.ESCALATING) {
+      escalate({
+        userId: user?.id || 'guest_user',
+        userName: user?.name || 'Guest',
+        orderId: contextData?.id || null,
+        history: [{ sender: 'user', text }]
+      });
       return;
     }
 
-
-
     setIsTyping(true);
-
     let rawBotResponse = predefinedReply;
 
-
-
-    // ✅ AI RESPONSE (Hybrid token retrieval added for secure backend auth)
+    // Call API defensively
     if (!rawBotResponse) {
-      const activeToken = typeof window !== 'undefined' 
-        ? (localStorage.getItem('token') || localStorage.getItem('admin_token') || localStorage.getItem('jack_token')) 
-        : null;
-
+      abortControllerRef.current = new AbortController();
       rawBotResponse = await fetchAIResponse({
         userText: text,
         messages,
         contextData,
         user,
         BACKEND_API_URL,
-        token: activeToken
+        token: null, // Let chatBrain automatically resolve from LocalStorage for safety
+        signal: abortControllerRef.current.signal
       });
     }
 
-
-
-    // ✅ PROCESS RESPONSE
-    let {
-      finalBotText,
-      triggerEscalation
-    } = processBotResponse(rawBotResponse);
-
-    // 🔥 FIX: Prevent false-positive immediate escalation on simple greetings/casual inputs
-    const lowerText = text.toLowerCase().trim();
-    const simpleGreetings = ['hello', 'hi', 'hey', 'good morning', 'good afternoon', 'good evening', 'sup', 'helo', 'namaste'];
-    if (simpleGreetings.includes(lowerText)) {
-      triggerEscalation = false;
+    if (rawBotResponse === null) {
+      // Aborted request
+      setIsTyping(false);
+      return; 
     }
 
+    // Process Bot Response
+    const { finalBotText, triggerEscalation, structuredData } = processBotResponse(rawBotResponse);
 
+    // Prevent false-positive immediate escalation on simple greetings
+    const lowerText = text.toLowerCase().trim();
+    const simpleGreetings = ['hello', 'hi', 'hey', 'good morning', 'good afternoon', 'good evening', 'sup', 'helo', 'namaste'];
+    let finalEscalation = triggerEscalation;
+    if (simpleGreetings.includes(lowerText)) {
+      finalEscalation = false;
+    }
 
     const botMsg = {
-      id: Date.now() + 1,
+      id: `bot-${Date.now()}-${Math.random()}`,
       sender: 'bot',
+      type: 'text',
       text: finalBotText,
-      time: new Date().toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit'
-      })
+      structuredData: structuredData,
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
-
-
     setMessages(prev => [...prev, botMsg]);
-
     setIsTyping(false);
 
-
-
-    // ✅ ESCALATION
-    if (triggerEscalation) {
-
+    // Handle True Escalation Trigger
+    if (finalEscalation) {
       setIsEscalated(true);
-
-      socketRef.current.emit(
-        'escalate_to_human',
-        {
-          userId: user?.id || 'guest_user',
-          userName: user?.name || 'Guest',
-          orderId: contextData?.id || null,
-          history: [...messages, userMsg].slice(-5)
-        }
-      );
+      setSupportStatus(SUPPORT_STATUS.ESCALATING);
+      setMessages(prev => [...prev, { id: Date.now(), type: 'system', text: 'Transferring chat to a support agent...' }]);
+      
+      escalate({
+        userId: user?.id || 'guest_user',
+        userName: user?.name || 'Guest',
+        orderId: contextData?.id || null,
+        history: [...messages, userMsg].slice(-10) // Sending context up to 10 messages safely
+      });
     }
   };
 
-
-
   return (
     <AnimatePresence>
-
       {isOpen && (
         <>
-
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -227,241 +182,61 @@ const Chat = ({ isOpen, onClose, contextData, user }) => {
             className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[100]"
           />
 
-
-
           <motion.div
             initial={{ x: '100%', opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: '100%', opacity: 0 }}
-            transition={{
-              type: 'spring',
-              damping: 25,
-              stiffness: 200
-            }}
+            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
             className="fixed top-0 right-0 h-full w-full sm:w-[400px] bg-slate-50 shadow-2xl z-[101] flex flex-col border-l border-slate-200"
           >
+            <ChatHeader onClose={onClose} supportStatus={supportStatus} agent={agent} />
 
-            {/* HEADER */}
-            <div className={`text-white p-4 sm:p-5 flex items-center justify-between shadow-md z-10 transition-colors ${isEscalated ? 'bg-indigo-600' : 'bg-slate-900'}`}>
-
-              <div>
-                <h2 className="font-black text-lg flex items-center gap-2">
-                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                  Jack Support
-                </h2>
-
-                <p className="text-xs text-slate-300 mt-0.5">
-                  {
-                    isEscalated
-                      ? 'Live Human Agent'
-                      : 'AI Assistant (Powered by Groq)'
-                  }
-                </p>
-              </div>
-
-              <button
-                onClick={onClose}
-                className="p-2 hover:bg-white/10 rounded-full transition-colors text-slate-100"
-              >
-                <FiX size={24} />
-              </button>
-
-            </div>
-
-
-
-            {/* ORDER CONTEXT */}
-            {contextData && (
-
-              <div className="bg-white p-4 border-b border-slate-200 flex items-center gap-4 shadow-sm z-10">
-
+            {/* ORDER CONTEXT RENDERED SAFELY */}
+            {contextData && contextData.items?.[0] && (
+              <div className="bg-white p-4 border-b border-slate-200 flex items-center gap-4 shadow-sm z-10 flex-shrink-0">
                 <div className="w-16 h-16 bg-slate-100 rounded-xl overflow-hidden border border-slate-200 flex-shrink-0">
-
                   <img
-                    src={
-                      contextData.items?.[0]?.image ||
-                      'https://via.placeholder.com/150'
-                    }
+                    src={contextData.items[0].image || 'https://via.placeholder.com/150'}
                     alt="Context Product"
                     className="w-full h-full object-cover"
                   />
-
                 </div>
-
                 <div>
-
                   <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded uppercase tracking-widest">
                     Order Context
                   </span>
-
                   <h3 className="font-bold text-slate-800 text-sm mt-1 line-clamp-1">
-                    {
-                      contextData.items?.[0]?.title ||
-                      'Order Details'
-                    }
+                    {contextData.items[0].title || 'Order Details'}
                   </h3>
-
                   <p className="text-xs text-slate-500 font-mono mt-0.5">
                     ID: #{contextData.id}
                   </p>
-
                 </div>
-
               </div>
             )}
 
-
-
-            {/* CHAT */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50">
-
+            <div className="flex-1 overflow-y-auto p-4 bg-slate-50 relative">
               {messages.map((msg) => (
-
-                <div
-                  key={msg.id}
-                  className={`flex flex-col max-w-[85%] ${
-                    msg.sender === 'user'
-                      ? 'ml-auto items-end'
-                      : 'mr-auto items-start'
-                  }`}
-                >
-
-                  <div
-                    className={`p-3.5 rounded-2xl text-sm shadow-sm leading-relaxed 
-                    ${
-                      msg.sender === 'user'
-                        ? 'bg-[#FF4500] text-white rounded-tr-sm'
-                        : msg.sender === 'admin'
-                        ? 'bg-indigo-100 border border-indigo-200 text-indigo-900 rounded-tl-sm'
-                        : 'bg-white border border-slate-200 text-slate-800 rounded-tl-sm'
-                    }`}
-                  >
-
-                    {msg.sender === 'admin' && (
-                      <span className="block text-[10px] font-black text-indigo-500 uppercase tracking-widest mb-1">
-                        Support Agent
-                      </span>
-                    )}
-
-                    {msg.text}
-
-                  </div>
-
-                  <span className="text-[10px] text-slate-400 mt-1 px-1 font-medium">
-                    {msg.time}
-                  </span>
-
-                </div>
+                <MessageBubble key={msg.id} msg={msg} />
               ))}
 
-
-
-              {/* TYPING */}
               {isTyping && (
-
-                <div className="flex bg-white border border-slate-200 rounded-2xl rounded-tl-sm p-4 shadow-sm max-w-[80px] mr-auto items-center gap-1.5">
-
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex bg-white border border-slate-200 rounded-2xl rounded-tl-sm p-4 shadow-sm max-w-[80px] mr-auto items-center gap-1.5 mb-4">
                   <div className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce"></div>
-
-                  <div
-                    className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce"
-                    style={{ animationDelay: '0.1s' }}
-                  ></div>
-
-                  <div
-                    className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce"
-                    style={{ animationDelay: '0.2s' }}
-                  ></div>
-
-                </div>
+                  <div className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                  <div className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                </motion.div>
               )}
-
-              <div ref={chatEndRef} />
-
+              <div ref={chatEndRef} className="h-1" />
             </div>
 
-
-
-            {/* QUICK OPTIONS */}
-            {
-              messages.length < 3 &&
-              !isTyping &&
-              !isEscalated && (
-
-                <div className="p-3 bg-slate-50 border-t border-slate-200 flex overflow-x-auto scrollbar-hide gap-2 flex-shrink-0">
-
-                  {predefinedOptions.map((opt, idx) => (
-
-                    <button
-                      key={idx}
-                      onClick={() =>
-                        handleSend(
-                          opt.label,
-                          opt.reply
-                        )
-                      }
-                      className="whitespace-nowrap px-4 py-2 bg-white border border-[#FF4500]/30 text-[#FF4500] hover:bg-[#FF4500] hover:text-white rounded-full text-xs font-bold transition-colors shadow-sm"
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-
-                </div>
-              )
-            }
-
-
-
-            {/* INPUT */}
-            <div className="p-4 bg-white border-t border-slate-200 pb-safe">
-
-              <div className="flex items-center gap-3 relative">
-
-                <input
-                  type="text"
-                  value={inputText}
-                  onChange={(e) =>
-                    setInputText(e.target.value)
-                  }
-                  onKeyDown={(e) =>
-                    e.key === 'Enter' &&
-                    handleSend(inputText)
-                  }
-                  placeholder="Type your issue..."
-                  className="flex-1 bg-slate-50 border border-slate-200 rounded-full py-3.5 pl-5 pr-12 text-sm focus:outline-none focus:border-[#FF4500] focus:bg-white transition-colors"
-                />
-
-                <button
-                  onClick={() =>
-                    handleSend(inputText)
-                  }
-                  disabled={
-                    !inputText.trim() || isTyping
-                  }
-                  className="absolute right-2 p-2 bg-[#FF4500] disabled:bg-slate-300 text-white rounded-full hover:bg-orange-600 transition-colors"
-                >
-                  <FiSend
-                    size={16}
-                    className="relative right-0.5 top-0.5"
-                  />
-                </button>
-
-              </div>
-
-
-
-              <p className="text-center text-[10px] text-slate-400 mt-3 font-medium flex items-center justify-center gap-1">
-
-                <FiCheckCircle />
-
-                Secured by Jack Support {
-                  isEscalated ? '' : 'API'
-                }
-
-              </p>
-
-            </div>
-
+            <ChatInput 
+              onSend={handleSend} 
+              isTyping={isTyping} 
+              isEscalated={isEscalated} 
+              messagesCount={messages.length} 
+              supportStatus={supportStatus}
+            />
           </motion.div>
         </>
       )}
