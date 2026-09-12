@@ -9,7 +9,7 @@ const ChatHeader = ({ onClose, supportStatus, agent }) => {
       case 'HUMAN_ACTIVE': return { text: `Live with ${agent?.name || 'Support'}`, color: 'bg-green-400', badge: 'bg-indigo-600' };
       case 'RESOLVED': return { text: 'Resolved', color: 'bg-slate-400', badge: 'bg-slate-800' };
       case 'AI_ACTIVE':
-      default: return { text: 'AI Assistant (Powered by Groq)', color: 'bg-green-500', badge: 'bg-slate-900' };
+      default: return { text: 'AI Assistant (Powered by Gemini)', color: 'bg-green-500', badge: 'bg-slate-900' }; // 🔥 Updated to Gemini
     }
   };
 

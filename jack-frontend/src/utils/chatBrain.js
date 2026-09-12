@@ -56,7 +56,7 @@ Reply EXACTLY: [TRANSFER_TO_AGENT]
 `;
 };
 
-// ✅ AI RESPONSE FUNCTION PRESERVED
+// ✅ AI RESPONSE FUNCTION PRESERVED & FIXED FOR NEW BACKEND
 export const fetchAIResponse = async ({
   userText,
   messages,
@@ -109,7 +109,10 @@ export const fetchAIResponse = async ({
 
     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
     const data = await response.json();
-    return data.reply || data.text || fallbackMessage;
+    
+    // 🔥 THE FIX: Yahan data.message.content add kiya gaya hai taaki naya backend format read ho sake
+    return data?.message?.content || data.reply || data.text || fallbackMessage;
+    
   } catch (error) {
     if (error.name === 'AbortError') return null; // Silently handle cancellations
     console.error("Backend API Error:", error);

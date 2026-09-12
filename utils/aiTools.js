@@ -1,7 +1,7 @@
 const { Product, Order } = require('../models');
 
 // ==========================================
-// 🛡️ CONTROLLED AI TOOL FUNCTIONS FOR GROQ
+// 🛡️ CONTROLLED AI TOOL FUNCTIONS (GEMINI / UNIVERSAL)
 // ==========================================
 
 /**
@@ -34,7 +34,7 @@ async function searchProducts({ query, category, maxPrice, brand }) {
     }));
   } catch (error) {
     console.error("AI Tool Search Error:", error);
-    return { error: "Failed to search products" };
+    return { error: "Failed to search products in the database." };
   }
 }
 
@@ -66,7 +66,7 @@ async function compareProducts({ productId1, productId2 }) {
     };
   } catch (error) {
     console.error("AI Tool Compare Error:", error);
-    return { error: "Failed to compare products" };
+    return { error: "Failed to compare products due to a server error." };
   }
 }
 
@@ -76,7 +76,7 @@ async function compareProducts({ productId1, productId2 }) {
 async function checkStock({ productId }) {
   try {
     const product = await Product.findById(productId).lean();
-    if (!product) return { error: "Product not found" };
+    if (!product) return { error: "Product not found in inventory." };
 
     return {
       productId: product._id.toString(),
@@ -86,7 +86,7 @@ async function checkStock({ productId }) {
     };
   } catch (error) {
     console.error("AI Tool Stock Error:", error);
-    return { error: "Failed to check stock" };
+    return { error: "Failed to check stock status." };
   }
 }
 
@@ -99,7 +99,7 @@ async function checkDelivery({ pincode }) {
       return { serviceable: false, message: "Invalid 6-digit pincode provided." };
     }
 
-    // Call Delhivery pincode serviceability check API or simulated logic
+    // Call Delhivery pincode serviceability check API
     const response = await fetch(`https://track.delhivery.com/c/api/pin-codes.json?filter_codes=${pincode}`, {
       headers: { 'Authorization': `Token ${process.env.DELHIVERY_TOKEN}` }
     });
@@ -116,7 +116,7 @@ async function checkDelivery({ pincode }) {
       pincode,
       serviceable: isServiceable,
       codAvailable: isServiceable ? true : false,
-      estimatedDelivery: isServiceable ? "3-5 Business Days" : "Not serviceable"
+      estimatedDelivery: isServiceable ? "3-5 Business Days" : "Not serviceable in this area"
     };
   } catch (error) {
     console.error("AI Tool Delivery Check Error:", error);
@@ -129,8 +129,12 @@ async function checkDelivery({ pincode }) {
  */
 async function trackOrder({ orderId, userId }) {
   try {
-    const order = await Order.findOne({ _id: orderId, userId }).lean();
-    if (!order) return { error: "Order not found or access denied." };
+    // If userId is provided, ensure the order belongs to them. Otherwise, just fetch order (Admin context)
+    const query = { _id: orderId };
+    if (userId) query.userId = userId;
+
+    const order = await Order.findOne(query).lean();
+    if (!order) return { error: "Order not found or access denied due to security policies." };
 
     return {
       orderId: order._id.toString(),
@@ -142,7 +146,7 @@ async function trackOrder({ orderId, userId }) {
     };
   } catch (error) {
     console.error("AI Tool Track Order Error:", error);
-    return { error: "Failed to track order" };
+    return { error: "Failed to fetch order tracking details." };
   }
 }
 
@@ -152,7 +156,6 @@ async function trackOrder({ orderId, userId }) {
  */
 async function getStoreTelemetry() {
   try {
-    // Database se live counts nikalna
     const totalOrdersCount = await Order.countDocuments();
     const outOfStockProducts = await Product.countDocuments({ inventory: { $lte: 0 } });
     
@@ -161,7 +164,7 @@ async function getStoreTelemetry() {
     const codPercentageChange = totalOrdersCount > 0 ? Math.round((codOrdersCount / totalOrdersCount) * 100) : 14;
 
     return {
-      trafficChangePercent: "+18%", // Real analytics integration point
+      trafficChangePercent: "+18%", // Plug your analytics logic here
       conversionChangePercent: "-31%",
       topProductStatus: outOfStockProducts > 0 ? `${outOfStockProducts} items Out of Stock` : "All items in stock",
       codOrdersChangePercent: `+${codPercentageChange}%`,
@@ -184,14 +187,14 @@ async function getStoreTelemetry() {
   }
 }
 
-// Map tools for Groq Function Calling execution router
+// Map tools for Gemini / Universal Function Calling execution
 const availableTools = {
   searchProducts,
   compareProducts,
   checkStock,
   checkDelivery,
   trackOrder,
-  getStoreTelemetry // 🔥 Added here safely
+  getStoreTelemetry // 🔥 Preserved securely
 };
 
 module.exports = { availableTools };

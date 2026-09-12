@@ -1,6 +1,11 @@
 require('dotenv').config();
+const dns = require('dns');
 
-// 1. PURANA FUNCTION (Preserved & Fixed with Error Handling)
+// 🔥 THE FIX: Node.js ko strictly IPv4 use karne ke liye force karein
+// Isse "fetch failed" error hamesha ke liye solve ho jayega
+dns.setDefaultResultOrder('ipv4first');
+
+// 1. PURANA FUNCTION (Preserved)
 async function listGroqModels() {
     const apiKey = process.env.GROQ_API_KEY;
     if(!apiKey) return console.log("⚠️ Groq Key nahi mili! (.env check karein)");
@@ -21,10 +26,12 @@ async function listGroqModels() {
     }
 }
 
-// 2. NAYA FUNCTION (Added for Gemini AI Integration)
+// 2. NAYA FUNCTION (Fixed for Gemini with Native Fetch)
 async function listGeminiModels() {
     const apiKey = process.env.GEMINI_API_KEY;
     if(!apiKey) return console.log("⚠️ Gemini Key nahi mili! (.env check karein)");
+
+    console.log("⏳ Gemini API se available models fetch ho rahe hain...\n");
 
     try {
         const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`, {
@@ -35,7 +42,7 @@ async function listGeminiModels() {
         
         const data = await res.json();
         
-        console.log("\n🚀 All Active Gemini Models:");
+        console.log("🚀 All Active Gemini Models:");
         if (data.models && data.models.length > 0) {
             data.models.forEach(m => {
                 // Remove 'models/' prefix for cleaner output
@@ -44,11 +51,11 @@ async function listGeminiModels() {
             });
         }
     } catch (error) {
-        console.error("Gemini Models fetch error:", error.message);
+        console.error("❌ Gemini Models fetch error:", error.message);
     }
 }
 
-// 3. MAIN EXECUTION (Runs both safely without breaking)
+// 3. MAIN EXECUTION
 async function runAll() {
     console.log("Checking API Models...\n");
     await listGroqModels();

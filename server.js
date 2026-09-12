@@ -9,12 +9,21 @@ const { createClient } = require("redis");
 const helmet = require('helmet'); 
 const rateLimit = require('express-rate-limit'); 
 const jwt = require('jsonwebtoken');
-const cron = require('node-cron'); // 🔥 Cron for scheduled tasks
-const winston = require('winston'); // 🔥 Production Structured Logger
-const cookieParser = require('cookie-parser'); // 🔥 CRITICAL FIX: Added cookie-parser
+const cron = require('node-cron'); 
+const winston = require('winston'); 
+const cookieParser = require('cookie-parser'); 
 
 // 🔥 SINGLE SOURCE OF TRUTH: Import Models cleanly
 const { User, Ticket, Warehouse, Order, Product, Review, Question, PriceAlert, StockAlert } = require('./models');
+
+// 🔥 IMPORT NEW PREMIUM SUPPORT MODELS
+const SupportTicket = require('./models/SupportTicket');
+const SupportConversation = require('./models/SupportConversation');
+const SupportAgent = require('./models/SupportAgent');
+
+// 🔥 IMPORT NEW PREMIUM SUPPORT SERVICES
+const escalationService = require('./services/support/escalationService');
+const conversationService = require('./services/support/conversationService');
 
 // 🔥 IMPORT YOUR SECURE MIDDLEWARES
 const { protect, admin } = require('./middleware/authMiddleware');
@@ -134,11 +143,11 @@ const corsOptions = {
   },
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID", "Idempotency-Key"],
-  credentials: true // 🔥 REQUIRED FOR COOKIES & HEADERS TO WORK ACROSS ORIGINS
+  credentials: true 
 };
 
 app.use(cors(corsOptions));
-app.options(/(.*)/, cors(corsOptions)); // 🔥 Explicit preflight handling for cross-domain stability
+app.options(/(.*)/, cors(corsOptions)); 
 
 // ==========================================
 // 🛡️ GRANULAR ENDPOINT-SPECIFIC RATE LIMITERS
@@ -331,8 +340,16 @@ app.use('/', require('./routes/googleMerchantFeed'));
 app.use('/', require('./routes/subscribers'));
 app.use('/', require('./routes/ssrProduct'));
 
-// 🔥 MOUNTED: Updated AI Assistant & Failover Routes (Includes chat, catalog parse, and copilot analysis)
+// 🔥 LEGACY AI CHAT ROUTE (Preserved & Upgraded to Gemini)
 app.use('/', aiChatLimiter, require('./routes/aiAssistant'));
+
+// 🔥 NEW PREMIUM SUPPORT ARCHITECTURE ROUTES
+app.use('/api/support', aiChatLimiter, require('./routes/support'));
+app.use('/api/support/agents', require('./routes/supportAgent'));
+app.use('/api/support/conversations', require('./routes/supportConversation'));
+app.use('/api/support/knowledge', require('./routes/supportKnowledge'));
+app.use('/api/support/tickets', require('./routes/supportTickets'));
+app.use('/api/support/webhooks', require('./routes/supportWebhooks'));
 
 app.use('/', require('./routes/reviews'));
 app.use('/', require('./routes/questions'));
@@ -353,7 +370,6 @@ app.post('/api/generate-catalog', protect, admin, async (req, res) => {
 
     const cleanBase64 = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
     
-    // 🔥 Strict prompt to ensure valid JSON response from Gemini
     const prompt = `You are an expert E-commerce SEO specialist. Analyze this product image and return ONLY a valid JSON object with these exact keys: title, description, category, brand, price, mrp, sku, color, size, material, searchKeywords. Do not include any markdown formatting or extra text outside the JSON.`;
 
     let result = null;
@@ -371,7 +387,7 @@ app.post('/api/generate-catalog', protect, admin, async (req, res) => {
     if (!result) throw lastError || new Error("All Gemini API Keys Failed");
 
     const responseText = result.response.text().trim();
-    console.log("🤖 Raw Gemini Catalog Response:", responseText); // 🔥 Debug log
+    console.log("🤖 Raw Gemini Catalog Response:", responseText);
 
     let finalJson;
     try {
@@ -390,14 +406,14 @@ app.post('/api/generate-catalog', protect, admin, async (req, res) => {
 });
 
 // ==========================================
-// 🔥 SECURED: HARDENED AI CHAT ROUTE (FIXED: REMOVED PROTECT MIDDLEWARE FOR GUEST/SUBDOMAIN ACCESS)
+// 🔥 SECURED: HARDENED AI CHAT ROUTE (UPGRADED TO GEMINI)
 // ==========================================
 app.post('/api/chat', aiChatLimiter, async (req, res) => {
   try {
     const { message, chatHistory, systemInstruction, languageStyle } = req.body;
-    const apiKey = process.env.GROQ_API_KEY || process.env.GEMINI_API_KEY;
+    const apiKeys = getGeminiKeys();
 
-    if (!apiKey) return res.status(500).json({ error: 'AI Service configuration missing' });
+    if (apiKeys.length === 0) return res.status(500).json({ error: 'Gemini AI Service configuration missing' });
 
     if (!message || typeof message !== 'string' || message.trim().length === 0) {
       return res.status(400).json({ error: 'Message cannot be empty' });
@@ -408,29 +424,42 @@ app.post('/api/chat', aiChatLimiter, async (req, res) => {
 
     const serverSystemInstruction = systemInstruction || "You are an official, helpful, and polite customer support assistant for Jack Essentials. Assist customers with store products, orders, and policies safely and accurately.";
 
-    const url = "https://api.groq.com/openai/v1/chat/completions";
-    const payload = {
-      model: "llama-3.3-70b-versatile",
-      messages: [ 
-        { role: "system", content: serverSystemInstruction }, 
-        ...(Array.isArray(chatHistory) ? chatHistory.slice(-10) : []), 
-        { role: "user", content: message } 
-      ],
-      temperature: 0.7
-    };
+    // Gemini expects history in specific format: { role: "user" | "model", parts: [{ text: "..." }] }
+    const formattedHistory = (Array.isArray(chatHistory) ? chatHistory.slice(-10) : []).map(msg => ({
+      role: msg.role === "assistant" ? "model" : "user",
+      parts: [{ text: msg.content || msg.text || "" }]
+    }));
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-      body: JSON.stringify(payload)
-    });
+    let result = null;
+    let lastError = null;
 
-    const data = await response.json();
-    if (!response.ok) return res.status(response.status).json({ error: 'AI Service Error', details: data });
+    for (const currentKey of apiKeys) {
+      try {
+        const genAI = new GoogleGenerativeAI(currentKey);
+        const model = genAI.getGenerativeModel({ 
+          model: "gemini-3.5-flash",
+          systemInstruction: serverSystemInstruction
+        });
 
-    res.json({ reply: data.choices[0].message.content.trim() });
+        const chat = model.startChat({
+          history: formattedHistory,
+          generationConfig: { temperature: 0.7 }
+        });
+
+        result = await chat.sendMessage(message);
+        break;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+
+    if (!result) throw lastError || new Error("All Gemini API Keys Failed");
+
+    const replyText = result.response.text().trim();
+    res.json({ reply: replyText });
+    
   } catch (error) { 
-    console.error("AI Chat Error:", error);
+    console.error("AI Chat Error (Gemini):", error);
     res.status(500).json({ 
       error: 'Server code crash',
       reply: req.body?.languageStyle === 'hinglish' 
@@ -457,22 +486,29 @@ io.use(async (socket, next) => {
       token = cookies.admin_token || cookies.token || token;
     }
 
-    if (!token) return next(new Error('Authentication Error: No token provided'));
+    if (!token) {
+      socket.user = { role: 'guest', _id: `guest_${socket.id}`, name: 'Guest User' };
+      return next();
+    }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const user = await User.findById(decoded.id).select('-password');
     
-    if (!user || user.isLocked) return next(new Error('Authentication Error: User not found or locked'));
+    if (!user || user.isLocked) {
+      socket.user = { role: 'guest', _id: `guest_${socket.id}`, name: 'Guest User' };
+      return next();
+    }
     
     socket.user = user; 
     next();
   } catch (err) {
-    next(new Error('Authentication Error: Invalid token'));
+    socket.user = { role: 'guest', _id: `guest_${socket.id}`, name: 'Guest User' };
+    next();
   }
 });
 
 io.on('connection', (socket) => {
-  console.log(`🔒 Secure Connection: ${socket.user.email} (${socket.id})`);
+  console.log(`🔒 Secure Connection: ${socket.user.email || socket.user.name} (${socket.id})`);
 
   if (socket.user.role === 'admin') {
     socket.join('admin_room');
@@ -495,41 +531,93 @@ io.on('connection', (socket) => {
     io.to(userId).emit('force_logout');
   });
 
+  // 🔥 FIXED & UPGRADED: Support Escalation (Uses New Models + Old Ticket Fallback for safety)
   socket.on('escalate_to_human', async (data) => {
     try {
       const secureUserId = socket.user._id.toString();
-      
-      let ticket = await Ticket.findOne({ userId: secureUserId, status: "open" });
-      if (!ticket) {
-        ticket = new Ticket({
+      const conversationId = data.conversationId || `conv-${secureUserId}`;
+
+      // 1. New Support Architecture Flow
+      const conversation = await conversationService.getOrCreateConversation(conversationId, secureUserId, socket.id);
+      await escalationService.triggerEscalation(conversation, 'EXPLICIT_REQUEST', io);
+
+      // 2. Legacy Ticket Flow (Preserved so existing Admin dash doesn't break if still using old Ticket schema)
+      let legacyTicket = await Ticket.findOne({ userId: secureUserId, status: "open" });
+      if (!legacyTicket) {
+        legacyTicket = new Ticket({
           userId: secureUserId, userName: socket.user.name || 'Guest', orderId: data.orderId,
           messages: (data.history || []).map(msg => ({ sender: msg.sender, text: msg.text }))
         });
       } else {
-          (data.history || []).forEach(msg => { ticket.messages.push({ sender: msg.sender, text: msg.text }); });
+          (data.history || []).forEach(msg => { legacyTicket.messages.push({ sender: msg.sender, text: msg.text }); });
       }
-      await ticket.save();
+      await legacyTicket.save();
       
-      io.to('admin_room').to('support').emit('ticket.created', ticket);
-      io.to('admin_room').emit('new_ticket_alert', ticket);
+      io.to('admin_room').to('support').emit('ticket.created', legacyTicket);
+      io.to('admin_room').emit('new_ticket_alert', legacyTicket);
+      
     } catch (err) { console.error("Ticket escalation error", err); }
   });
 
+  // 🔥 FIXED & UPGRADED: Admin Reply (Routes to both new and old systems safely)
   socket.on('admin_reply', async (data) => {
     try {
       if (socket.user.role !== 'admin') return; 
 
-      const ticket = await Ticket.findById(data.ticketId);
-      if (ticket) {
-        ticket.messages.push({ sender: 'admin', text: data.text });
-        await ticket.save();
-        io.to(ticket.userId).emit('receive_admin_reply', { sender: 'admin', text: data.text, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) });
+      // Support for New Support Architecture
+      const supportTicket = await SupportTicket.findById(data.ticketId);
+      if (supportTicket) {
+        const targetRoom = data.userId || supportTicket.customerId?.toString() || supportTicket.conversationId;
+        io.to(targetRoom).emit('receive_admin_reply', {
+          id: `admin-${Date.now()}`,
+          sender: 'admin',
+          text: data.text,
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        });
+        await SupportConversation.findOneAndUpdate(
+          { conversationId: supportTicket.conversationId },
+          { lastMessageAt: Date.now() }
+        );
+      }
+
+      // Legacy Ticket Support
+      const legacyTicket = await Ticket.findById(data.ticketId);
+      if (legacyTicket) {
+        legacyTicket.messages.push({ sender: 'admin', text: data.text });
+        await legacyTicket.save();
+        io.to(legacyTicket.userId).emit('receive_admin_reply', { 
+          sender: 'admin', 
+          text: data.text, 
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
+        });
       }
     } catch (err) { console.error(err); }
   });
 
+  // 🔥 NEW SUPPORT EVENT: Agent Joined Notification
+  socket.on('support:agent_joined', async (data) => {
+    try {
+      if (socket.user.role !== 'admin') return;
+      io.to(data.conversationId).emit('agent_joined', {
+        agent: {
+          id: socket.user._id,
+          name: socket.user.name,
+          department: 'Support'
+        }
+      });
+    } catch (err) { console.error("Support Socket Agent Join Error:", err); }
+  });
+
+  // 🔥 NEW SUPPORT EVENT: Typing Indicator
+  socket.on('support:typing', (data) => {
+    socket.to(data.room).emit('support:typing', { 
+      sender: socket.user.role, 
+      isTyping: data.isTyping 
+    });
+  });
+
   socket.on('join_user_room', (userId) => {
-    if (socket.user._id.toString() === userId || socket.user.role === 'admin') {
+    if (socket.user._id.toString() === userId || socket.user.role === 'admin' || socket.user.role === 'guest') {
       socket.join(userId);
     }
   });

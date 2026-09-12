@@ -1,0 +1,62 @@
+﻿{
+    "architecture":  {
+                         "aiEngine":  [
+                                          "aiGateway",
+                                          "aiPlanner",
+                                          "aiResponseService",
+                                          "aiMemory",
+                                          "aiSafety",
+                                          "languageService",
+                                          "confidenceService"
+                                      ],
+                         "tools":  [
+                                       "orderTools",
+                                       "shipmentTools",
+                                       "paymentTools",
+                                       "refundTools",
+                                       "returnTools",
+                                       "replacementTools",
+                                       "cancellationTools",
+                                       "productTools",
+                                       "customerTools",
+                                       "policyTools",
+                                       "helpCenterTools",
+                                       "webSearchTools",
+                                       "supportTools"
+                                   ],
+                         "customerChat":  [
+                                              "SupportChat",
+                                              "OrderStatusCard",
+                                              "ShipmentTimeline",
+                                              "TicketCreatedCard",
+                                              "AgentConnectedCard",
+                                              "HumanModeBanner"
+                                          ],
+                         "supportEngine":  [
+                                               "supportOrchestrator",
+                                               "conversationService",
+                                               "messageService",
+                                               "escalationService",
+                                               "ticketService",
+                                               "assignmentService",
+                                               "slaService",
+                                               "customerContextService",
+                                               "supportPolicyService",
+                                               "knowledgeService"
+                                           ]
+                     },
+    "repository":  "jacktempweb",
+    "safeMode":  {
+                     "deleteExisting":  false,
+                     "overwriteExisting":  false
+                 },
+    "importantRule":  "Authoritative backend data must be used for orders, shipping, payments, refunds and policies. AI must never invent unavailable data.",
+    "generatedAt":  "2026-09-09T18:37:34.7070855+05:30",
+    "existingCoreFilesToRefactorLater":  [
+                                             "routes/aiAssistant.js",
+                                             "utils/aiTools.js",
+                                             "utils/chatBrain.js",
+                                             "jack-frontend/src/pages/Chat.jsx"
+                                         ],
+    "project":  "Jack Essentials Website"
+}
