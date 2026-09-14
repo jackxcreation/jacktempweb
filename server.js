@@ -42,7 +42,7 @@ require('./workers/analyticsWorker');
 const { processSmartPriceDropRecommendations } = require('./services/smartAlertService');
 
 // 🔥 IMPORT WHATSAPP ROUTES (OTP & WEBHOOK)
-const whatsappRoutes = require('./routes/whatsappRoutes');
+const whatsappRoutes = require('./routes/whatsapp');
 
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
