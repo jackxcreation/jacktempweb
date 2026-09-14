@@ -1,3 +1,4 @@
+// routes/authRouter.js
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
@@ -251,11 +252,11 @@ router.post('/register', registerLimiter, async (req, res) => {
     });
 
     await newUser.save();
-    res.status(201).json({ message: "Welcome to Jack Essentials! Account created successfully." });
+    return res.status(201).json({ message: "Welcome to Jack Essentials! Account created successfully." });
 
   } catch (error) {
     console.error("Registration Error:", error);
-    res.status(500).json({ error: "Internal Server Error. Please try again." });
+    return res.status(500).json({ error: "Internal Server Error. Please try again." });
   }
 });
 
@@ -376,10 +377,10 @@ router.post('/login', loginLimiter, async (req, res) => {
     user.password = undefined;
     user.twoFactorSecret = undefined;
 
-    res.json({ message: "Authentication successful.", token, user });
+    return res.json({ message: "Authentication successful.", token, user });
   } catch (error) {
     console.error("Login Error:", error);
-    res.status(500).json({ error: "An unexpected error occurred during authentication." });
+    return res.status(500).json({ error: "An unexpected error occurred during authentication." });
   }
 });
 
@@ -432,10 +433,10 @@ router.post('/social-login', loginLimiter, async (req, res) => {
     setAuthCookie(res, token, user.role);
 
     user.password = undefined;
-    res.json({ message: "Social Login Successful", token, user, isNewUser });
+    return res.json({ message: "Social Login Successful", token, user, isNewUser });
   } catch (error) {
     console.error("Social Login Error:", error);
-    res.status(500).json({ error: "Google authentication failed on server." });
+    return res.status(500).json({ error: "Google authentication failed on server." });
   }
 });
 
@@ -477,10 +478,10 @@ router.post('/send-otp', otpLimiter, async (req, res) => {
       });
     }
 
-    res.json({ message: "OTP sent to your email." });
+    return res.json({ message: "OTP sent to your email." });
   } catch (error) {
     console.error("Send OTP Error:", error);
-    res.status(500).json({ error: "Failed to send OTP." });
+    return res.status(500).json({ error: "Failed to send OTP." });
   }
 });
 
@@ -512,10 +513,10 @@ router.post('/verify-otp', resetLimiter, async (req, res) => {
       return res.status(400).json({ error: "Incorrect OTP. Please try again." });
     }
 
-    res.json({ message: "OTP Verified successfully." });
+    return res.json({ message: "OTP Verified successfully." });
   } catch (error) {
     console.error("Verify OTP Error:", error);
-    res.status(500).json({ error: "Verification failed." });
+    return res.status(500).json({ error: "Verification failed." });
   }
 });
 
@@ -565,10 +566,10 @@ router.post('/reset-password', resetLimiter, async (req, res) => {
       });
     }
 
-    res.json({ message: "Password successfully updated!" });
+    return res.json({ message: "Password successfully updated!" });
   } catch (error) {
     console.error("Reset Password Error:", error);
-    res.status(500).json({ error: "Failed to reset password." });
+    return res.status(500).json({ error: "Failed to reset password." });
   }
 });
 
@@ -596,10 +597,10 @@ router.post('/rotate-password', protect, async (req, res) => {
     user.auditLogs.push({ action: 'PASSWORD_ROTATE', details: 'Password rotated successfully from account settings', ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress });
     await user.save();
 
-    res.json({ success: true, message: "Password rotated successfully." });
+    return res.json({ success: true, message: "Password rotated successfully." });
   } catch (error) {
     console.error("Password Rotation Error:", error);
-    res.status(500).json({ error: "Failed to rotate password." });
+    return res.status(500).json({ error: "Failed to rotate password." });
   }
 });
 
@@ -619,7 +620,7 @@ router.post('/2fa/toggle', protect, async (req, res) => {
     user.auditLogs.push({ action: '2FA_TOGGLE', details: `2FA set to ${user.twoFactorEnabled}`, ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress });
     await user.save();
 
-    res.json({ 
+    return res.json({ 
       success: true, 
       twoFactorEnabled: user.twoFactorEnabled, 
       tempSecret: user.twoFactorSecret, 
@@ -627,7 +628,7 @@ router.post('/2fa/toggle', protect, async (req, res) => {
     });
   } catch (error) {
     console.error("2FA Toggle Error:", error);
-    res.status(500).json({ error: "Failed to update 2FA settings." });
+    return res.status(500).json({ error: "Failed to update 2FA settings." });
   }
 });
 
@@ -639,7 +640,7 @@ router.get('/security/audit-center', protect, async (req, res) => {
     const user = await User.findById(req.user._id).select('activeSessions loginHistory auditLogs twoFactorEnabled isLocked');
     if (!user) return res.status(404).json({ error: "User not found" });
 
-    res.json({
+    return res.json({
       success: true,
       twoFactorEnabled: user.twoFactorEnabled || false,
       isLocked: user.isLocked || false,
@@ -649,7 +650,7 @@ router.get('/security/audit-center', protect, async (req, res) => {
     });
   } catch (error) {
     console.error("Fetch Security Center Error:", error);
-    res.status(500).json({ error: "Failed to fetch security analytics." });
+    return res.status(500).json({ error: "Failed to fetch security analytics." });
   }
 });
 
@@ -664,10 +665,10 @@ router.post('/sessions/revoke', protect, async (req, res) => {
     user.auditLogs.push({ action: 'SESSION_REVOKE', details: `Revoked session ID: ${sessionId}`, ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress });
     await user.save();
 
-    res.json({ success: true, message: "Session revoked successfully." });
+    return res.json({ success: true, message: "Session revoked successfully." });
   } catch (error) {
     console.error("Revoke Session Error:", error);
-    res.status(500).json({ error: "Failed to revoke session." });
+    return res.status(500).json({ error: "Failed to revoke session." });
   }
 });
 
@@ -683,10 +684,10 @@ router.post('/sessions/logout-all', protect, async (req, res) => {
     res.clearCookie('token', cookieOptions);
     res.clearCookie('admin_token', cookieOptions);
 
-    res.json({ success: true, message: "All sessions terminated successfully." });
+    return res.json({ success: true, message: "All sessions terminated successfully." });
   } catch (error) {
     console.error("Logout All Error:", error);
-    res.status(500).json({ error: "Failed to terminate all sessions." });
+    return res.status(500).json({ error: "Failed to terminate all sessions." });
   }
 });
 
@@ -718,10 +719,10 @@ router.post('/lock-account', async (req, res) => {
     user.auditLogs.push({ action: 'EMERGENCY_LOCK', details: 'Account manually locked via security alert link', ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress });
     await user.save();
     
-    res.json({ success: true, message: "Account locked securely.", userId: user._id });
+    return res.json({ success: true, message: "Account locked securely.", userId: user._id });
   } catch (error) { 
     console.error("Lock Account Error:", error);
-    res.status(500).json({ error: "Failed to lock account." }); 
+    return res.status(500).json({ error: "Failed to lock account." }); 
   }
 });
 
@@ -777,24 +778,27 @@ router.post('/unlock-account', unlockLimiter, async (req, res) => {
     user.password = undefined;
     user.securityCode = undefined;
 
-    res.json({ success: true, message: "Account Unlocked Successfully!", token, user });
+    return res.json({ success: true, message: "Account Unlocked Successfully!", token, user });
   } catch (error) { 
     console.error("Unlock Account Critical Error:", error);
-    res.status(500).json({ error: "Failed to process account unlock." }); 
+    return res.status(500).json({ error: "Failed to process account unlock." }); 
   }
 });
 
 // ==================================================
-// 9. LOGOUT ENDPOINT
+// 9. LOGOUT ENDPOINT (Enhanced with req.sessionId fallback)
 // ==================================================
 router.post('/logout', protect, async (req, res) => {
   try {
-    if (req.user && req.user.sessionId) {
+    const targetSessionId = req.sessionId || (req.user && req.user.sessionId);
+    if (req.user && targetSessionId) {
       await User.findByIdAndUpdate(req.user._id, {
-        $pull: { activeSessions: { sessionId: req.user.sessionId } }
+        $pull: { activeSessions: { sessionId: targetSessionId } }
       });
     }
-  } catch (e) {}
+  } catch (e) {
+    console.error("Logout session pull error:", e);
+  }
 
   const cookieOptions = {
     httpOnly: true,
@@ -805,7 +809,7 @@ router.post('/logout', protect, async (req, res) => {
   res.clearCookie('token', cookieOptions);
   res.clearCookie('admin_token', cookieOptions);
 
-  res.json({ success: true, message: "Logged out successfully." });
+  return res.json({ success: true, message: "Logged out successfully." });
 });
 
 // ==================================================
@@ -818,7 +822,7 @@ router.get('/me', protect, async (req, res) => {
       return res.status(401).json({ success: false, message: 'User not found or inactive' });
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       id: user._id || user.id,
       name: user.name,
       email: user.email,
@@ -830,7 +834,7 @@ router.get('/me', protect, async (req, res) => {
     });
   } catch (error) {
     console.error("Auth /me error:", error);
-    res.status(500).json({ success: false, message: 'Server error during session validation' });
+    return res.status(500).json({ success: false, message: 'Server error during session validation' });
   }
 });
 

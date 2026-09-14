@@ -8,7 +8,7 @@ const ChatInput = ({ onSend, isTyping, isEscalated, messagesCount, supportStatus
   const [isComposing, setIsComposing] = useState(false);
 
   const handleSend = () => {
-    if (!inputText.trim() || isTyping) return;
+    if (!inputText || !inputText.trim() || isTyping) return;
     onSend(inputText.trim());
     setInputText('');
   };
@@ -21,18 +21,19 @@ const ChatInput = ({ onSend, isTyping, isEscalated, messagesCount, supportStatus
     }
   };
 
-  const isResolved = supportStatus === 'RESOLVED';
+  const upperStatus = String(supportStatus || '').toUpperCase();
+  const isResolved = upperStatus === 'RESOLVED' || upperStatus === 'CLOSED';
 
   return (
-    <div className="bg-white border-t border-slate-200 pb-safe flex flex-col">
+    <div className="bg-white border-t border-slate-200 pb-safe flex flex-col flex-shrink-0">
       {/* QUICK OPTIONS (Only show early in chat, when not escalating/resolved) */}
-      {messagesCount < 4 && !isTyping && !isEscalated && !isResolved && (
+      {messagesCount < 4 && !isTyping && !isEscalated && !isResolved && Array.isArray(predefinedOptions) && predefinedOptions.length > 0 && (
         <div className="p-3 bg-slate-50 border-b border-slate-200 flex overflow-x-auto scrollbar-hide gap-2 flex-shrink-0">
           {predefinedOptions.map((opt, idx) => (
             <button
               key={idx}
               onClick={() => onSend(opt.label, opt.reply)}
-              className="whitespace-nowrap px-4 py-2 bg-white border border-[#FF4500]/30 text-[#FF4500] hover:bg-[#FF4500] hover:text-white rounded-full text-xs font-bold transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-[#FF4500]"
+              className="whitespace-nowrap px-4 py-2 bg-white border border-[#FF4500]/30 text-[#FF4500] hover:bg-[#FF4500] hover:text-white rounded-full text-xs font-bold transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-[#FF4500] cursor-pointer"
             >
               {opt.label}
             </button>
@@ -51,21 +52,21 @@ const ChatInput = ({ onSend, isTyping, isEscalated, messagesCount, supportStatus
             onCompositionEnd={() => setIsComposing(false)}
             onKeyDown={handleKeyDown}
             disabled={isResolved || isTyping}
-            placeholder={isResolved ? "This chat is resolved." : "Type your issue..."}
+            placeholder={isResolved ? "This chat session is resolved." : "Type your issue or question..."}
             aria-label="Message Input"
-            className="flex-1 bg-slate-50 border border-slate-200 rounded-full py-3.5 pl-5 pr-12 text-sm focus:outline-none focus:border-[#FF4500] focus:bg-white transition-colors disabled:opacity-60 disabled:bg-slate-100"
+            className="flex-1 bg-slate-50 border border-slate-200 rounded-full py-3.5 pl-5 pr-12 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#FF4500] focus:bg-white transition-colors disabled:opacity-60 disabled:bg-slate-100"
           />
           <button
             onClick={handleSend}
-            disabled={!inputText.trim() || isTyping || isResolved}
+            disabled={!inputText || !inputText.trim() || isTyping || isResolved}
             aria-label="Send Message"
-            className="absolute right-2 p-2 bg-[#FF4500] disabled:bg-slate-300 text-white rounded-full hover:bg-orange-600 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#FF4500]"
+            className="absolute right-2 p-2.5 bg-[#FF4500] disabled:bg-slate-300 text-white rounded-full hover:bg-orange-600 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#FF4500] cursor-pointer shadow-sm"
           >
-            <FiSend size={16} className="relative right-0.5 top-0.5" />
+            <FiSend size={15} className="relative right-0.5 top-0.5" />
           </button>
         </div>
         <p className="text-center text-[10px] text-slate-400 mt-3 font-medium flex items-center justify-center gap-1">
-          <FiCheckCircle /> Secured by Jack Support {isEscalated ? 'Enterprise' : 'API'}
+          <FiCheckCircle className="text-emerald-500" /> Secured by Jack Support {isEscalated ? 'Enterprise' : 'API'}
         </p>
       </div>
     </div>

@@ -5,7 +5,18 @@ const DARK_BG = "#0f172a"; // Slate 900
 const LIGHT_BG = "#f8fafc"; // Slate 50
 
 // 1. Premium Dashboard Report Template
-const getReportTemplate = (data, dateRange) => {
+const getReportTemplate = (data = {}, dateRange = "Current Period") => {
+  const totalRevenue = data.totalRevenue || 0;
+  const netProfit = data.netProfit || 0;
+  const totalOrders = data.totalOrders || 0;
+  const profitMargin = data.profitMargin || 0;
+  const cpa = data.cpa || 0;
+  const totalExpenses = data.totalExpenses || 0;
+  const totalShipping = data.totalShipping || 0;
+  const totalPacking = data.totalPacking || 0;
+  const totalCogs = data.totalCogs || 0;
+  const adSpend = totalExpenses - totalShipping - totalPacking - totalCogs;
+
   return `
   <!DOCTYPE html>
   <html>
@@ -48,11 +59,11 @@ const getReportTemplate = (data, dateRange) => {
           <tr>
             <td class="kpi-card">
               <p class="kpi-title">Gross Revenue</p>
-              <h2 class="kpi-value">₹${data.totalRevenue.toLocaleString('en-IN')}</h2>
+              <h2 class="kpi-value">₹${totalRevenue.toLocaleString('en-IN')}</h2>
             </td>
             <td class="kpi-card" style="border-color: #34d399; background-color: #ecfdf5;">
               <p class="kpi-title" style="color: #059669;">Net Profit</p>
-              <h2 class="kpi-value profit">₹${data.netProfit > 0 ? data.netProfit.toLocaleString('en-IN') : 0}</h2>
+              <h2 class="kpi-value profit">₹${netProfit > 0 ? netProfit.toLocaleString('en-IN') : 0}</h2>
             </td>
           </tr>
         </table>
@@ -61,15 +72,15 @@ const getReportTemplate = (data, dateRange) => {
           <tr>
             <td class="kpi-card">
               <p class="kpi-title">Total Orders</p>
-              <h2 class="kpi-value" style="font-size: 22px;">${data.totalOrders}</h2>
+              <h2 class="kpi-value" style="font-size: 22px;">${totalOrders}</h2>
             </td>
             <td class="kpi-card">
               <p class="kpi-title">Profit Margin</p>
-              <h2 class="kpi-value" style="font-size: 22px; color: #3b82f6;">${data.profitMargin}%</h2>
+              <h2 class="kpi-value" style="font-size: 22px; color: #3b82f6;">${profitMargin}%</h2>
             </td>
             <td class="kpi-card">
               <p class="kpi-title">CPA (Ad Cost)</p>
-              <h2 class="kpi-value" style="font-size: 22px; color: #f59e0b;">₹${data.cpa}</h2>
+              <h2 class="kpi-value" style="font-size: 22px; color: #f59e0b;">₹${cpa}</h2>
             </td>
           </tr>
         </table>
@@ -78,19 +89,19 @@ const getReportTemplate = (data, dateRange) => {
           <h3>💸 Expenses Breakdown</h3>
           <div class="list-item">
             <span class="list-left">📢 Ad Spend</span>
-            <span class="list-right">-₹${data.totalExpenses - data.totalShipping - data.totalPacking - data.totalCogs}</span>
+            <span class="list-right">-₹${adSpend}</span>
           </div>
           <div class="list-item">
             <span class="list-left">🚚 Shipping</span>
-            <span class="list-right">-₹${data.totalShipping}</span>
+            <span class="list-right">-₹${totalShipping}</span>
           </div>
           <div class="list-item">
             <span class="list-left">📦 Packing</span>
-            <span class="list-right">-₹${data.totalPacking}</span>
+            <span class="list-right">-₹${totalPacking}</span>
           </div>
           <div class="list-item">
             <span class="list-left">🏭 Product COGS</span>
-            <span class="list-right">-₹${data.totalCogs}</span>
+            <span class="list-right">-₹${totalCogs}</span>
           </div>
         </div>
 
@@ -166,19 +177,19 @@ const getLoginAlertTemplate = (name, device, time, ip, lockLink) => {
         <h1>⚠️ Security Alert: New Login</h1>
       </div>
       <div class="content">
-        <p>Hi <strong>${name}</strong>,</p>
+        <p>Hi <strong>${name || 'Customer'}</strong>,</p>
         <p>We noticed a new login to your Jack Essentials account. If this was you, you can safely ignore this email.</p>
         
         <div class="alert-box">
-          <p style="margin: 0 0 8px 0;"><strong>Device/Browser:</strong> ${device}</p>
-          <p style="margin: 0 0 8px 0;"><strong>Time:</strong> ${time}</p>
-          <p style="margin: 0;"><strong>IP Address:</strong> ${ip}</p>
+          <p style="margin: 0 0 8px 0;"><strong>Device/Browser:</strong> ${device || 'Unknown'}</p>
+          <p style="margin: 0 0 8px 0;"><strong>Time:</strong> ${time || 'Just now'}</p>
+          <p style="margin: 0;"><strong>IP Address:</strong> ${ip || 'Unknown'}</p>
         </div>
 
         <p style="color: #ef4444; font-weight: bold; margin-top: 25px;">Not you? Secure your account immediately.</p>
         <p>Clicking the button below will lock your account and log out the unauthorized device. You will need to set a new security PIN to unlock it.</p>
         
-        <a href="${lockLink}" class="btn-danger">Lock My Account Now</a>
+        <a href="${lockLink || 'https://thejackessentials.com'}" class="btn-danger">Lock My Account Now</a>
       </div>
       <div class="footer">
         <p>Jack Essentials Security Team</p>
@@ -191,9 +202,6 @@ const getLoginAlertTemplate = (name, device, time, ip, lockLink) => {
 };
 
 const getWelcomeTemplate = (name) => {
-  const BRAND_COLOR = "#FF4500";
-  const DARK_BG = "#0f172a";
-
   return `
   <!DOCTYPE html>
   <html>
@@ -202,7 +210,6 @@ const getWelcomeTemplate = (name) => {
       body { font-family: 'Inter', 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f4f4f5; margin: 0; padding: 0; }
       .container { max-width: 600px; margin: 40px auto; background-color: #ffffff; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.05); }
       
-      /* Mast Banner Image */
       .hero-image { width: 100%; height: 200px; background-color: ${DARK_BG}; object-fit: cover; display: block; }
       
       .header { text-align: center; padding: 30px 20px 10px; }
@@ -213,12 +220,10 @@ const getWelcomeTemplate = (name) => {
       .content h2 { color: #18181b; font-size: 22px; margin-bottom: 15px; }
       .content p { font-size: 16px; line-height: 1.6; color: #52525b; margin-bottom: 25px; }
       
-      /* Cute Info Box */
       .perks-box { background-color: #fff7ed; border: 1px dashed #fdba74; border-radius: 12px; padding: 20px; margin-bottom: 30px; text-align: left; }
       .perks-box h3 { margin: 0 0 10px 0; color: #ea580c; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }
       .perks-box ul { margin: 0; padding-left: 20px; color: #9a3412; font-size: 14px; line-height: 1.8; }
       
-      /* Button */
       .btn { display: inline-block; background-color: ${BRAND_COLOR}; color: #ffffff !important; text-decoration: none; padding: 16px 36px; border-radius: 50px; font-weight: bold; font-size: 16px; box-shadow: 0 4px 15px rgba(255, 69, 0, 0.3); transition: all 0.3s ease; }
       
       .footer { background-color: #fafafa; padding: 30px; text-align: center; border-top: 1px solid #f4f4f5; }
@@ -236,7 +241,7 @@ const getWelcomeTemplate = (name) => {
       </div>
       
       <div class="content">
-        <h2>Welcome to the Elite Club, ${name}! 🎉</h2>
+        <h2>Welcome to the Elite Club, ${name || 'Shopper'}! 🎉</h2>
         <p>Your account is locked in. You are now officially part of the most exclusive community for premium lifestyle essentials.</p>
         
         <div class="perks-box">
@@ -266,9 +271,6 @@ const getWelcomeTemplate = (name) => {
 };
 
 const getResetOtpTemplate = (otp) => {
-  const BRAND_COLOR = "#FF4500";
-  const DARK_BG = "#0f172a";
-
   return `
   <!DOCTYPE html>
   <html>
@@ -293,7 +295,7 @@ const getResetOtpTemplate = (otp) => {
       <div class="content">
         <h2>Security Verification</h2>
         <p>You requested to reset your password. Please use the following OTP to complete the process:</p>
-        <div class="otp-box">${otp}</div>
+        <div class="otp-box">${otp || '000000'}</div>
         <p class="expiry">⚠️ <strong>This OTP is valid for 10 minutes only.</strong></p>
         <p style="font-size: 12px; margin-top: 20px;">If you did not request this, please ignore this email or contact support immediately.</p>
       </div>
@@ -307,8 +309,6 @@ const getResetOtpTemplate = (otp) => {
 };
 
 const getPasswordChangedTemplate = (name, loginLink) => {
-  const BRAND_COLOR = "#FF4500";
-  const DARK_BG = "#0f172a";
   const SUCCESS_GREEN = "#10b981";
 
   return `
@@ -378,9 +378,11 @@ const getPasswordChangedTemplate = (name, loginLink) => {
 
 // 🔥 7. NEW: PREMIUM PRICE DROP ALERT EMAIL TEMPLATE 🔥
 const getPriceDropTemplate = (userName, productTitle, productImage, oldPricePaise, newPricePaise, productLink) => {
-  const oldPrice = `₹${(oldPricePaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-  const newPrice = `₹${(newPricePaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-  const discountPercent = Math.round(((oldPricePaise - newPricePaise) / oldPricePaise) * 100);
+  const oldVal = oldPricePaise || 0;
+  const newVal = newPricePaise || 0;
+  const oldPrice = `₹${(oldVal / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+  const newPrice = `₹${(newVal / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+  const discountPercent = oldVal > 0 ? Math.round(((oldVal - newVal) / oldVal) * 100) : 0;
 
   return `
   <!DOCTYPE html>
@@ -430,10 +432,10 @@ const getPriceDropTemplate = (userName, productTitle, productImage, oldPricePais
         
         <div class="product-card">
           <div class="product-img-cell">
-            <img src="${productImage || 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?q=80&w=300&auto=format&fit=crop'}" alt="${productTitle}" class="product-img" />
+            <img src="${productImage || 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?q=80&w=300&auto=format&fit=crop'}" alt="${productTitle || 'Product'}" class="product-img" />
           </div>
           <div class="product-info-cell">
-            <h4 class="product-title">${productTitle}</h4>
+            <h4 class="product-title">${productTitle || 'Featured Item'}</h4>
             <p class="price-row">
               <span class="old-price">${oldPrice}</span>
               <span class="new-price">${newPrice}</span>
@@ -455,7 +457,6 @@ const getPriceDropTemplate = (userName, productTitle, productImage, oldPricePais
   `;
 };
 
-// Ensure you update your module.exports at the bottom of the file!
 module.exports = {
   getReportTemplate,
   getBulkEmailTemplate,
@@ -463,5 +464,5 @@ module.exports = {
   getWelcomeTemplate,
   getResetOtpTemplate,
   getPasswordChangedTemplate,
-  getPriceDropTemplate // 🔥 Added here
+  getPriceDropTemplate
 };

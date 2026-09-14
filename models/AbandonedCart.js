@@ -1,3 +1,4 @@
+// models/AbandonedCart.js
 const mongoose = require('mongoose');
 
 const abandonedCartSchema = new mongoose.Schema({
@@ -17,7 +18,10 @@ const abandonedCartSchema = new mongoose.Schema({
       required: true,
       default: 1
     },
-    pricePaise: Number
+    pricePaise: {
+      type: Number,
+      default: 0
+    }
   }],
   
   // 🔥 TOTAL CART VALUE IN PAISE/RUPEES FOR SCORING & METRICS
@@ -79,6 +83,36 @@ const abandonedCartSchema = new mongoose.Schema({
 
 // Index for high-performance querying by worker
 abandonedCartSchema.index({ userId: 1, createdAt: -1 });
+
+// ==========================================
+// 🔥 PRO FEATURE: AUTO-CALCULATE TOTALS & FLAGS
+// ==========================================
+abandonedCartSchema.pre('save', function(next) {
+  if (this.items && Array.isArray(this.items)) {
+    // Calculate total cart value in paise
+    this.totalValue = this.items.reduce((sum, item) => {
+      const qty = Number(item.quantity) || 0;
+      const price = Number(item.pricePaise) || 0;
+      return sum + (qty * price);
+    }, 0);
+
+    // Automatically flag high-value carts if value > ₹2,000 (200,000 paise)
+    if (this.totalValue >= 200000) {
+      this.isHighValue = true;
+      if (this.recoveryLikelihood === 'Medium' || this.recoveryLikelihood === 'Low') {
+        this.recoveryLikelihood = 'High';
+      }
+    }
+  }
+  next();
+});
+
+// ==========================================
+// 🔥 PRO FEATURE: HELPER STATIC METHODS
+// ==========================================
+abandonedCartSchema.statics.findActiveCartByUserId = function(userId) {
+  return this.findOne({ userId, recoveryStatus: 'Pending' }).sort({ createdAt: -1 });
+};
 
 // 🔥 SAFE MODEL COMPILATION PATTERN TO PREVENT OVERWRITE ERROR
 module.exports = mongoose.models.AbandonedCart || mongoose.model('AbandonedCart', abandonedCartSchema);

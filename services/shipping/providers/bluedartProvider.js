@@ -18,10 +18,13 @@ class BlueDartProvider {
   async generateAWB(order) {
     const headers = await this.getAuthHeaders();
 
+    const isCod = String(order.paymentMethod || '').toLowerCase().includes('cod');
+    const declaredVal = order.totalPaise ? order.totalPaise / 100 : (order.totalAmount || 0);
+
     const payload = {
       Shipper: {
         CustomerCode: process.env.BLUEDART_CUSTOMER_CODE || "DEFAULT_CODE",
-        IsCod: String(order.paymentMethod || '').toLowerCase().includes('cod') ? "Y" : "N"
+        IsCod: isCod ? "Y" : "N"
       },
       Consignee: {
         ConsigneeName: order.address?.name || order.userDetails?.name || "Customer",
@@ -35,29 +38,40 @@ class BlueDartProvider {
         ProductCode: "A", // Air Domestic / Surface default
         SubProductCode: "",
         PieceCount: (order.items || []).reduce((sum, item) => sum + (item.quantity || 1), 0),
-        ActualWeight: 0.5,
-        DeclaredValue: order.totalAmount || (order.totalPaise ? order.totalPaise / 100 : 0),
+        ActualWeight: order.weight || 0.5,
+        DeclaredValue: declaredVal,
         ItemDescription: (order.items || []).map(i => i.title || "Product").join(", ").substring(0, 100)
       }
     };
 
-    const res = await fetch(`${this.baseUrl}/shipment/waybill`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload)
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-    const data = await res.json();
-    if (!data.WayBillNo && !data.success) {
-      throw new Error(`BlueDart AWB Generation Failed: ${data.Message || JSON.stringify(data)}`);
+    try {
+      const res = await fetch(`${this.baseUrl}/shipment/waybill`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+
+      const data = await res.json();
+      if (!res.ok || (!data.WayBillNo && !data.success && !data.waybill)) {
+        throw new Error(`BlueDart AWB Generation Failed: ${data.Message || data.message || JSON.stringify(data)}`);
+      }
+
+      return {
+        success: true,
+        provider: 'bluedart',
+        waybill: data.WayBillNo || data.waybill || data.WaybillNo,
+        trackingStatus: 'Manifested'
+      };
+    } catch (error) {
+      console.error("BlueDart generateAWB Error:", error.message);
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    return {
-      success: true,
-      provider: 'bluedart',
-      waybill: data.WayBillNo || data.waybill,
-      trackingStatus: 'Manifested'
-    };
   }
 
   async createShipment(order) {
@@ -66,74 +80,140 @@ class BlueDartProvider {
 
   async getRate(payload) {
     const headers = await this.getAuthHeaders();
-    const res = await fetch(`${this.baseUrl}/rate/calculate`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload)
-    });
-    const data = await res.json();
-    return {
-      rate: data.Rate || data.amount || 120,
-      estimatedDays: data.TransitDays || 3,
-      provider: 'bluedart'
-    };
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    try {
+      const res = await fetch(`${this.baseUrl}/rate/calculate`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      const data = await res.json();
+      return {
+        rate: data.Rate || data.amount || 120,
+        estimatedDays: data.TransitDays || 3,
+        provider: 'bluedart'
+      };
+    } catch (error) {
+      console.error("BlueDart getRate Error:", error.message);
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   async trackShipment(awb) {
     const headers = await this.getAuthHeaders();
-    const res = await fetch(`${this.baseUrl}/tracking/waybill?wbn=${awb}`, {
-      method: 'GET',
-      headers
-    });
-    const data = await res.json();
-    return {
-      awb,
-      status: data.Status || data.CurrentStatus || 'In Transit',
-      history: data.ScanDetail || []
-    };
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    try {
+      const res = await fetch(`${this.baseUrl}/tracking/waybill?wbn=${awb}`, {
+        method: 'GET',
+        headers,
+        signal: controller.signal
+      });
+      const data = await res.json();
+      return {
+        awb,
+        status: data.Status || data.CurrentStatus || 'In Transit',
+        history: data.ScanDetail || []
+      };
+    } catch (error) {
+      console.error("BlueDart trackShipment Error:", error.message);
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   async cancelShipment(waybill) {
     const headers = await this.getAuthHeaders();
-    const res = await fetch(`${this.baseUrl}/shipment/cancel`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ WayBillNo: waybill })
-    });
-    const data = await res.json();
-    return data;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    try {
+      const res = await fetch(`${this.baseUrl}/shipment/cancel`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ WayBillNo: waybill }),
+        signal: controller.signal
+      });
+      const data = await res.json();
+      return data;
+    } catch (error) {
+      console.error("BlueDart cancelShipment Error:", error.message);
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   async schedulePickup(packageCount, locationName) {
     const headers = await this.getAuthHeaders();
-    const res = await fetch(`${this.baseUrl}/pickup/register`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ Pieces: packageCount, PickupLocation: locationName || "Primary" })
-    });
-    const data = await res.json();
-    return data;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    try {
+      const res = await fetch(`${this.baseUrl}/pickup/register`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ Pieces: packageCount, PickupLocation: locationName || "Primary" }),
+        signal: controller.signal
+      });
+      const data = await res.json();
+      return data;
+    } catch (error) {
+      console.error("BlueDart schedulePickup Error:", error.message);
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   async getLabel(awb) {
     const headers = await this.getAuthHeaders();
-    const res = await fetch(`${this.baseUrl}/waybill/label?wbn=${awb}`, {
-      method: 'GET',
-      headers
-    });
-    const data = await res.json();
-    return data;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    try {
+      const res = await fetch(`${this.baseUrl}/waybill/label?wbn=${awb}`, {
+        method: 'GET',
+        headers,
+        signal: controller.signal
+      });
+      const data = await res.json();
+      return data;
+    } catch (error) {
+      console.error("BlueDart getLabel Error:", error.message);
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   async createManifest(awbs) {
     const headers = await this.getAuthHeaders();
-    const res = await fetch(`${this.baseUrl}/manifest/generate`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ WayBillNos: awbs })
-    });
-    const data = await res.json();
-    return data;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    try {
+      const res = await fetch(`${this.baseUrl}/manifest/generate`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ WayBillNos: awbs }),
+        signal: controller.signal
+      });
+      const data = await res.json();
+      return data;
+    } catch (error) {
+      console.error("BlueDart createManifest Error:", error.message);
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 }
 

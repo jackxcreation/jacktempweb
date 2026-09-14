@@ -1,110 +1,129 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL } from '../config'; 
-
-// Fixed Import Paths based on the new modular architecture
 import { fetchAIResponse, processBotResponse } from '../utils/chatBrain'; 
-import { useSupportSocket } from '../hooks/support/useSupportSocket'; 
 
+// 🔥 THE BULLETPROOF HOOKS WE BUILT EARLIER
+import { useSupportSocket } from '../hooks/support/useSupportSocket'; 
+import { useSupportChat } from '../hooks/support/useSupportChat';
+import { useSupportState } from '../hooks/support/useSupportState';
+import { useConversation } from '../hooks/support/useConversation';
+
+// 🔥 IMPORTED MODULAR UI COMPONENTS (From image_8b4eac.png)
 import ChatHeader from '../components/support/ChatHeader';
 import ChatInput from '../components/support/ChatInput';
-import MessageBubble from '../components/support/MessageBubble';
-
-export const SUPPORT_STATUS = {
-  AI_ACTIVE: 'AI_ACTIVE',
-  ESCALATING: 'ESCALATING',
-  HUMAN_ACTIVE: 'HUMAN_ACTIVE',
-  RESOLVED: 'RESOLVED'
-};
+import MessageList from '../components/support/MessageList';
+import HumanModeBanner from '../components/support/HumanModeBanner';
+import AIThinkingIndicator from '../components/support/AIThinkingIndicator';
+import ConversationResolved from '../components/support/ConversationResolved';
 
 const Chat = ({ isOpen, onClose, contextData, user }) => {
-  const [messages, setMessages] = useState([]);
-  const [isTyping, setIsTyping] = useState(false);
-  const [isEscalated, setIsEscalated] = useState(false); 
-  const [supportStatus, setSupportStatus] = useState(SUPPORT_STATUS.AI_ACTIVE);
-  const [agent, setAgent] = useState(null);
+  // 1. Context-Aware Conversation (Prevents Chat Bleeding between orders)
+  const { conversationId, resetConversation } = useConversation(user, contextData?.id || contextData?._id || 'general');
   
-  const chatEndRef = useRef(null);
-  const abortControllerRef = useRef(null);
-  
+  // 2. Centralized State Manager (Prevents UI bugs)
+  const { 
+    status, agent, isEscalated, isResolved, isHumanActive, isAiActive,
+    setEscalating, setWaitingForAgent, setHumanActive, setResolved, resetState, syncWithBackend 
+  } = useSupportState();
+
+  // 3. Robust Chat Manager (Fixes Double-Bubble & manages AbortControllers for API Security)
+  const { 
+    messages, isTyping, setIsTyping, addMessage, clearMessages, createAbortSignal 
+  } = useSupportChat();
+
   const BACKEND_API_URL = `${API_URL}/support/message`;
 
-  // Extracted robust socket management
+  // 4. Secure Socket Connection (No Infinite Re-renders)
   const { escalate } = useSupportSocket({
     API_URL,
     isOpen,
     user,
+    conversationId,
     onAdminReply: (msg) => {
-      setMessages(prev => {
-        if (prev.some(m => m.id === msg.id)) return prev;
-        return [...prev, msg];
-      });
-      setIsEscalated(true);
-      setSupportStatus(SUPPORT_STATUS.HUMAN_ACTIVE);
+      addMessage({ ...msg, sender: 'admin' });
+      setHumanActive();
       setIsTyping(false); 
     },
     onSystemEvent: (event) => {
+      if (!event) return;
       if (event.type === 'agent_joined') {
-        setAgent(event.agent);
-        setSupportStatus(SUPPORT_STATUS.HUMAN_ACTIVE);
-        setIsEscalated(true);
-        setMessages(prev => [...prev, { id: Date.now(), type: 'system', text: `${event.agent?.name || 'An agent'} joined the chat.` }]);
+        setHumanActive(event.agent);
+        addMessage({ id: `sys-${Date.now()}`, type: 'system', text: `${event.agent?.name || 'An agent'} joined the chat.` });
       } else if (event.type === 'ticket_resolved') {
-        setSupportStatus(SUPPORT_STATUS.RESOLVED);
-        setMessages(prev => [...prev, { id: Date.now(), type: 'system', text: 'This support ticket has been resolved.' }]);
+        setResolved();
+        addMessage({ id: `sys-${Date.now()}`, type: 'system', text: 'This support ticket has been resolved.' });
       }
     }
   });
 
+  // Safe Close Handler (Instantly aborts pending API calls to save bandwidth)
+  const handleSafeClose = useCallback(() => {
+    createAbortSignal(); // Cancels any running fetch request
+    if (onClose) onClose();
+  }, [onClose, createAbortSignal]);
+
+  // Keyboard accessibility
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && isOpen) handleSafeClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, handleSafeClose]);
+
   // Initial Context Load
   useEffect(() => {
     if (isOpen && messages.length === 0) {
-      const initialGreeting = {
+      addMessage({
         id: `init-${Date.now()}`,
         sender: 'bot',
         type: 'text',
         text: `Hi ${user?.name || 'there'}! Welcome to Jack Essentials Support. I am Jack, your AI Support Manager. Kaise help kar sakta hoon aaj aapki?`,
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      };
-      
-      setMessages([initialGreeting]);
+      });
     }
-    
-    // Cleanup pending API calls on unmount or chat close
-    return () => {
-      if (!isOpen && abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, user]);
+  }, [isOpen, user, messages.length, addMessage]);
 
-  // Auto-scroll
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isTyping]);
+  const handleRestart = () => {
+    resetConversation();
+    clearMessages();
+    resetState();
+    setTimeout(() => {
+      addMessage({
+        id: `init-${Date.now()}`,
+        sender: 'bot',
+        type: 'text',
+        text: `Hi ${user?.name || 'there'}! Welcome back to Jack Essentials Support. How can I help you today?`,
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      });
+    }, 100);
+  };
 
   const handleSend = async (text, predefinedReply = null) => {
-    if (!text.trim()) return;
+    // 🔥 SECURITY: Prevent spamming empty requests or double-sending while AI is already typing
+    if (!text || !text.trim() || isTyping) return;
 
+    const trimmedText = text.trim();
     const userMsg = {
-      id: `usr-${Date.now()}-${Math.random()}`,
+      id: `usr-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       sender: 'user',
       type: 'text',
-      text,
+      text: trimmedText,
       status: 'sent',
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
-    setMessages(prev => [...prev, userMsg]);
+    addMessage(userMsg);
 
-    // Handle Human Escapement Loop (Bypass AI completely)
-    if (isEscalated || supportStatus === SUPPORT_STATUS.HUMAN_ACTIVE || supportStatus === SUPPORT_STATUS.ESCALATING) {
+    // Human Escalation Loop (Bypass AI API to save costs)
+    if (isEscalated || isHumanActive) {
       escalate({
-        userId: user?.id || 'guest_user',
+        conversationId,
+        userId: user?.id || user?._id || 'guest_user',
         userName: user?.name || 'Guest',
-        orderId: contextData?.id || null,
-        history: [{ sender: 'user', text }]
+        orderId: contextData?.id || contextData?._id || null,
+        history: [{ sender: 'user', text: trimmedText }]
       });
       return;
     }
@@ -112,76 +131,64 @@ const Chat = ({ isOpen, onClose, contextData, user }) => {
     setIsTyping(true);
     let rawBotResponse = predefinedReply;
 
-    // Call API defensively
     if (!rawBotResponse) {
       try {
-        abortControllerRef.current = new AbortController();
+        // 🔥 SECURITY: Generates a fresh abort signal. If user closes chat, API call drops instantly.
+        const activeSignal = createAbortSignal();
         rawBotResponse = await fetchAIResponse({
-          userText: text,
+          userText: trimmedText,
           messages,
           contextData,
           user,
           BACKEND_API_URL,
-          token: null, // Let chatBrain automatically resolve from LocalStorage for safety
-          signal: abortControllerRef.current.signal
+          token: null, 
+          signal: activeSignal
         });
       } catch (error) {
-        console.error("Chat API Call Failed:", error);
-        rawBotResponse = { text: "I'm having trouble connecting right now. Could you please try again or type 'human' to connect to an agent?" };
+        if (error.name !== 'AbortError') console.error("Chat API Call Failed:", error);
+        rawBotResponse = { text: "I'm having trouble connecting right now. Could you please try again?" };
       }
     }
 
-    if (rawBotResponse === null) {
+    if (!rawBotResponse) {
       setIsTyping(false);
       return; 
     }
 
-    // Process Bot Response safely
     let { finalBotText, triggerEscalation, structuredData } = processBotResponse(rawBotResponse);
 
-    // 🔥 THE FIX: Agar upar wala function text nikalne mein fail ho gaya, toh yahan manually extract karo
+    // Deep Payload Fallback
     if (!finalBotText || typeof finalBotText !== 'string' || finalBotText.trim() === '') {
-      // Backend payload ko deeply dhundo (response.data.message.content ya response.message.content)
-      finalBotText = 
-        rawBotResponse?.data?.message?.content || 
-        rawBotResponse?.message?.content || 
-        rawBotResponse?.content || 
-        rawBotResponse?.text || 
-        (typeof rawBotResponse === 'string' ? rawBotResponse : "I'm having trouble connecting right now. Could you please try again?");
+      finalBotText = rawBotResponse?.data?.message?.content || rawBotResponse?.message?.content || rawBotResponse?.text || "I'm having trouble connecting right now.";
     }
 
-    // Prevent false-positive immediate escalation on simple greetings
-    const lowerText = text.toLowerCase().trim();
+    // Prevent false-positive immediate escalation
     const simpleGreetings = ['hello', 'hi', 'hey', 'good morning', 'good afternoon', 'good evening', 'sup', 'helo', 'namaste'];
-    let finalEscalation = triggerEscalation;
-    
-    if (simpleGreetings.includes(lowerText)) {
-      finalEscalation = false;
+    if (simpleGreetings.includes(trimmedText.toLowerCase())) {
+      triggerEscalation = false;
     }
 
-    const botMsg = {
-      id: `bot-${Date.now()}-${Math.random()}`,
+    addMessage({
+      id: `bot-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       sender: 'bot',
-      type: 'text',
+      type: structuredData ? 'structured' : 'text',
       text: finalBotText,
       structuredData: structuredData,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    };
-
-    setMessages(prev => [...prev, botMsg]);
+    });
+    
     setIsTyping(false);
 
-    // Handle True Escalation Trigger (Ticket Creation & Handoff)
-    if (finalEscalation) {
-      setIsEscalated(true);
-      setSupportStatus(SUPPORT_STATUS.ESCALATING);
-      setMessages(prev => [...prev, { id: Date.now(), type: 'system', text: 'Transferring chat to a support agent...' }]);
+    if (triggerEscalation) {
+      setWaitingForAgent();
+      addMessage({ id: `sys-${Date.now()}`, type: 'system', text: 'Transferring chat to a support agent...' });
       
       escalate({
-        userId: user?.id || 'guest_user',
+        conversationId,
+        userId: user?.id || user?._id || 'guest_user',
         userName: user?.name || 'Guest',
-        orderId: contextData?.id || null,
-        history: [...messages, userMsg].slice(-10) // Sending context up to 10 messages safely to Admin
+        orderId: contextData?.id || contextData?._id || null,
+        history: [...messages, userMsg].slice(-10) 
       });
     }
   };
@@ -190,72 +197,64 @@ const Chat = ({ isOpen, onClose, contextData, user }) => {
     <AnimatePresence>
       {isOpen && (
         <>
-          {/* Background Overlay */}
           <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onClose}
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            onClick={handleSafeClose}
             className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[100]"
           />
 
-          {/* Main Chat Drawer */}
           <motion.div
-            initial={{ x: '100%', opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            exit={{ x: '100%', opacity: 0 }}
+            initial={{ x: '100%', opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: '100%', opacity: 0 }}
             transition={{ type: 'spring', damping: 25, stiffness: 200 }}
             className="fixed top-0 right-0 h-full w-full sm:w-[400px] bg-slate-50 shadow-2xl z-[101] flex flex-col border-l border-slate-200"
           >
-            <ChatHeader onClose={onClose} supportStatus={supportStatus} agent={agent} />
+            <ChatHeader onClose={handleSafeClose} supportStatus={status} agent={agent} />
 
-            {/* ORDER CONTEXT RENDERED SAFELY */}
-            {contextData && contextData.items?.[0] && (
+            {/* 🔥 INTEGRATED UI COMPONENTS FROM YOUR DIRECTORY */}
+            {isHumanActive && <HumanModeBanner agent={agent} />}
+            {isResolved && <ConversationResolved onRestart={handleRestart} />}
+
+            {contextData && contextData.items?.[0] && !isResolved && (
               <div className="bg-white p-4 border-b border-slate-200 flex items-center gap-4 shadow-sm z-10 flex-shrink-0">
                 <div className="w-16 h-16 bg-slate-100 rounded-xl overflow-hidden border border-slate-200 flex-shrink-0">
                   <img
-                    src={contextData.items[0].image || 'https://via.placeholder.com/150'}
+                    src={contextData.items[0].image || '/logo.png'}
                     alt="Context Product"
                     className="w-full h-full object-cover"
+                    onError={(e) => { e.target.src = '/logo.png'; }}
                   />
                 </div>
-                <div>
+                <div className="overflow-hidden">
                   <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded uppercase tracking-widest">
                     Order Context
                   </span>
-                  <h3 className="font-bold text-slate-800 text-sm mt-1 line-clamp-1">
+                  <h3 className="font-bold text-slate-800 text-sm mt-1 truncate">
                     {contextData.items[0].title || 'Order Details'}
                   </h3>
-                  <p className="text-xs text-slate-500 font-mono mt-0.5">
-                    ID: #{contextData.id}
+                  <p className="text-xs text-slate-500 font-mono mt-0.5 truncate">
+                    ID: #{contextData.id || contextData._id || 'N/A'}
                   </p>
                 </div>
               </div>
             )}
 
-            {/* CHAT MESSAGES AREA */}
-            <div className="flex-1 overflow-y-auto p-4 bg-slate-50 relative">
-              {messages.map((msg) => (
-                <MessageBubble key={msg.id} msg={msg} />
-              ))}
-
-              {isTyping && (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex bg-white border border-slate-200 rounded-2xl rounded-tl-sm p-4 shadow-sm max-w-[80px] mr-auto items-center gap-1.5 mb-4">
-                  <div className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce"></div>
-                  <div className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                  <div className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-                </motion.div>
+            <div className="flex-1 overflow-y-auto relative p-4 flex flex-col gap-3">
+              <MessageList messages={messages} supportStatus={status} />
+              
+              {/* 🔥 AI THINKING INDICATOR INTEGRATED */}
+              {isTyping && isAiActive && (
+                <div className="self-start mt-2">
+                  <AIThinkingIndicator />
+                </div>
               )}
-              <div ref={chatEndRef} className="h-1" />
             </div>
 
-            {/* CHAT INPUT AREA */}
             <ChatInput 
               onSend={handleSend} 
               isTyping={isTyping} 
               isEscalated={isEscalated} 
               messagesCount={messages.length} 
-              supportStatus={supportStatus}
+              supportStatus={status}
             />
           </motion.div>
         </>

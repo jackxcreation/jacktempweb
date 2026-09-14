@@ -1,3 +1,4 @@
+// src/pages/ForgotPassword.jsx
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -20,6 +21,12 @@ const ForgotPassword = () => {
 
   const navigate = useNavigate();
 
+  // 🔥 Scroll to top on mount & set professional SEO title
+  useEffect(() => {
+    window.scrollTo(0, 0);
+    document.title = "Forgot Password | Jack Essentials — Account Recovery";
+  }, []);
+
   // Cooldown Timer Logic
   useEffect(() => {
     let timer;
@@ -32,9 +39,33 @@ const ForgotPassword = () => {
     return () => clearInterval(timer);
   }, [cooldown, failedAttempts]);
 
+  // Robust error extractor
+  const parseError = (data, defaultMsg) => {
+    if (!data) return defaultMsg;
+    if (typeof data.error === 'string') return data.error;
+    if (typeof data.message === 'string') return data.message;
+    if (data.errors) {
+      let msgs = [];
+      const extract = (obj) => {
+        for (const k in obj) {
+          if (k === '_errors' && Array.isArray(obj[k])) msgs.push(...obj[k]);
+          else if (typeof obj[k] === 'object') extract(obj[k]);
+        }
+      };
+      extract(data.errors);
+      if (msgs.length > 0) return msgs.join(' | ');
+    }
+    return defaultMsg;
+  };
+
   // Step 1: Send OTP to Email
   const handleSendOTP = async (e) => {
     e.preventDefault();
+    if (!email || !email.includes('@')) {
+      setStatus({ type: 'error', msg: 'Please enter a valid email address.' });
+      return;
+    }
+
     setIsLoading(true);
     setStatus({ type: '', msg: '' });
 
@@ -42,7 +73,7 @@ const ForgotPassword = () => {
       const response = await fetch(`${API_URL}/auth/send-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email })
+        body: JSON.stringify({ email: email.trim().toLowerCase() })
       });
       
       const data = await response.json();
@@ -53,10 +84,10 @@ const ForgotPassword = () => {
           setStep(2);
         }, 1500);
       } else {
-        setStatus({ type: 'error', msg: data.error || 'User not found.' });
+        setStatus({ type: 'error', msg: parseError(data, 'User not found.') });
       }
     } catch (error) {
-      setStatus({ type: 'error', msg: 'Connection Error.' });
+      setStatus({ type: 'error', msg: 'Connection Error. Please check your network.' });
     } finally {
       setIsLoading(false);
     }
@@ -77,20 +108,18 @@ const ForgotPassword = () => {
       const response = await fetch(`${API_URL}/auth/verify-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, otp })
+        body: JSON.stringify({ email: email.trim().toLowerCase(), otp: otp.trim() })
       });
       
       const data = await response.json();
 
       if (response.ok) {
-        // OTP Verified Successfully! Now open Step 3
         setStatus({ type: 'success', msg: 'OTP Verified Successfully!' });
         setTimeout(() => {
           setStatus({ type: '', msg: '' });
           setStep(3); 
         }, 1200);
       } else {
-        // Handle Failure & Cooldown
         const newFailCount = failedAttempts + 1;
         setFailedAttempts(newFailCount);
         
@@ -98,12 +127,12 @@ const ForgotPassword = () => {
           setCooldown(60); // 60 Seconds Cooldown
           setStatus({ type: 'error', msg: 'Too many failed attempts. Please wait 60s.' });
         } else {
-          setStatus({ type: 'error', msg: data.error || 'Invalid OTP.' });
+          setStatus({ type: 'error', msg: parseError(data, 'Invalid OTP.') });
         }
         setOtp(''); // Clear OTP box so they type again
       }
     } catch (error) {
-      setStatus({ type: 'error', msg: 'Connection Error.' });
+      setStatus({ type: 'error', msg: 'Connection Error. Please check your network.' });
     } finally {
       setIsLoading(false);
     }
@@ -117,6 +146,11 @@ const ForgotPassword = () => {
       setStatus({ type: 'error', msg: 'Passwords do not match.' });
       return;
     }
+
+    if (newPassword.length < 6) {
+      setStatus({ type: 'error', msg: 'Password must be at least 6 characters long.' });
+      return;
+    }
     
     setIsLoading(true);
     setStatus({ type: '', msg: '' });
@@ -125,7 +159,7 @@ const ForgotPassword = () => {
       const response = await fetch(`${API_URL}/auth/reset-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, otp, newPassword })
+        body: JSON.stringify({ email: email.trim().toLowerCase(), otp: otp.trim(), newPassword })
       });
       
       const data = await response.json();
@@ -135,10 +169,10 @@ const ForgotPassword = () => {
         setStep(4); // Success State
         setTimeout(() => navigate('/login'), 2500);
       } else {
-        setStatus({ type: 'error', msg: data.error || 'Failed to update password.' });
+        setStatus({ type: 'error', msg: parseError(data, 'Failed to update password.') });
       }
     } catch (error) {
-      setStatus({ type: 'error', msg: 'Connection Error.' });
+      setStatus({ type: 'error', msg: 'Connection Error. Please check your network.' });
     } finally {
       setIsLoading(false);
     }
@@ -152,7 +186,7 @@ const ForgotPassword = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-slate-50 font-sans relative overflow-hidden">
+    <div className="min-h-screen flex items-center justify-center p-4 bg-slate-50 font-sans relative overflow-hidden selection:bg-[#FF4500] selection:text-white">
       {/* Premium Background Orbs */}
       <div className="absolute top-[-10%] left-[-5%] w-[500px] h-[500px] bg-indigo-500 rounded-full mix-blend-multiply filter blur-[120px] opacity-20 animate-pulse"></div>
       <div className="absolute bottom-[-10%] right-[-5%] w-[500px] h-[500px] bg-[#FF4500] rounded-full mix-blend-multiply filter blur-[120px] opacity-10"></div>
@@ -184,7 +218,7 @@ const ForgotPassword = () => {
               <form onSubmit={handleSendOTP} className="space-y-5">
                 <div className="relative group">
                   <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within:text-indigo-600 transition-colors"><FiMail size={18} /></div>
-                  <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full pl-11 py-4 bg-slate-50/50 border border-slate-200 rounded-2xl outline-none focus:border-indigo-600 focus:bg-white focus:ring-4 focus:ring-indigo-600/10 transition-all font-medium" placeholder="Registered Email" required disabled={isLoading} />
+                  <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full pl-11 py-4 bg-slate-50/50 border border-slate-200 rounded-2xl outline-none focus:border-indigo-600 focus:bg-white focus:ring-4 focus:ring-indigo-600/10 transition-all font-medium text-slate-800" placeholder="Registered Email" required disabled={isLoading} />
                 </div>
                 <button type="submit" disabled={isLoading} className="w-full bg-slate-900 text-white font-black py-4 rounded-2xl hover:bg-indigo-600 active:scale-[0.98] transition-all flex justify-center items-center gap-2 shadow-xl shadow-slate-900/20">
                   {isLoading ? "SENDING..." : "SEND OTP"}
@@ -211,7 +245,7 @@ const ForgotPassword = () => {
                     maxLength={6} 
                     value={otp} 
                     onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} // Strictly Numbers only
-                    className={`w-full py-4 bg-slate-50/50 border ${cooldown > 0 ? 'border-red-300 bg-red-50 text-red-400' : 'border-slate-200'} rounded-2xl outline-none focus:border-indigo-600 focus:bg-white focus:ring-4 focus:ring-indigo-600/10 transition-all font-black text-3xl text-center tracking-[0.5em]`} 
+                    className={`w-full py-4 bg-slate-50/50 border ${cooldown > 0 ? 'border-red-300 bg-red-50 text-red-400' : 'border-slate-200'} rounded-2xl outline-none focus:border-indigo-600 focus:bg-white focus:ring-4 focus:ring-indigo-600/10 transition-all font-black text-3xl text-center tracking-[0.5em] text-slate-800`} 
                     placeholder="------" 
                     required 
                     disabled={cooldown > 0 || isLoading}
@@ -250,12 +284,12 @@ const ForgotPassword = () => {
               <form onSubmit={handleReset} className="space-y-5">
                 <div className="relative group">
                   <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within:text-indigo-600 transition-colors"><FiLock size={18} /></div>
-                  <input type={showPassword ? "text" : "password"} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="w-full pl-11 py-4 bg-slate-50/50 border border-slate-200 rounded-2xl outline-none focus:border-indigo-600 focus:bg-white focus:ring-4 focus:ring-indigo-600/10 transition-all font-medium" placeholder="New Password" required disabled={isLoading} />
+                  <input type={showPassword ? "text" : "password"} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="w-full pl-11 pr-11 py-4 bg-slate-50/50 border border-slate-200 rounded-2xl outline-none focus:border-indigo-600 focus:bg-white focus:ring-4 focus:ring-indigo-600/10 transition-all font-medium text-slate-800" placeholder="New Password" required disabled={isLoading} />
                   <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute inset-y-0 right-0 pr-4 flex items-center text-slate-400 hover:text-slate-700">{showPassword ? <FiEyeOff size={18} /> : <FiEye size={18} />}</button>
                 </div>
                 <div className="relative group">
                   <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within:text-indigo-600 transition-colors"><FiCheckCircle size={18} /></div>
-                  <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="w-full pl-11 py-4 bg-slate-50/50 border border-slate-200 rounded-2xl outline-none focus:border-indigo-600 focus:bg-white focus:ring-4 focus:ring-indigo-600/10 transition-all font-medium" placeholder="Confirm Password" required disabled={isLoading} />
+                  <input type={showPassword ? "text" : "password"} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="w-full pl-11 py-4 bg-slate-50/50 border border-slate-200 rounded-2xl outline-none focus:border-indigo-600 focus:bg-white focus:ring-4 focus:ring-indigo-600/10 transition-all font-medium text-slate-800" placeholder="Confirm Password" required disabled={isLoading} />
                 </div>
                 
                 <button type="submit" disabled={isLoading || newPassword.length < 6} className="w-full bg-[#FF4500] text-white font-black py-4 rounded-2xl hover:bg-orange-600 disabled:opacity-50 active:scale-[0.98] transition-all shadow-xl shadow-orange-500/20">
@@ -281,8 +315,8 @@ const ForgotPassword = () => {
         {/* Global Status Messages */}
         {status.msg && step !== 4 && (
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className={`mt-6 p-4 rounded-xl text-sm font-bold flex items-center gap-3 ${status.type === 'error' ? 'bg-red-50 text-red-600 border border-red-100' : 'bg-green-50 text-green-700 border border-green-100'}`}>
-            {status.type === 'error' ? <FiAlertTriangle size={18} /> : <FiCheckCircle size={18} />}
-            {status.msg}
+            {status.type === 'error' ? <FiAlertTriangle size={18} className="shrink-0" /> : <FiCheckCircle size={18} className="shrink-0" />}
+            <span className="leading-snug">{status.msg}</span>
           </motion.div>
         )}
 

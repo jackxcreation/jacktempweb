@@ -1,3 +1,4 @@
+// models/User.js
 const mongoose = require('mongoose');
 
 // ==========================================
@@ -57,7 +58,13 @@ const userSchema = new mongoose.Schema({
   phone: {
     type: String,
     trim: true,
-    match: [/^\d{10}$/, "Invalid mobile number format"]
+    match: [/^\d{10}$/, "Invalid mobile number format"],
+    index: true
+  },
+  // 🔥 WHATSAPP & PHONE VERIFICATION FLAG
+  isPhoneVerified: {
+    type: Boolean,
+    default: false
   },
   password: { 
     type: String, 
@@ -117,4 +124,23 @@ const userSchema = new mongoose.Schema({
   strict: true 
 });
 
-module.exports = mongoose.models.User || mongoose.model('User', userSchema);
+// ==========================================
+// 🔥 PRO FEATURE: PRE-SAVE NORMALIZATION
+// ==========================================
+userSchema.pre('save', function(next) {
+  if (this.isModified('email') && this.email) {
+    this.email = this.email.toLowerCase().trim();
+  }
+  next();
+});
+
+// ==========================================
+// 🔥 PRO FEATURE: HELPER STATIC METHODS
+// ==========================================
+userSchema.statics.findByEmailWithPassword = function(email) {
+  return this.findOne({ email: email.toLowerCase().trim() }).select('+password');
+};
+
+const User = mongoose.models.User || mongoose.model('User', userSchema);
+
+module.exports = User;

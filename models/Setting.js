@@ -1,3 +1,4 @@
+// models/Setting.js
 const mongoose = require('mongoose');
 
 const settingSchema = new mongoose.Schema({
@@ -14,7 +15,9 @@ const settingSchema = new mongoose.Schema({
     instagram: { type: String, trim: true, default: "#" },
     twitter: { type: String, trim: true, default: "#" },
     facebook: { type: String, trim: true, default: "#" },
-    youtube: { type: String, trim: true, default: "#" }
+    youtube: { type: String, trim: true, default: "#" },
+    whatsapp: { type: String, trim: true, default: "#" }, // 🔥 Pro addition for Indian D2C support & updates
+    telegram: { type: String, trim: true, default: "#" }  // 🔥 Pro addition for community alerts
   },
   
   // Custom Links arrays (Jo tu dashboard se add/delete karega)
@@ -36,5 +39,19 @@ const settingSchema = new mongoose.Schema({
   strict: true // Automatically strips out any unallowed fields passed in req.body
 });
 
+// ==========================================
+// 🔥 PRO FEATURE: SINGLETON SETTINGS GETTER
+// ==========================================
+// Ensures there is always a valid settings document available globally
+settingSchema.statics.getSettings = async function() {
+  let settings = await this.findOne();
+  if (!settings) {
+    settings = await this.create({});
+  }
+  return settings;
+};
+
 // Setting model ko overwrite hone se bachane ke liye safe export
-module.exports = mongoose.models.Setting || mongoose.model('Setting', settingSchema);
+const Setting = mongoose.models.Setting || mongoose.model('Setting', settingSchema);
+
+module.exports = Setting;

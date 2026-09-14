@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+// src/pages/SecureAccount.jsx
+import React, { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FiLock, FiShield, FiCheckCircle } from 'react-icons/fi';
@@ -6,7 +7,10 @@ import { io } from 'socket.io-client';
 import { API_URL } from '../config';
 
 // Initialize Socket
-const socket = io(API_URL.replace('/api', ''));
+const socket = io(API_URL.replace('/api', ''), {
+  autoConnect: true,
+  reconnection: true
+});
 
 const SecureAccount = () => {
   const [searchParams] = useSearchParams();
@@ -15,6 +19,16 @@ const SecureAccount = () => {
   const [status, setStatus] = useState({ type: '', msg: '' });
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
+
+  // 🔥 Scroll to top on mount & set professional SEO title
+  useEffect(() => {
+    window.scrollTo(0, 0);
+    document.title = "Emergency Account Lock | Jack Essentials";
+    
+    return () => {
+      if (socket) socket.disconnect();
+    };
+  }, []);
 
   const handleLock = async () => {
     if (pin.length < 4) {
@@ -38,7 +52,7 @@ const SecureAccount = () => {
         setStatus({ type: 'success', msg: "Account Locked Successfully! Terminating other sessions..." });
         
         // 🔥 MAGIC: Trigger Instant Logout across all devices 🔥
-        if (data.userId) {
+        if (data.userId && socket) {
           socket.emit('lock_user_session', data.userId);
         }
 
@@ -59,7 +73,7 @@ const SecureAccount = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6 relative overflow-hidden font-sans">
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6 relative overflow-hidden font-sans selection:bg-red-500 selection:text-white">
       {/* Background glow */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-red-500/20 rounded-full blur-[120px] pointer-events-none"></div>
 
@@ -73,7 +87,7 @@ const SecureAccount = () => {
             <FiShield size={40} className="text-red-600 animate-pulse" />
           </div>
           <h2 className="text-2xl font-black text-slate-900 tracking-tight">Emergency Lock</h2>
-          <p className="text-slate-500 text-sm mt-2 font-medium">Securing account for <br/><span className="text-slate-900 font-bold">{email}</span></p>
+          <p className="text-slate-500 text-sm mt-2 font-medium">Securing account for <br/><span className="text-slate-900 font-bold">{email || 'User'}</span></p>
         </div>
 
         <div className="space-y-6">
@@ -94,7 +108,7 @@ const SecureAccount = () => {
           <button 
             onClick={handleLock} 
             disabled={isLoading || pin.length < 4}
-            className="w-full bg-red-600 text-white font-black py-4 rounded-2xl hover:bg-red-700 active:scale-95 transition-all shadow-lg shadow-red-600/30 disabled:opacity-50 flex justify-center items-center h-[60px]"
+            className="w-full bg-red-600 text-white font-black py-4 rounded-2xl hover:bg-red-700 active:scale-95 transition-all shadow-lg shadow-red-600/30 disabled:opacity-50 flex justify-center items-center h-[60px] outline-none focus-visible:ring-4 focus-visible:ring-red-500/30"
           >
             {isLoading ? (
               <div className="w-6 h-6 border-4 border-white/30 border-t-white rounded-full animate-spin"></div>
@@ -110,8 +124,8 @@ const SecureAccount = () => {
               initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
               className={`mt-6 p-4 rounded-xl text-sm font-bold flex items-center justify-center gap-2 ${status.type === 'error' ? 'bg-red-50 text-red-600 border border-red-100' : 'bg-green-50 text-green-700 border border-green-100'}`}
             >
-              {status.type === 'success' && <FiCheckCircle size={18} />}
-              {status.msg}
+              {status.type === 'success' && <FiCheckCircle size={18} className="shrink-0" />}
+              <span className="leading-snug">{status.msg}</span>
             </motion.div>
           )}
         </AnimatePresence>

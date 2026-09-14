@@ -1,3 +1,4 @@
+// jack-frontend/src/context/CartContext.jsx
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FiCheckCircle } from 'react-icons/fi';
@@ -11,18 +12,27 @@ export const CartProvider = ({ children }) => {
   
   // 🔥 FIX 1: Har user ke liye ek unique Cart Key generate hogi
   const getCartKey = () => {
-    const storedUser = JSON.parse(localStorage.getItem('jack_user'));
-    return storedUser && storedUser.id ? `jack_cart_${storedUser.id}` : 'jack_cart_guest';
+    try {
+      const storedUser = JSON.parse(localStorage.getItem('jack_user'));
+      return storedUser && storedUser.id ? `jack_cart_${storedUser.id}` : 'jack_cart_guest';
+    } catch (e) {
+      return 'jack_cart_guest';
+    }
   };
 
   const [cart, setCart] = useState(() => {
-    const savedCart = localStorage.getItem(getCartKey());
-    return savedCart ? JSON.parse(savedCart) : [];
+    try {
+      const savedCart = localStorage.getItem(getCartKey());
+      return savedCart ? JSON.parse(savedCart) : [];
+    } catch (error) {
+      console.error("Failed to parse cart from localStorage:", error);
+      return [];
+    }
   });
   
   const [toastMessage, setToastMessage] = useState('');
 
-  // ✅ NAYA BULLETPROOF CODE (Cloudinary URL ko allow karega)
+  // ✅ BULLETPROOF CODE (Cloudinary URL ko allow karega & base64 remove karega memory bachane ke liye)
   useEffect(() => {
     const optimizedCart = cart.map(item => {
       // Agar image ka data Base64 hai, sirf tabhi delete karo memory bachane ke liye
@@ -41,23 +51,26 @@ export const CartProvider = ({ children }) => {
     }
   }, [cart]);
 
-  // 🔥 PHASE 8 FIX: Removed 500ms polling interval. Using secure Auth State Event Listeners instead.
+  // 🔥 PHASE 8 FIX: Using secure Auth State Event Listeners instead of polling
   useEffect(() => {
     const handleAuthChange = () => {
       const currentKey = getCartKey();
       const activeKey = localStorage.getItem('active_cart_key') || 'jack_cart_guest';
 
-      // Agar user login ya logout کرتا hai, toh key change hogi
+      // Agar user login ya logout karta hai, toh key change hogi
       if (currentKey !== activeKey) {
         localStorage.setItem('active_cart_key', currentKey);
-        const savedCart = localStorage.getItem(currentKey);
-        setCart(savedCart ? JSON.parse(savedCart) : []); // Naye user ka cart load karo
+        try {
+          const savedCart = localStorage.getItem(currentKey);
+          setCart(savedCart ? JSON.parse(savedCart) : []); // Naye user ka cart load karo
+        } catch (e) {
+          setCart([]);
+        }
       }
     };
 
-    // Listeners directly catch login/logout instead of wasting CPU every 500ms
+    // Listeners directly catch login/logout
     window.addEventListener('storage', handleAuthChange);
-    // Custom event dispatch if login happens in same tab
     window.addEventListener('jack_auth_change', handleAuthChange); 
     
     handleAuthChange(); // Initial check
@@ -71,11 +84,11 @@ export const CartProvider = ({ children }) => {
   // 🔥 PHASE 8 FIX: Backend Sync Logic (Added Headers, Removed Full User Object, Sent only ID & QTY)
   useEffect(() => {
     const syncCartToBackend = async () => {
-      const storedUser = JSON.parse(localStorage.getItem('jack_user'));
-      const token = localStorage.getItem('token');
-      
-      if (storedUser && storedUser.id && token) {
-        try {
+      try {
+        const storedUser = JSON.parse(localStorage.getItem('jack_user'));
+        const token = localStorage.getItem('token') || localStorage.getItem('jack_token') || localStorage.getItem('admin_token');
+        
+        if (storedUser && storedUser.id && token) {
           // PHASE 8: Send product IDs and quantities only to backend (Save bandwidth & DB space)
           const optimizedPayloadItems = cart.map(item => ({
             productId: item.id || item._id,
@@ -93,9 +106,9 @@ export const CartProvider = ({ children }) => {
               items: optimizedPayloadItems 
             })
           });
-        } catch (error) {
-          console.error("Cart sync failed:", error);
         }
+      } catch (error) {
+        console.error("Cart sync failed:", error);
       }
     };
 
@@ -108,7 +121,7 @@ export const CartProvider = ({ children }) => {
   }, [cart]);
 
   // Calculations
-  const cartCount = cart.reduce((total, item) => total + item.quantity, 0);
+  const cartCount = cart.reduce((total, item) => total + (item.quantity || 1), 0);
   
   // 🔥 Canonical Paisa-safe financial metrics handling
   const cartTotalPaise = cart.reduce((total, item) => {
@@ -118,10 +131,10 @@ export const CartProvider = ({ children }) => {
       const cleanPriceString = String(item.price || '0').replace(/[^0-9.]/g, '');
       pPaise = Math.round(Number(cleanPriceString) * 100);
     }
-    return total + (pPaise * item.quantity);
+    return total + (pPaise * (item.quantity || 1));
   }, 0);
 
-  // 🔥 FIX: Derived securely from canonical paise to avoid regex stripping bugs
+  // 🔥 Derived securely from canonical paise to avoid regex stripping bugs
   const cartTotal = cartTotalPaise / 100;
 
   // 1. Add to Cart with Image Optimization support
@@ -148,7 +161,7 @@ export const CartProvider = ({ children }) => {
       const existingItem = prevCart.find(item => String(item.id) === String(productId));
       if (existingItem) {
         return prevCart.map(item => 
-          String(item.id) === String(productId) ? { ...item, quantity: item.quantity + 1 } : item
+          String(item.id) === String(productId) ? { ...item, quantity: (item.quantity || 1) + 1 } : item
         );
       }
       return [...prevCart, { 
@@ -160,7 +173,7 @@ export const CartProvider = ({ children }) => {
         quantity: 1 
       }];
     });
-    setToastMessage(`${product.title} added to cart!`); 
+    setToastMessage(`${product.title || product.name || 'Item'} added to cart!`); 
     setTimeout(() => setToastMessage(''), 3000);
   };
 
@@ -175,7 +188,8 @@ export const CartProvider = ({ children }) => {
   const updateQuantity = (id, action) => {
     setCart((prevCart) => prevCart.map(item => {
       if (String(item.id) === String(id)) {
-        const newQuantity = action === 'increase' ? item.quantity + 1 : item.quantity - 1;
+        const currentQty = item.quantity || 1;
+        const newQuantity = action === 'increase' ? currentQty + 1 : currentQty - 1;
         return { ...item, quantity: Math.max(1, newQuantity) }; 
       }
       return item;
@@ -185,7 +199,9 @@ export const CartProvider = ({ children }) => {
   // 4. Clear Cart
   const clearCart = () => {
     setCart([]);
-    localStorage.removeItem(getCartKey()); // Sirf usi user ka cart delete hoga
+    try {
+      localStorage.removeItem(getCartKey()); // Sirf usi user ka cart delete hoga
+    } catch (e) {}
   };
 
   return (
@@ -222,3 +238,5 @@ export const CartProvider = ({ children }) => {
     </CartContext.Provider>
   );
 };
+
+export default CartProvider;

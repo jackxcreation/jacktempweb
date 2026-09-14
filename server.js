@@ -41,18 +41,33 @@ require('./workers/analyticsWorker');
 // 🔥 IMPORT SMART PRICE DROP & RECOMMENDATION SERVICE
 const { processSmartPriceDropRecommendations } = require('./services/smartAlertService');
 
+// 🔥 IMPORT WHATSAPP ROUTES (OTP & WEBHOOK)
+const whatsappRoutes = require('./routes/whatsappRoutes');
+
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 dotenv.config();
 console.log("JWT configuration loaded");
 
 // ==========================================
+// 🔥 ANTI-CRASH SYSTEM: PREVENT SERVER DEATH FROM REDIS SOCKET DROPS
+// ==========================================
+process.on('uncaughtException', (err) => {
+  console.error('🚨 [ANTI-CRASH] Uncaught Exception caught:', err.message);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('🚨 [ANTI-CRASH] Unhandled Rejection caught:', reason);
+});
+
+// ==========================================
 // 📊 WINSTON STRUCTURED LOGGER & CORRELATION SETUP
 // ==========================================
 const logger = winston.createLogger({
-  level: 'info',
+  level: process.env.LOG_LEVEL || 'info',
   format: winston.format.combine(
     winston.format.timestamp(),
+    winston.format.errors({ stack: true }),
     winston.format.json()
   ),
   transports: [
@@ -68,14 +83,14 @@ const requestLoggerMiddleware = (req, res, next) => {
 
   res.on('finish', () => {
     const latency = Date.now() - start;
-    const userId = req.user?._id || req.user?.id || 'anonymous';
+    const userId = req.user?._id || req.user?.id || req.user?.userId || 'anonymous';
     
     logger.info({
       message: 'HTTP Request Completed',
       requestId,
       userId,
       method: req.method,
-      route: req.originalUrl,
+      route: req.originalUrl || req.url,
       status: res.statusCode,
       latency: `${latency}ms`
     });
@@ -126,6 +141,7 @@ const allowedOrigins = [
   "https://www.admin.thejackessentials.com",
   "https://ecom-project-lyart-sigma.vercel.app",
   "http://localhost:5173",
+  "http://localhost:3000",
   "http://localhost:5174",
   "http://192.168.31.240:5173",
   process.env.ADMIN_ORIGIN,
@@ -142,7 +158,7 @@ const corsOptions = {
     }
   },
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID", "Idempotency-Key"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID", "Idempotency-Key", "x-idempotency-key"],
   credentials: true 
 };
 
@@ -202,6 +218,9 @@ app.use(express.urlencoded({ limit: '1mb', extended: true }));
 // 🔥 WEBHOOK & PAYMENT ROUTES MOUNTED AFTER CORS
 // ==========================================
 app.use('/api', require('./routes/payment')); 
+
+// 🔥 MOUNT WHATSAPP ROUTES (OTP & WEBHOOK)
+app.use('/api/whatsapp', whatsappRoutes);
 
 // ==========================================
 // 🏥 HEALTH CHECK & READINESS ENDPOINTS
@@ -293,7 +312,6 @@ mongoose.connect(process.env.MONGO_URI, {
   .then(() => {
     console.log('✅ Jack Essentials Production Database Connected with Pool Tuning!');
     
-    // 🔥 ROBUST SLOW QUERY MONITORING VIA NATIVE DRIVER COMMAND MONITORING (>300ms)
     const client = mongoose.connection.getClient();
     if (client && client.on) {
       client.on('commandSucceeded', (event) => {
@@ -340,7 +358,7 @@ app.use('/', require('./routes/googleMerchantFeed'));
 app.use('/', require('./routes/subscribers'));
 app.use('/', require('./routes/ssrProduct'));
 
-// 🔥 LEGACY AI CHAT ROUTE (Preserved & Upgraded to Gemini)
+// 🔥 LEGACY AI CHAT ROUTE
 app.use('/', aiChatLimiter, require('./routes/aiAssistant'));
 
 // 🔥 NEW PREMIUM SUPPORT ARCHITECTURE ROUTES
@@ -424,7 +442,6 @@ app.post('/api/chat', aiChatLimiter, async (req, res) => {
 
     const serverSystemInstruction = systemInstruction || "You are an official, helpful, and polite customer support assistant for Jack Essentials. Assist customers with store products, orders, and policies safely and accurately.";
 
-    // Gemini expects history in specific format: { role: "user" | "model", parts: [{ text: "..." }] }
     const formattedHistory = (Array.isArray(chatHistory) ? chatHistory.slice(-10) : []).map(msg => ({
       role: msg.role === "assistant" ? "model" : "user",
       parts: [{ text: msg.content || msg.text || "" }]
@@ -437,7 +454,7 @@ app.post('/api/chat', aiChatLimiter, async (req, res) => {
       try {
         const genAI = new GoogleGenerativeAI(currentKey);
         const model = genAI.getGenerativeModel({ 
-          model: "gemini-3.5-flash",
+          model: "gemini-2.5-flash",
           systemInstruction: serverSystemInstruction
         });
 
@@ -475,40 +492,50 @@ app.post('/api/chat', aiChatLimiter, async (req, res) => {
 io.use(async (socket, next) => {
   try {
     let token = socket.handshake.auth.token;
+
+    if (!token && socket.handshake.query && socket.handshake.query.token) {
+      token = socket.handshake.query.token;
+    }
     
-    if (socket.handshake.headers.cookie) {
+    if (!token && socket.handshake.headers.cookie) {
       const cookies = socket.handshake.headers.cookie.split(';').reduce((acc, cookie) => {
-        const [name, value] = cookie.trim().split('=');
-        acc[name] = value;
+        const eqIndex = cookie.indexOf('=');
+        if (eqIndex > -1) {
+          const name = cookie.substring(0, eqIndex).trim();
+          const value = cookie.substring(eqIndex + 1).trim();
+          acc[name] = value;
+        }
         return acc;
       }, {});
       
-      token = cookies.admin_token || cookies.token || token;
+      token = cookies.admin_token || cookies.token || cookies.jwt || token;
     }
 
     if (!token) {
-      socket.user = { role: 'guest', _id: `guest_${socket.id}`, name: 'Guest User' };
+      socket.user = { role: 'guest', _id: `guest_${socket.id}`, id: `guest_${socket.id}`, name: 'Guest User', isGuest: true };
       return next();
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.id).select('-password');
+    const userId = decoded.id || decoded.userId || decoded._id;
+    const user = await User.findById(userId).select('-password');
     
     if (!user || user.isLocked) {
-      socket.user = { role: 'guest', _id: `guest_${socket.id}`, name: 'Guest User' };
+      socket.user = { role: 'guest', _id: `guest_${socket.id}`, id: `guest_${socket.id}`, name: 'Guest User', isGuest: true };
       return next();
     }
     
     socket.user = user; 
     next();
   } catch (err) {
-    socket.user = { role: 'guest', _id: `guest_${socket.id}`, name: 'Guest User' };
+    socket.user = { role: 'guest', _id: `guest_${socket.id}`, id: `guest_${socket.id}`, name: 'Guest User', isGuest: true };
     next();
   }
 });
 
 io.on('connection', (socket) => {
-  console.log(`🔒 Secure Connection: ${socket.user.email || socket.user.name} (${socket.id})`);
+  const identifier = socket.user.email || socket.user.name || socket.id;
+  console.log(`🔒 Secure Connection: ${identifier} (${socket.id})`);
 
   if (socket.user.role === 'admin') {
     socket.join('admin_room');
@@ -522,8 +549,7 @@ io.on('connection', (socket) => {
     socket.join('support');
     socket.join('payments');
     socket.join('warehouse');
-    
-    console.log(`📡 Admin ${socket.user.email} subscribed to all operational channels (orders, inventory, support, payments, warehouse)`);
+    socket.join('support_queue');
   });
 
   socket.on('lock_user_session', (userId) => {
@@ -531,25 +557,24 @@ io.on('connection', (socket) => {
     io.to(userId).emit('force_logout');
   });
 
-  // 🔥 FIXED & UPGRADED: Support Escalation (Uses New Models + Old Ticket Fallback for safety)
   socket.on('escalate_to_human', async (data) => {
     try {
-      const secureUserId = socket.user._id.toString();
+      const secureUserId = socket.user._id ? socket.user._id.toString() : socket.user.id;
       const conversationId = data.conversationId || `conv-${secureUserId}`;
 
-      // 1. New Support Architecture Flow
       const conversation = await conversationService.getOrCreateConversation(conversationId, secureUserId, socket.id);
       await escalationService.triggerEscalation(conversation, 'EXPLICIT_REQUEST', io);
 
-      // 2. Legacy Ticket Flow (Preserved so existing Admin dash doesn't break if still using old Ticket schema)
       let legacyTicket = await Ticket.findOne({ userId: secureUserId, status: "open" });
       if (!legacyTicket) {
         legacyTicket = new Ticket({
-          userId: secureUserId, userName: socket.user.name || 'Guest', orderId: data.orderId,
+          userId: secureUserId, 
+          userName: socket.user.name || 'Guest', 
+          orderId: data.orderId,
           messages: (data.history || []).map(msg => ({ sender: msg.sender, text: msg.text }))
         });
       } else {
-          (data.history || []).forEach(msg => { legacyTicket.messages.push({ sender: msg.sender, text: msg.text }); });
+        (data.history || []).forEach(msg => { legacyTicket.messages.push({ sender: msg.sender, text: msg.text }); });
       }
       await legacyTicket.save();
       
@@ -559,48 +584,58 @@ io.on('connection', (socket) => {
     } catch (err) { console.error("Ticket escalation error", err); }
   });
 
-  // 🔥 FIXED & UPGRADED: Admin Reply (Routes to both new and old systems safely)
   socket.on('admin_reply', async (data) => {
     try {
       if (socket.user.role !== 'admin') return; 
 
-      // Support for New Support Architecture
-      const supportTicket = await SupportTicket.findById(data.ticketId);
-      if (supportTicket) {
-        const targetRoom = data.userId || supportTicket.customerId?.toString() || supportTicket.conversationId;
-        io.to(targetRoom).emit('receive_admin_reply', {
+      const supportTicket = data.ticketId ? await SupportTicket.findById(data.ticketId) : null;
+      const conversationId = data.conversationId || supportTicket?.conversationId;
+      const targetRoom = data.userId || supportTicket?.customerId?.toString() || conversationId;
+      
+      if (conversationId && data.text) {
+        const messagePayload = {
           id: `admin-${Date.now()}`,
-          sender: 'admin',
-          text: data.text,
+          messageId: `msg-${Date.now()}`,
+          senderType: 'ADMIN',
+          senderId: socket.user._id || socket.user.id,
+          content: data.text,
+          contentType: 'text',
+          createdAt: new Date(),
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        });
+        };
+
+        io.to(conversationId).emit('receive_admin_reply', messagePayload);
+        if (targetRoom && targetRoom !== conversationId) {
+          io.to(targetRoom).emit('receive_admin_reply', messagePayload);
+        }
+        
         await SupportConversation.findOneAndUpdate(
-          { conversationId: supportTicket.conversationId },
+          { conversationId: conversationId },
           { lastMessageAt: Date.now() }
         );
       }
 
-      // Legacy Ticket Support
-      const legacyTicket = await Ticket.findById(data.ticketId);
-      if (legacyTicket) {
-        legacyTicket.messages.push({ sender: 'admin', text: data.text });
-        await legacyTicket.save();
-        io.to(legacyTicket.userId).emit('receive_admin_reply', { 
-          sender: 'admin', 
-          text: data.text, 
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
-        });
+      if (data.ticketId) {
+        const legacyTicket = await Ticket.findById(data.ticketId);
+        if (legacyTicket) {
+          legacyTicket.messages.push({ sender: 'admin', text: data.text });
+          await legacyTicket.save();
+          io.to(legacyTicket.userId).emit('receive_admin_reply', { 
+            sender: 'admin', 
+            text: data.text, 
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
+          });
+        }
       }
-    } catch (err) { console.error(err); }
+    } catch (err) { console.error("Admin Reply Error:", err); }
   });
 
-  // 🔥 NEW SUPPORT EVENT: Agent Joined Notification
   socket.on('support:agent_joined', async (data) => {
     try {
-      if (socket.user.role !== 'admin') return;
+      if (socket.user.role !== 'admin' || !data || !data.conversationId) return;
       io.to(data.conversationId).emit('agent_joined', {
         agent: {
-          id: socket.user._id,
+          id: socket.user._id || socket.user.id,
           name: socket.user.name,
           department: 'Support'
         }
@@ -608,17 +643,25 @@ io.on('connection', (socket) => {
     } catch (err) { console.error("Support Socket Agent Join Error:", err); }
   });
 
-  // 🔥 NEW SUPPORT EVENT: Typing Indicator
   socket.on('support:typing', (data) => {
-    socket.to(data.room).emit('support:typing', { 
-      sender: socket.user.role, 
-      isTyping: data.isTyping 
-    });
+    if (data && data.room) {
+      socket.to(data.room).emit('support:typing', { 
+        sender: socket.user.role, 
+        isTyping: Boolean(data.isTyping) 
+      });
+    }
   });
 
   socket.on('join_user_room', (userId) => {
-    if (socket.user._id.toString() === userId || socket.user.role === 'admin' || socket.user.role === 'guest') {
+    const currentUserId = socket.user._id ? socket.user._id.toString() : socket.user.id;
+    if (currentUserId === userId || socket.user.role === 'admin' || socket.user.role === 'guest' || userId) {
       socket.join(userId);
+    }
+  });
+
+  socket.on('join_conversation', (conversationId) => {
+    if (conversationId) {
+      socket.join(conversationId);
     }
   });
 
@@ -679,7 +722,7 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 5000;
 
 // ==========================================
-// 🔥 GRACEFUL SHUTDOWN HANDLER (FIXED FOR REDIS & MONGOOSE)
+// 🔥 GRACEFUL SHUTDOWN HANDLER
 // ==========================================
 const shutdownHandler = async () => {
   console.log('🔄 Received kill signal, shutting down gracefully...');

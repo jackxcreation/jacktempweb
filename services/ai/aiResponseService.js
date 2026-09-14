@@ -4,7 +4,7 @@
  * Synthesizes the final response. 
  * Converts verified tool data into natural language and UI structured blocks.
  */
-const generate = async (userText, toolResults, languageStyle) => {
+const generate = async (userText, toolResults, languageStyle = 'english') => {
   const toolResultsString = JSON.stringify(toolResults || {});
 
   const systemPrompt = `
@@ -17,7 +17,7 @@ ${toolResultsString}
 RULES:
 1. NEVER invent, guess, or hallucinate order statuses, refund dates, prices, or shipping times.
 2. If the data says "error" or data is missing, politely say you cannot verify the information right now and offer human support.
-3. Reply in the exact same language/style as the user (e.g., if user speaks Hinglish, reply in Hinglish).
+3. Reply strictly in the requested language/style: ${languageStyle} (e.g., if style is 'hinglish', reply in natural Hinglish).
 4. Be concise, polite, and professional.
 
 UI RENDERING (CRITICAL):
@@ -37,10 +37,15 @@ Do not use the JSON block if you do not have verified order data.
 `;
 
   try {
-    const finalContent = await callLLM([
+    const rawResponse = await callLLM([
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: userText }
+      { role: 'user', content: userText || "Hello" }
     ]);
+
+    // Handle different response formats safely from the gateway
+    const finalContent = typeof rawResponse === 'string' 
+      ? rawResponse 
+      : (rawResponse?.content || rawResponse?.message?.content || JSON.stringify(rawResponse));
 
     // Parse out type for the orchestrator
     let type = 'text';
@@ -54,7 +59,17 @@ Do not use the JSON block if you do not have verified order data.
     };
   } catch (error) {
     console.error("AI Response Generation Error:", error);
-    return { text: "I'm currently facing a technical issue. Let me connect you to a human agent.", type: "text", failed: true };
+    
+    // 🔥 Localized fallback based on user's language style
+    const fallbackText = languageStyle === 'hinglish' 
+      ? "Bhai, abhi thoda technical issue aa raha hai. Main aapko human agent se connect kar raha hoon." 
+      : "I'm currently facing a technical issue. Let me connect you to a human agent.";
+
+    return { 
+      text: fallbackText, 
+      type: "text", 
+      failed: true 
+    };
   }
 };
 

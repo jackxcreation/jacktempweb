@@ -1,3 +1,4 @@
+// jack-frontend/src/i18n.js
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
@@ -17,7 +18,12 @@ const resources = {
       buyNow: "Buy It Now",
       searchPlaceholder: "Search for products, brands and more...",
       freeDelivery: "Free Delivery",
-      secureCheckout: "100% Secure Checkout"
+      secureCheckout: "100% Secure Checkout",
+      // 🔥 Added Support & E-commerce Keys
+      support: "Support",
+      helpCenter: "Help Center",
+      chatWithUs: "Chat with Us",
+      recentOrders: "Recent Orders"
     }
   },
   hi: {
@@ -33,7 +39,12 @@ const resources = {
       buyNow: "अभी खरीदें",
       searchPlaceholder: "उत्पाद, ब्रांड और बहुत कुछ खोजें...",
       freeDelivery: "मुफ्त डिलीवरी",
-      secureCheckout: "100% सुरक्षित चेकआउट"
+      secureCheckout: "100% सुरक्षित चेकआउट",
+      // 🔥 Added Support & E-commerce Keys
+      support: "सहायता",
+      helpCenter: "सहायता केंद्र",
+      chatWithUs: "हमसे चैट करें",
+      recentOrders: "हाल के ऑर्डर"
     }
   },
   hinglish: {
@@ -49,7 +60,12 @@ const resources = {
       buyNow: "Abhi Kharido",
       searchPlaceholder: "Products, brands aur bahut kuch search karo...",
       freeDelivery: "Free Delivery",
-      secureCheckout: "100% Secure Checkout"
+      secureCheckout: "100% Secure Checkout",
+      // 🔥 Added Support & E-commerce Keys
+      support: "Support",
+      helpCenter: "Help Center",
+      chatWithUs: "Chat Karo",
+      recentOrders: "Recent Orders"
     }
   }
   // 🚀 Future Expansion Hooks (Tamil, Telugu, Bengali, etc. can be appended here easily):
@@ -64,6 +80,12 @@ i18n
     resources,
     fallbackLng: 'en',
     debug: false,
+    // 🔥 UPGRADE: Configure detector to sync with LanguageSelector's 'jack_lang' storage key
+    detection: {
+      order: ['localStorage', 'navigator', 'htmlTag'],
+      caches: ['localStorage'],
+      lookupLocalStorage: 'jack_lang'
+    },
     interpolation: {
       escapeValue: false // React already protects from xss
     }

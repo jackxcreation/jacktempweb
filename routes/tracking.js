@@ -1,18 +1,34 @@
+// routes/trackRouter.js
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const { Order } = require('../models');
 
-// Track Order by Order ID or Tracking Number
+// Track Order by Order ID, Tracking Number, or AWB
 router.get('/api/track/:orderId', async (req, res) => {
   try {
     const { orderId } = req.params;
     
+    if (!orderId || typeof orderId !== 'string' || orderId.trim().length === 0) {
+      return res.status(400).json({ success: false, message: "Please provide a valid Order ID or Tracking Number." });
+    }
+
+    const cleanId = orderId.trim();
+
+    // 🔥 Pro Feature: Dynamically build query conditions for _id, trackingId, or AWB
+    const queryConditions = [];
+    if (mongoose.Types.ObjectId.isValid(cleanId)) {
+      queryConditions.push({ _id: cleanId });
+    }
+    queryConditions.push({ trackingId: cleanId });
+    queryConditions.push({ "shipment.awb": cleanId });
+
     const order = await Order.findOne({ 
-      $or: [{ _id: orderId.match(/^[0-9a-fA-F]{24}$/) ? orderId : null }, { trackingId: orderId }] 
+      $or: queryConditions 
     }).populate('items.product').lean();
 
     if (!order) {
-      return res.status(404).json({ success: false, message: "Order not found. Please check your Order ID." });
+      return res.status(404).json({ success: false, message: "Order not found. Please check your Order ID or Tracking Number." });
     }
 
     // Standardized Tracking Milestones based on order status
@@ -34,11 +50,11 @@ router.get('/api/track/:orderId', async (req, res) => {
       pincode: order.address.pincode ? order.address.pincode.slice(0, 3) + '***' : '******' // Masked pincode
     } : null;
 
-    res.json({
+    return res.json({
       success: true,
       orderId: order._id,
-      trackingId: order.trackingId || `JCK-TRK-${order._id.toString().slice(-6).toUpperCase()}`,
-      courierPartner: order.courierPartner || 'Delhivery Express',
+      trackingId: order.trackingId || order.shipment?.awb || `JCK-TRK-${order._id.toString().slice(-6).toUpperCase()}`,
+      courierPartner: order.shipment?.provider || order.courierPartner || 'Delhivery Express',
       estimatedDelivery: order.estimatedDelivery || '3-5 Business Days',
       status: order.status || 'Ordered',
       timeline,
@@ -46,7 +62,7 @@ router.get('/api/track/:orderId', async (req, res) => {
     });
   } catch (error) {
     console.error("Tracking API Error:", error);
-    res.status(500).json({ success: false, message: "Server error tracking order" });
+    return res.status(500).json({ success: false, message: "Server error tracking order" });
   }
 });
 

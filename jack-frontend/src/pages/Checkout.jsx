@@ -1,3 +1,4 @@
+// src/pages/Checkout.jsx
 import React, { useState, useEffect, useMemo, useCallback, memo } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -5,7 +6,6 @@ import {
   FiCheckCircle, FiCreditCard, FiSmartphone, FiShield, 
   FiMapPin, FiTruck, FiLock, FiChevronRight, FiLoader, FiCheck, FiInfo, FiAlertCircle
 } from 'react-icons/fi';
-import Navbar from '../components/Navbar';
 import { useCart } from '../context/CartContext';
 import { useUser } from '../context/UserContext';
 import { API_URL } from '../config'; 
@@ -20,6 +20,11 @@ const formatCurrency = (paise) => {
 
 // 🔥 HELPER TO GET TOKEN
 const getToken = () => localStorage.getItem('token');
+
+// 🔥 HELPER FOR IDEMPOTENCY KEY GENERATION
+const generateIdempotencyKey = () => {
+  return 'idemp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 11);
+};
 
 // --- Reusable Components for Performance & Cleanliness ---
 
@@ -60,10 +65,10 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
   const [showCodAlert, setShowCodAlert] = useState(false); 
   const [isProcessing, setIsProcessing] = useState(false); 
 
-  // 🔥 NAYA FIX: Toast State for Beautiful Error Reporting
+  // 🔥 Toast State for Beautiful Error Reporting
   const [toast, setToast] = useState({ show: false, message: '', type: 'error' });
 
-  // 🔥 PHASE 2 FIX: codFeePaise default set to 0 to respect backend authority
+  // 🔥 codFeePaise default set to 0 to respect backend authority
   const [codIntelligence, setCodIntelligence] = useState({
     codAvailable: true,
     codFeePaise: 0, 
@@ -78,7 +83,13 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
     name: user?.name || '', primaryPhone: user?.phone || '', flat: '', street: '', city: '', state: '', pincode: ''
   });
 
-  // 🔥 NAYA FIX: Smart Parser for Zod Errors from Backend
+  // 🔥 Scroll to top on mount & set professional SEO title
+  useEffect(() => {
+    window.scrollTo(0, 0);
+    document.title = "Secure Checkout | Jack Essentials";
+  }, []);
+
+  // 🔥 Smart Parser for Zod Errors from Backend
   const parseBackendError = useCallback((err) => {
     if (err?.response?.data) {
       const data = err.response.data;
@@ -260,8 +271,9 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
           primaryPhone: selectedAddress?.primaryPhone || selectedAddress?.phone || user?.phone || '9999999999'
         };
 
-        // 🔥 Idempotency protected request payload with unique UUID header
-        const orderResult = await placeOrder(orderItems, finalTotalPaise, safeAddress, finalPaymentMethod, trafficSource);
+        // 🔥 Idempotency protected request payload with unique header
+        const idempotencyKey = generateIdempotencyKey();
+        const orderResult = await placeOrder(orderItems, finalTotalPaise, safeAddress, finalPaymentMethod, trafficSource, idempotencyKey);
         
         if (orderResult && orderResult.error) {
             showToast("❌ Checkout Failed: " + parseBackendError(orderResult), "error");
@@ -323,7 +335,8 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
         primaryPhone: selectedAddress?.primaryPhone || selectedAddress?.phone || user?.phone || '9999999999'
       };
 
-      const orderResult = await placeOrder(orderItems, finalTotalPaise, safeAddress, 'Razorpay Online', trafficSource);
+      const idempotencyKey = generateIdempotencyKey();
+      const orderResult = await placeOrder(orderItems, finalTotalPaise, safeAddress, 'Razorpay Online', trafficSource, idempotencyKey);
       
       if (!orderResult || orderResult.error) {
           showToast("❌ Failed to initiate payment: " + parseBackendError(orderResult), "error");
@@ -344,7 +357,10 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
         orderId: pendingOrderId 
       }, {
         timeout: 15000, 
-        headers: { Authorization: `Bearer ${getToken()}` } 
+        headers: { 
+          Authorization: `Bearer ${getToken()}`,
+          'X-Idempotency-Key': generateIdempotencyKey()
+        } 
       });
 
       const orderData = res.data;
@@ -448,9 +464,8 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] font-sans pb-24 relative selection:bg-[#FF4500] selection:text-white">
-      <Navbar isLoggedIn={isLoggedIn} setIsLoggedIn={setIsLoggedIn} />
 
-      {/* 🔥 NAYA FIX: Toast Error Notification Modal 🔥 */}
+      {/* 🔥 Toast Error Notification Modal */}
       <AnimatePresence>
         {toast.show && (
           <motion.div 

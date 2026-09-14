@@ -1,3 +1,4 @@
+// jack-frontend/src/context/AuthContext.jsx
 import React, { createContext } from 'react';
 import { useUser } from './UserContext';
 
@@ -5,7 +6,7 @@ export const AuthContext = createContext();
 
 // 🔥 PHASE 4 FIX: AuthContext is a seamless proxy for UserContext with bulletproof token storage for subdomains.
 export const AuthProvider = ({ children }) => {
-  const { isAdmin, loginUser, logoutUser, isLoadingSession } = useUser();
+  const { user, isLoggedIn, isAdmin, loginUser, logoutUser, isLoadingSession } = useUser();
 
   // 🔥 Wrapped login to catch token and store in localStorage for cross-domain subdomain persistence
   const handleLogin = async (email, password) => {
@@ -44,6 +45,8 @@ export const AuthProvider = ({ children }) => {
 
   return (
     <AuthContext.Provider value={{ 
+      user,
+      isLoggedIn: isLoggedIn !== undefined ? isLoggedIn : !!user,
       isAdminAuth: isAdmin, 
       login: handleLogin, 
       logout: handleLogout, 
@@ -53,3 +56,5 @@ export const AuthProvider = ({ children }) => {
     </AuthContext.Provider>
   );
 };
+
+export default AuthContext;

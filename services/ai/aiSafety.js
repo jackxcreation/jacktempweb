@@ -22,10 +22,10 @@ const validateInput = (text) => {
 };
 
 const sanitizeOutput = (text) => {
-  if (!text) return "";
+  if (!text || typeof text !== 'string') return "";
 
-  // Strip potential leaking of environment variables or secrets
-  let sanitized = text.replace(/(sk-[a-zA-Z0-9]{32,})|(gsk_[a-zA-Z0-9]{30,})/g, "[REDACTED]");
+  // 🔥 FIX: Added Google Gemini API keys (AIzaSy...) along with OpenAI and Groq keys to redaction
+  let sanitized = text.replace(/(sk-[a-zA-Z0-9]{32,})|(gsk_[a-zA-Z0-9]{30,})|(AIzaSy[a-zA-Z0-9\-_]{33})/g, "[REDACTED]");
   
   return sanitized;
 };

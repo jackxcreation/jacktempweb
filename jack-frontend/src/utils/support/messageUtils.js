@@ -2,6 +2,7 @@
 
 /**
  * Normalizes raw responses into a safe, predictable format for UI rendering.
+ * Enhanced with robust JSON markdown parsing and fallback handling.
  */
 export const normalizeAIResponse = (rawResponse) => {
   if (!rawResponse) {
@@ -13,18 +14,28 @@ export const normalizeAIResponse = (rawResponse) => {
     };
   }
 
-  let text = typeof rawResponse === 'string' ? rawResponse.trim() : rawResponse.text || "";
-  let triggerEscalation = false;
+  let text = "";
   let structuredData = null;
+  let triggerEscalation = false;
 
-  // Handle Escalation Tags
+  // Extract text based on input type
+  if (typeof rawResponse === 'string') {
+    text = rawResponse.trim();
+  } else if (typeof rawResponse === 'object') {
+    text = rawResponse.text || rawResponse.content || rawResponse.reply || "";
+    if (rawResponse.structuredData) {
+      structuredData = rawResponse.structuredData;
+    }
+  }
+
+  // 1. 🔥 UPGRADE: Use Global Regex to catch multiple tags if AI hallucinates
   if (text.includes("[TRANSFER_TO_AGENT]")) {
-    text = text.replace("[TRANSFER_TO_AGENT]", "").trim() || "Transferring you to a live support agent...";
+    text = text.replace(/\[TRANSFER_TO_AGENT\]/g, "").trim() || "Transferring you to a live support agent...";
     triggerEscalation = true;
   }
 
-  // Safely Parse AI Markdown JSON Blocks (```json ... ```)
-  const jsonRegex = /```json\n([\s\S]*?)\n```/;
+  // 2. Robust markdown JSON block regex supporting any spacing or formatting variations
+  const jsonRegex = /```(?:json)?\s*([\s\S]*?)\s*```/;
   const match = text.match(jsonRegex);
   
   if (match && match[1]) {
@@ -36,16 +47,15 @@ export const normalizeAIResponse = (rawResponse) => {
     }
   }
 
-  // Fallback for direct JSON objects from backend
+  // 3. Fallback for direct JSON objects from backend
   if (!structuredData && typeof rawResponse === 'object' && rawResponse.data) {
-    structuredData = rawResponse;
-    text = rawResponse.text || "";
+    structuredData = rawResponse.data;
   }
 
   return {
-    text,
+    text: text || "Response received.",
     triggerEscalation,
-    structuredData
+    structuredData: structuredData || null
   };
 };
 
@@ -53,10 +63,37 @@ export const normalizeAIResponse = (rawResponse) => {
  * Generates an optimistic user message object with stable IDs.
  */
 export const createOptimisticUserMessage = (text) => ({
-  id: `usr-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-  sender: 'user',
-  type: 'text',
-  text,
+  id: `usr-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+  // 🔥 UPGRADE: Aligned sender and type with the Backend SupportMessage Schema
+  senderType: 'USER', 
+  contentType: 'text', 
+  content: String(text || "").trim(), // Aligned with backend 'content' field
   status: 'sending',
-  time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  time: formatMessageTime()
 });
+
+/**
+ * Generates an optimistic bot/AI message object for instant UI rendering.
+ */
+export const createOptimisticBotMessage = (text, structuredData = null) => ({
+  id: `bot-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+  // 🔥 UPGRADE: Aligned sender and type with the Backend SupportMessage Schema
+  senderType: 'BOT', 
+  contentType: structuredData ? 'action_card' : 'text', 
+  content: String(text || "").trim(), // Aligned with backend 'content' field
+  structuredData,
+  status: 'sent',
+  time: formatMessageTime()
+});
+
+/**
+ * Standardized timestamp formatter for chat bubbles.
+ */
+export const formatMessageTime = (dateInput = new Date()) => {
+  // 🔥 UPGRADE: Safely handles JS "Invalid Date" silent failures
+  const date = new Date(dateInput);
+  if (isNaN(date.getTime())) {
+    return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+};

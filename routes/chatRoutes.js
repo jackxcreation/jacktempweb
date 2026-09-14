@@ -1,6 +1,6 @@
 // routes/chatRoutes.js
-import express from 'express';
-import { GoogleGenerativeAI } from '@google/generative-ai'; // 🔥 Switched to Gemini SDK
+const express = require('express');
+const { GoogleGenerativeAI } = require('@google/generative-ai'); // 🔥 FIXED: Changed to CommonJS require
 
 const router = express.Router();
 
@@ -22,21 +22,52 @@ router.post('/', async (req, res) => {
     // Initialize Gemini client securely using environment variable
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-    // Format messages for Gemini LLM (Gemini uses 'model' instead of 'assistant')
-    const formattedHistory = (chatHistory || []).map(msg => ({
-      role: msg.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: msg.content || "" }]
-    }));
+    // 🔥 FIXED: Bulletproof History Formatting (Squashes consecutive roles & enforces alternating logic)
+    let formattedHistory = [];
+    
+    if (chatHistory && Array.isArray(chatHistory)) {
+      let lastRole = null;
 
-    const serverSystemInstruction = systemInstruction || "You are a helpful support assistant for Jack Essentials.";
+      chatHistory.forEach(msg => {
+        // Force mapped roles to be ONLY 'user' or 'model'
+        const mappedRole = (msg.role === 'assistant' || msg.role === 'model') ? 'model' : 'user';
+        
+        let text = "";
+        if (msg.tool_calls && msg.tool_calls.length > 0) {
+          text = "[System checked internal data]";
+        } else if (msg.role === 'tool') {
+          text = `[System Tool Data]: ${msg.content || "Success"}`;
+        } else if (msg.content) {
+          text = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+        }
 
-    // Initialize the Gemini model
+        if (text) {
+          if (lastRole === mappedRole) {
+            // CRITICAL: If the same role speaks twice, append to the last message to avoid crashing Gemini
+            formattedHistory[formattedHistory.length - 1].parts[0].text += `\n${text}`;
+          } else {
+            // Otherwise, add a new history entry
+            formattedHistory.push({ role: mappedRole, parts: [{ text: text }] });
+            lastRole = mappedRole;
+          }
+        }
+      });
+    }
+
+    // 🔥 Gemini STRICTLY requires the first message in history to be from the 'user'
+    if (formattedHistory.length > 0 && formattedHistory[0].role === 'model') {
+      formattedHistory.shift();
+    }
+
+    const serverSystemInstruction = systemInstruction || "You are a helpful support assistant for Jack Essentials. Do NOT answer anything unrelated to the store.";
+
+    // 🔥 FIXED: Changed non-existent 3.5-flash to the stable gemini-1.5-flash
     const model = genAI.getGenerativeModel({ 
-      model: "gemini-3.5-flash",
+      model: "gemini-1.5-flash",
       systemInstruction: serverSystemInstruction
     });
 
-    // Start chat session with history
+    // Start chat session with safely parsed history
     const chat = model.startChat({
       history: formattedHistory,
       generationConfig: {
@@ -53,8 +84,9 @@ router.post('/', async (req, res) => {
 
   } catch (error) {
     console.error("Gemini Chat API Error on Server:", error);
+    
     return res.status(500).json({ 
-      error: "Failed to fetch AI response", 
+      error: error.message || "Failed to fetch AI response", 
       reply: req.body?.languageStyle === 'hinglish' 
         ? "Bhai, abhi thoda technical issue aa raha hai. Main aapko human agent se connect kar raha hoon. [TRANSFER_TO_AGENT]" 
         : "I'm experiencing a minor glitch. Let me connect you with a human agent. [TRANSFER_TO_AGENT]" 
@@ -62,4 +94,5 @@ router.post('/', async (req, res) => {
   }
 });
 
-export default router;
+// 🔥 FIXED: CommonJS Export Export
+module.exports = router;

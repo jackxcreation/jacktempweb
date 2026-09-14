@@ -1,3 +1,4 @@
+// jack-frontend/src/index.js (or main.jsx)
 import React, { StrictMode, Component } from 'react';
 import { createRoot } from 'react-dom/client';
 import './index.css';
@@ -36,7 +37,7 @@ class ErrorBoundary extends Component {
           <p className="text-slate-400 mb-8 max-w-md font-medium">Our servers encountered an unexpected UI glitch. Our engineering team has been notified.</p>
           <button 
             onClick={() => window.location.href = '/'} 
-            className="bg-[#FF4500] text-white px-10 py-4 rounded-xl font-black hover:bg-[#E8004C] transition-all shadow-lg active:scale-95 tracking-widest"
+            className="bg-[#FF4500] text-white px-10 py-4 rounded-xl font-black hover:bg-[#E8004C] transition-all shadow-lg active:scale-95 tracking-widest cursor-pointer"
           >
             REBOOT SYSTEM
           </button>
@@ -71,12 +72,15 @@ if (typeof window !== 'undefined') {
 }
 
 // ==========================================
-// 🚀 APP INITIALIZATION
+// 🚀 APP INITIALIZATION WITH SAFETY CHECK
 // ==========================================
-createRoot(document.getElementById('root')).render(
-  <StrictMode>
-    <ErrorBoundary>
-      <App />
-    </ErrorBoundary>
-  </StrictMode>
-);
+const rootElement = document.getElementById('root');
+if (rootElement) {
+  createRoot(rootElement).render(
+    <StrictMode>
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
+    </StrictMode>
+  );
+}

@@ -1,8 +1,8 @@
+// src/pages/OrderDetails.jsx
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FiArrowLeft, FiPackage, FiTruck, FiCheckCircle, FiClock, FiXCircle, FiMapPin, FiCreditCard, FiHelpCircle, FiCopy, FiDownload, FiStar, FiUpload, FiX } from 'react-icons/fi';
-import Navbar from '../components/Navbar';
 import { useUser } from '../context/UserContext';
 import axiosInstance from '../api/axiosInstance';
 
@@ -110,12 +110,12 @@ const SubmitReviewModal = ({ isOpen, onClose, product, orderId }) => {
 
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">Headline</label>
-              <input type="text" placeholder="What's most important to know?" value={title} onChange={(e) => setTitle(e.target.value)} className="w-full border border-slate-200 rounded-xl p-3 text-sm font-medium outline-none focus:border-slate-900" />
+              <input type="text" placeholder="What's most important to know?" value={title} onChange={(e) => setTitle(e.target.value)} className="w-full border border-slate-200 rounded-xl p-3 text-sm font-medium outline-none focus:border-slate-900 text-slate-800" />
             </div>
 
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">Add Written Review</label>
-              <textarea rows="4" placeholder="What did you like or dislike? How was the quality?" value={comment} onChange={(e) => setComment(e.target.value)} required className="w-full border border-slate-200 rounded-xl p-3 text-sm font-medium outline-none focus:border-slate-900 resize-none"></textarea>
+              <textarea rows="4" placeholder="What did you like or dislike? How was the quality?" value={comment} onChange={(e) => setComment(e.target.value)} required className="w-full border border-slate-200 rounded-xl p-3 text-sm font-medium outline-none focus:border-slate-900 resize-none text-slate-800"></textarea>
             </div>
 
             <div>
@@ -158,15 +158,19 @@ const OrderDetails = ({ isLoggedIn, setIsLoggedIn }) => {
   const [selectedProductForReview, setSelectedProductForReview] = useState(null);
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
 
+  // 🔥 Scroll to top on mount & set professional SEO title
+  useEffect(() => {
+    window.scrollTo(0, 0);
+    document.title = "Order Details | Jack Essentials — Tracking & Summary";
+  }, []);
+
   const order = orders.find(o => String(o.id) === String(id) || String(o._id) === String(id));
 
   useEffect(() => {
-    window.scrollTo(0, 0);
-    
     // 🔥 Fetch Real-Time Courier Tracking Events
     const fetchLiveTracking = async () => {
       try {
-        const res = await axiosInstance.get(`/api/track/${id}`);
+        const res = await axiosInstance.get(`/track/${orderId}`);
         if (res.data && res.data.success) {
           setLiveTracking(res.data);
         }
@@ -221,9 +225,7 @@ const OrderDetails = ({ isLoggedIn, setIsLoggedIn }) => {
   const orderTotalPaise = order.totalPaise || 0;
 
   return (
-    <div className="min-h-screen bg-slate-50 font-sans pb-24">
-      <Navbar isLoggedIn={isLoggedIn} setIsLoggedIn={setIsLoggedIn} />
-
+    <div className="min-h-screen bg-slate-50 font-sans pb-24 selection:bg-[#FF4500] selection:text-white">
       <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 mt-8">
         
         <button onClick={() => navigate('/profile')} className="flex items-center text-slate-500 hover:text-slate-900 mb-6 font-bold transition-colors w-max bg-white px-4 py-2 rounded-full shadow-sm border border-slate-200">
@@ -343,7 +345,7 @@ const OrderDetails = ({ isLoggedIn, setIsLoggedIn }) => {
                     <div>
                       <h3 className="font-black text-indigo-900 text-lg flex items-center"><FiTruck className="mr-2"/> Courier Tracking ID</h3>
                       <p className="text-sm font-medium text-indigo-700 mt-1 flex items-center gap-2">
-                        AWB / Tracking Number: <span className="font-mono bg-white px-2 py-1 rounded border border-indigo-100">{order.shiprocketOrderId || liveTracking?.trackingId}</span>
+                        AWB / Tracking Number: <span className="font-mono bg-white px-2 py-1 rounded border border-indigo-100 text-slate-800">{order.shiprocketOrderId || liveTracking?.trackingId}</span>
                         <button onClick={() => handleCopy(order.shiprocketOrderId || liveTracking?.trackingId, 'awb')} className="hover:text-indigo-900" title="Copy ID">
                            {copied === 'awb' ? <FiCheckCircle className="text-green-500"/> : <FiCopy />}
                         </button>
@@ -400,7 +402,7 @@ const OrderDetails = ({ isLoggedIn, setIsLoggedIn }) => {
                       {order.address ? (
                         <>
                           <p className="font-black text-slate-900 text-base mb-1">{order.userDetails?.name || order.address.name || 'Customer'}</p>
-                          <p className="mb-2">{order.address.primaryPhone || order.userDetails?.phone}</p>
+                          <p className="mb-2 text-slate-600">{order.address.primaryPhone || order.userDetails?.phone || order.address.phone}</p>
                           <p className="leading-relaxed text-slate-600">{order.address.flat}, {order.address.street}</p>
                           <p className="font-bold text-slate-800 mt-1">{order.address.city}, {order.address.state} - {order.address.pincode}</p>
                         </>
@@ -415,8 +417,8 @@ const OrderDetails = ({ isLoggedIn, setIsLoggedIn }) => {
                   <div>
                     <h3 className="text-xs font-black text-slate-400 mb-3 uppercase tracking-widest flex items-center"><FiCreditCard className="mr-2 text-green-500" size={16}/> Payment Method</h3>
                     <div className="text-sm font-bold text-slate-800 bg-slate-50 p-4 rounded-2xl border border-slate-100 flex items-center justify-between">
-                      <span>{order.paymentMethod?.includes('UPI') ? 'UPI Payment' : order.paymentMethod || 'Cash on Delivery'}</span>
-                      {order.paymentMethod?.includes('UPI') && <span className="bg-green-100 text-green-700 px-2 py-1 rounded text-[10px] tracking-widest">PAID</span>}
+                      <span>{order.paymentMethod?.includes('UPI') || order.paymentMethod?.includes('Online') ? 'Online Payment' : order.paymentMethod || 'Cash on Delivery'}</span>
+                      <span className="bg-green-100 text-green-700 px-2 py-1 rounded text-[10px] tracking-widest">CONFIRMED</span>
                     </div>
                   </div>
 

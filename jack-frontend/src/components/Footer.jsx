@@ -1,3 +1,4 @@
+// jack-frontend/src/components/Footer.jsx
 import React, { useState } from 'react';
 import axios from 'axios';
 import { Link } from 'react-router-dom';
@@ -34,14 +35,19 @@ const Footer = () => {
   const handleSubscribe = async (e) => {
     e.preventDefault();
     const email = e.target.email.value;
+    if (!email || !email.trim()) return;
+
     setIsLoading(true);
     
     try {
+      // 🔥 UPGRADE: Defensively handle subscription API endpoint
       await axios.post(`${API_URL}/subscribe`, { email });
       setToast({ show: true, message: "Welcome to the VIP club! 🎉", type: 'success' });
       e.target.reset(); 
     } catch (err) {
-      setToast({ show: true, message: "You're already on our list! 😉", type: 'error' });
+      // Fallback or friendly error message
+      const errorMsg = err.response?.data?.message || "You're already on our list! 😉";
+      setToast({ show: true, message: errorMsg, type: 'error' });
     }
     
     setIsLoading(false);
@@ -59,7 +65,6 @@ const Footer = () => {
 
   const aboutText = settings?.footerAbout || "Upgrade your lifestyle with our premium collection of electronics, fashion, and daily essentials. Designed for the modern Indian.";
   
-  // 🔥 UPDATED: Added "About Us" to balance the list
   const shopLinks = [
     { title: "About Us", url: "/about" },
     { title: "Electronics", url: "/shop/electronics" },
@@ -68,7 +73,6 @@ const Footer = () => {
     { title: "Super Offers 🔥", url: "/shop" }
   ];
 
-  // 🔥 UPDATED: Added all Legal, Support, and Tracking links here
   const supportLinks = [
     { title: "Track Your Order", url: "/track-order" },
     { title: "Returns & Refunds", url: "/returns" },
@@ -79,7 +83,7 @@ const Footer = () => {
   ];
 
   return (
-    <footer className="bg-[#0B0F19] pt-16 pb-8 border-t border-slate-800 font-sans relative overflow-hidden">
+    <footer className="bg-[#0B0F19] pt-16 pb-8 border-t border-slate-800 font-sans relative overflow-hidden flex-shrink-0">
       
       {/* 🔥 ANIMATED TOAST NOTIFICATION 🔥 */}
       <AnimatePresence>
@@ -88,7 +92,7 @@ const Footer = () => {
             initial={{ opacity: 0, y: 50, scale: 0.9 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.9 }}
-            className={`fixed bottom-10 left-1/2 -translate-x-1/2 z-[100] px-6 py-3.5 rounded-full shadow-2xl flex items-center gap-3 font-bold text-sm tracking-wide ${
+            className={`fixed bottom-10 left-1/2 -translate-x-1/2 z-[100] px-6 py-3.5 rounded-2xl shadow-2xl flex items-center gap-3 font-bold text-sm tracking-wide ${
               toast.type === 'success' ? 'bg-[#FF4500] text-white' : 'bg-slate-800 border border-slate-700 text-slate-200'
             }`}
           >
@@ -134,7 +138,8 @@ const Footer = () => {
                 <button 
                   type="submit" 
                   disabled={isLoading}
-                  className="absolute right-1.5 top-1/2 -translate-y-1/2 bg-[#FF4500] hover:bg-orange-600 text-white p-2 rounded-lg transition-colors active:scale-95 disabled:opacity-50"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 bg-[#FF4500] hover:bg-orange-600 text-white p-2.5 rounded-lg transition-colors active:scale-95 disabled:opacity-50 cursor-pointer"
+                  aria-label="Subscribe"
                 >
                   {isLoading ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <FiArrowRight size={18} />}
                 </button>
@@ -182,10 +187,10 @@ const Footer = () => {
 
             {/* Social Icons */}
             <div className="flex items-center space-x-4 mt-8">
-              <a href={getSocialUrl(settings?.socialLinks?.instagram)} target="_blank" rel="noopener noreferrer" className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center text-slate-400 hover:bg-[#FF4500] hover:text-white transition-all"><FiInstagram size={18} /></a>
-              <a href={getSocialUrl(settings?.socialLinks?.twitter)} target="_blank" rel="noopener noreferrer" className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center text-slate-400 hover:bg-[#FF4500] hover:text-white transition-all"><FiTwitter size={18} /></a>
-              <a href={getSocialUrl(settings?.socialLinks?.facebook)} target="_blank" rel="noopener noreferrer" className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center text-slate-400 hover:bg-[#FF4500] hover:text-white transition-all"><FiFacebook size={18} /></a>
-              <a href={getSocialUrl(settings?.socialLinks?.youtube)} target="_blank" rel="noopener noreferrer" className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center text-slate-400 hover:bg-[#FF4500] hover:text-white transition-all"><FiYoutube size={18} /></a>
+              <a href={getSocialUrl(settings?.socialLinks?.instagram)} target="_blank" rel="noopener noreferrer" aria-label="Instagram" className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center text-slate-400 hover:bg-[#FF4500] hover:text-white transition-all"><FiInstagram size={18} /></a>
+              <a href={getSocialUrl(settings?.socialLinks?.twitter)} target="_blank" rel="noopener noreferrer" aria-label="Twitter" className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center text-slate-400 hover:bg-[#FF4500] hover:text-white transition-all"><FiTwitter size={18} /></a>
+              <a href={getSocialUrl(settings?.socialLinks?.facebook)} target="_blank" rel="noopener noreferrer" aria-label="Facebook" className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center text-slate-400 hover:bg-[#FF4500] hover:text-white transition-all"><FiFacebook size={18} /></a>
+              <a href={getSocialUrl(settings?.socialLinks?.youtube)} target="_blank" rel="noopener noreferrer" aria-label="YouTube" className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center text-slate-400 hover:bg-[#FF4500] hover:text-white transition-all"><FiYoutube size={18} /></a>
             </div>
           </div>
         </div>
@@ -213,7 +218,7 @@ const Footer = () => {
           </div>
           <div className="flex items-center gap-2">
             {['UPI', 'VISA', 'MasterCard', 'RuPay'].map(card => (
-              <span key={card} className="px-2 py-1 bg-slate-800 text-slate-300 text-[10px] font-black tracking-wider rounded border border-slate-700">{card}</span>
+              <span key={card} className="px-2.5 py-1 bg-slate-800 text-slate-300 text-[10px] font-black tracking-wider rounded border border-slate-700">{card}</span>
             ))}
           </div>
         </div>

@@ -20,7 +20,8 @@ const detectLanguage = (text) => {
     'hai', 'nahi', 'karo', 'kar', 'acha', 'kyu', 'order', 'refund'
   ];
 
-  const words = lowerText.split(/\s+/);
+  // 🔥 FIX: Clean punctuation from words (e.g. "mujhe?" becomes "mujhe") to ensure reliable matching
+  const words = lowerText.split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, ''));
   const hinglishMatchCount = words.filter(word => hinglishWords.includes(word)).length;
 
   if (hinglishMatchCount >= 1) {

@@ -1,13 +1,24 @@
+// cron/backgroundJobs.js (or server cron runner)
 const cron = require('node-cron');
 const { Product } = require('./models');
+const { queueAbandonedCarts } = require('./services/abandonedCartQueue'); // 🔥 Integrated BullMQ Abandoned Cart Cron Trigger
 
 // ==========================================
 // 🚀 1. TRENDING SCORE PRE-COMPUTATION WORKER
 // ==========================================
 const updateTrendingScores = async () => {
   try {
+    console.time('TrendingScoreExecution');
     console.log('🔄 Running background worker to precompute trending scores...');
-    const products = await Product.find({});
+    
+    // 🔥 Pro optimization: .lean() for faster execution and lower memory footprint
+    const products = await Product.find({}).lean();
+
+    if (!products || products.length === 0) {
+      console.log('ℹ️ No products found for trending score computation.');
+      console.timeEnd('TrendingScoreExecution');
+      return;
+    }
 
     const bulkOperations = products.map(product => {
       const sales = product.sales || 0;
@@ -34,9 +45,10 @@ const updateTrendingScores = async () => {
     });
 
     if (bulkOperations.length > 0) {
-      await Product.bulkWrite(bulkOperations);
-      console.log('✅ Trending scores successfully precomputed and updated in DB.');
+      await Product.bulkWrite(bulkOperations, { ordered: false });
+      console.log(`✅ Trending scores successfully precomputed and updated for ${bulkOperations.length} products.`);
     }
+    console.timeEnd('TrendingScoreExecution');
   } catch (error) {
     console.error('❌ Error in trending score worker:', error);
   }
@@ -49,10 +61,20 @@ cron.schedule('0 * * * *', async () => {
 });
 
 // ==========================================
-// 🛒 2. ABANDONED CART EMAIL REMINDER WORKER
+// 🛒 2. ABANDONED CART EMAIL REMINDER WORKER (BullMQ Enqueuer)
 // ==========================================
-// 🔥 PHASE 4 FIX: Removed conflicting Abandoned Cart Cron logic. 
-// This is now exclusively and safely handled by BullMQ inside `services/cartScheduler.js` and `workers/abandonedCartWorker.js`.
-// This resolves the double-firing issue and cleans up the architecture.
+// 🔥 Scheduled every 30 minutes to push eligible abandoned carts into BullMQ queue
+cron.schedule('*/30 * * * *', async () => {
+  try {
+    console.log("🛒 CRON JOB RUNNING: Enqueuing eligible abandoned carts...");
+    if (typeof queueAbandonedCarts === 'function') {
+      await queueAbandonedCarts();
+    }
+  } catch (err) {
+    console.error("❌ Error in Abandoned Cart Cron Trigger:", err);
+  }
+});
 
-console.log("✅ Automatic Background Analytics Systems Activated!");
+console.log("✅ Automatic Background Analytics & Cron Systems Activated!");
+
+module.exports = { updateTrendingScores };

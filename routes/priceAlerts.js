@@ -1,3 +1,4 @@
+// routes/priceAlertRouter.js
 const express = require('express');
 const router = express.Router();
 const { PriceAlert, Product } = require('../models');
@@ -8,10 +9,12 @@ const { protect } = require('../middleware/authMiddleware');
 // ==========================================
 router.post('/api/price-alerts', protect, async (req, res) => {
   try {
-    const { productId, targetPrice } = req.body;
+    const { productId, targetPrice, targetPricePaise } = req.body;
     const userId = req.user._id;
 
-    if (!productId || !targetPrice) {
+    const finalTargetPaise = targetPricePaise || (targetPrice ? Math.round(parseFloat(targetPrice) * 100) : null);
+
+    if (!productId || !finalTargetPaise) {
       return res.status(400).json({ success: false, message: "Product ID and Target Price are required." });
     }
 
@@ -21,26 +24,31 @@ router.post('/api/price-alerts', protect, async (req, res) => {
       return res.status(404).json({ success: false, message: "Product not found." });
     }
 
-    // Check if alert already exists for this user and product
-    const existingAlert = await PriceAlert.findOne({ productId, userId });
+    const currentProductPricePaise = product.pricePaise || Math.round(parseFloat(product.price || 0) * 100);
+
+    // Check if alert already exists for this user and product (Matching model field names: 'user' and 'product')
+    const existingAlert = await PriceAlert.findOne({ product: productId, user: userId });
     if (existingAlert) {
-      existingAlert.targetPrice = targetPrice;
+      existingAlert.targetPricePaise = finalTargetPaise;
+      existingAlert.isNotified = false; // Reset notification state on update
       await existingAlert.save();
       return res.status(200).json({ success: true, message: "Price alert updated successfully.", alert: existingAlert });
     }
 
     const newAlert = new PriceAlert({
-      productId,
-      userId,
-      userEmail: req.user.email,
-      targetPrice
+      product: productId,
+      user: userId,
+      email: req.user.email,
+      targetPricePaise: finalTargetPaise,
+      initialPricePaise: currentProductPricePaise,
+      isNotified: false
     });
 
     await newAlert.save();
-    res.status(201).json({ success: true, message: "Price alert set successfully.", alert: newAlert });
+    return res.status(201).json({ success: true, message: "Price alert set successfully.", alert: newAlert });
   } catch (error) {
     console.error("Create Price Alert Error:", error);
-    res.status(500).json({ success: false, message: "Failed to set price alert." });
+    return res.status(500).json({ success: false, message: "Failed to set price alert." });
   }
 });
 
@@ -49,14 +57,15 @@ router.post('/api/price-alerts', protect, async (req, res) => {
 // ==========================================
 router.get('/api/price-alerts', protect, async (req, res) => {
   try {
-    const alerts = await PriceAlert.find({ userId: req.user._id })
-      .populate('productId', 'title price image')
-      .sort({ createdAt: -1 });
+    const alerts = await PriceAlert.find({ user: req.user._id })
+      .populate('product', 'title price pricePaise image images')
+      .sort({ createdAt: -1 })
+      .lean();
     
-    res.status(200).json({ success: true, count: alerts.length, alerts });
+    return res.status(200).json({ success: true, count: alerts.length, alerts });
   } catch (error) {
     console.error("Fetch Price Alerts Error:", error);
-    res.status(500).json({ success: false, message: "Failed to fetch price alerts." });
+    return res.status(500).json({ success: false, message: "Failed to fetch price alerts." });
   }
 });
 
@@ -65,14 +74,14 @@ router.get('/api/price-alerts', protect, async (req, res) => {
 // ==========================================
 router.delete('/api/price-alerts/:id', protect, async (req, res) => {
   try {
-    const alert = await PriceAlert.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
+    const alert = await PriceAlert.findOneAndDelete({ _id: req.params.id, user: req.user._id });
     if (!alert) {
       return res.status(404).json({ success: false, message: "Alert not found." });
     }
-    res.status(200).json({ success: true, message: "Price alert removed successfully." });
+    return res.status(200).json({ success: true, message: "Price alert removed successfully." });
   } catch (error) {
     console.error("Delete Price Alert Error:", error);
-    res.status(500).json({ success: false, message: "Failed to remove price alert." });
+    return res.status(500).json({ success: false, message: "Failed to remove price alert." });
   }
 });
 

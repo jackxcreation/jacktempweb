@@ -1,7 +1,7 @@
+// src/pages/Home.jsx
 import React, { useState, useEffect, useMemo, memo } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import Navbar from '../components/Navbar';
 import { 
   FiHeart, FiStar, FiShoppingCart, FiTruck, FiShield, 
   FiRefreshCcw, FiArrowRight, FiClock, FiZap,
@@ -12,7 +12,6 @@ import { useUser } from '../context/UserContext';
 import { useProducts } from '../context/ProductContext';
 import { useCompare } from '../context/CompareContext';
 import { getOptimizedImageUrl } from '../utils/imageOptimizer';
-// 🔥 PHASE 1 FIX: Canonical Axios Instance
 import axiosInstance from '../api/axiosInstance';
 
 // 🔥 CANONICAL CURRENCY FORMATTER UTILITY
@@ -60,7 +59,7 @@ const CompareModal = ({ isOpen, onClose }) => {
           initial={{ opacity: 0, scale: 0.95 }} 
           animate={{ opacity: 1, scale: 1 }} 
           exit={{ opacity: 0, scale: 0.95 }}
-          className="bg-white rounded-[2rem] max-w-4xl w-full max-h-[90vh] overflow-hidden shadow-2xl flex flex-col"
+          className="bg-white rounded-[2rem] max-w-4xl w-full max-h-[90vh] overflow-hidden shadow-2xl flex flex-col font-sans"
         >
           {/* Header */}
           <div className="flex justify-between items-center p-6 border-b border-slate-100">
@@ -70,9 +69,9 @@ const CompareModal = ({ isOpen, onClose }) => {
             </div>
             <div className="flex items-center gap-4">
               {compareList.length > 0 && (
-                <button onClick={clearCompare} className="text-xs font-bold text-red-500 hover:underline">Clear All</button>
+                <button onClick={clearCompare} className="text-xs font-bold text-red-500 hover:underline outline-none">Clear All</button>
               )}
-              <button onClick={onClose} className="p-2 bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200 transition-colors"><FiX size={20}/></button>
+              <button onClick={onClose} className="p-2 bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200 transition-colors outline-none"><FiX size={20}/></button>
             </div>
           </div>
 
@@ -84,9 +83,9 @@ const CompareModal = ({ isOpen, onClose }) => {
                 <p className="text-xs text-slate-400">Click "Compare" on any product card to start comparing.</p>
               </div>
             ) : (
-              <div className="grid grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
                 {/* Labels Column */}
-                <div className="space-y-6 pt-24 font-bold text-slate-400 text-sm uppercase tracking-wider">
+                <div className="hidden sm:block space-y-6 pt-24 font-bold text-slate-400 text-sm uppercase tracking-wider">
                   <div>Price</div>
                   <div>Rating</div>
                   <div>Category & Brand</div>
@@ -105,7 +104,7 @@ const CompareModal = ({ isOpen, onClose }) => {
                     <div key={product.id || product._id} className="bg-slate-50/50 rounded-3xl p-6 border border-slate-100 relative flex flex-col">
                       <button 
                         onClick={() => removeFromCompare(product.id || product._id)}
-                        className="absolute top-4 right-4 p-1.5 bg-white rounded-full text-slate-400 hover:text-red-500 shadow-sm"
+                        className="absolute top-4 right-4 p-1.5 bg-white rounded-full text-slate-400 hover:text-red-500 shadow-sm outline-none"
                       >
                         <FiX size={14} />
                       </button>
@@ -261,14 +260,14 @@ const ProductCard = memo(({ product }) => {
           <div className="absolute bottom-0 left-0 w-full p-2 translate-y-full group-hover:translate-y-0 transition-transform duration-300 ease-out hidden md:flex gap-1">
             <button 
               onClick={(e) => { e.preventDefault(); e.stopPropagation(); addToCart(product); }}
-              className="flex-1 bg-slate-900/95 backdrop-blur-sm text-white font-bold py-2.5 rounded-xl flex items-center justify-center gap-1 hover:bg-[#FF4500] transition-all shadow-lg text-xs"
+              className="flex-1 bg-slate-900/95 backdrop-blur-sm text-white font-bold py-2.5 rounded-xl flex items-center justify-center gap-1 hover:bg-[#FF4500] transition-all shadow-lg text-xs outline-none"
               aria-label={`Quick add ${product.title} to cart`}
             >
               <FiShoppingCart size={14} /> Add
             </button>
             <button 
               onClick={(e) => { e.preventDefault(); e.stopPropagation(); addToCompare(product); }}
-              className="bg-white/95 backdrop-blur-sm text-slate-900 font-bold px-3 py-2.5 rounded-xl hover:bg-slate-900 hover:text-white transition-colors shadow-lg text-xs"
+              className="bg-white/95 backdrop-blur-sm text-slate-900 font-bold px-3 py-2.5 rounded-xl hover:bg-slate-900 hover:text-white transition-colors shadow-lg text-xs outline-none"
               aria-label={`Compare ${product.title}`}
             >
               Compare
@@ -302,7 +301,7 @@ const ProductCard = memo(({ product }) => {
             <div className="flex gap-1 md:hidden">
               <button 
                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); addToCompare(product); }}
-                className="bg-slate-100 text-slate-700 hover:bg-slate-900 hover:text-white p-2 rounded-xl transition-colors text-[10px] font-bold"
+                className="bg-slate-100 text-slate-700 hover:bg-slate-900 hover:text-white p-2 rounded-xl transition-colors text-[10px] font-bold outline-none"
                 aria-label={`Compare ${product.title}`}
               >
                 Comp
@@ -353,6 +352,12 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
   const products = productContext?.products || [];
   const { compareList } = useCompare(); 
 
+  // 🔥 Scroll to top on mount & set professional SEO title
+  useEffect(() => {
+    window.scrollTo(0, 0);
+    document.title = "Jack Essentials — Premium Lifestyle, Electronics & More";
+  }, []);
+
   const dealOfTheDayProducts = useMemo(() => {
     if (!products || products.length === 0) return [];
     return [...products]
@@ -376,47 +381,50 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
     return [...products].reverse().slice(0, 4);
   }, [products]);
 
+  // 🔥 FIX: Replaced AbortController with isMounted flag to completely prevent CanceledError console spam
   useEffect(() => {
-    const controller = new AbortController();
+    let isMounted = true; 
 
     const fetchTrending = async () => {
       try {
-        setLoadingTrending(true);
-        // 🔥 PHASE 1 FIX: Replaced raw fetch with axiosInstance for consistency & interceptors
-        const res = await axiosInstance.get(`/products/trending/top`, { 
-          signal: controller.signal
-        });
+        if (isMounted) setLoadingTrending(true);
+        const res = await axiosInstance.get(`/products/trending/top`);
         
-        if (Array.isArray(res.data)) {
-          setTrendingProducts(res.data);
-        } else {
-          throw new Error("Invalid structure returned");
+        if (isMounted) {
+          if (Array.isArray(res.data)) {
+            setTrendingProducts(res.data);
+          } else {
+            throw new Error("Invalid structure returned");
+          }
         }
       } catch (err) {
-        if (err.name !== 'CanceledError') {
-          console.warn("Fallback sequence initiated due to telemetry/API breakdown.", err);
+        if (isMounted) {
+          console.warn("API Note: Could not fetch trending products, using catalog fallback.");
           setTrendingProducts(products.slice(0, 8));
         }
       } finally {
-        setLoadingTrending(false);
+        if (isMounted) {
+          setLoadingTrending(false);
+        }
       }
     };
 
     fetchTrending();
 
     const timer = setInterval(() => {
-      setCurrentSlide((prev) => (prev === BANNERS.length - 1 ? 0 : prev + 1));
+      if (isMounted) {
+        setCurrentSlide((prev) => (prev === BANNERS.length - 1 ? 0 : prev + 1));
+      }
     }, 6000);
 
     return () => {
-      controller.abort();
+      isMounted = false; // Silently clean up without causing a network abort exception
       clearInterval(timer);
     };
   }, [products]);
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] font-sans selection:bg-[#FF4500] selection:text-white text-slate-900 antialiased overflow-x-hidden">
-      <Navbar isLoggedIn={isLoggedIn} setIsLoggedIn={setIsLoggedIn} />
 
       <main className="max-w-[1440px] mx-auto pb-24 px-2 sm:px-4 md:px-6 outline-none" tabIndex="-1">
         
@@ -471,7 +479,7 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
             </motion.h2>
             
             <motion.div initial={{ y: 15, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.55 }} className="mt-4 md:mt-8 flex items-center gap-4 pointer-events-auto">
-              <Link to="/shop" className="bg-[#FF4500] hover:bg-[#e03d00] text-white px-4 sm:px-8 py-2 sm:py-4 rounded-full font-black shadow-lg shadow-orange-600/20 active:scale-95 transition-all flex items-center gap-1.5 sm:gap-2 text-[10px] sm:text-sm tracking-wide">
+              <Link to="/shop" className="bg-[#FF4500] hover:bg-[#e03d00] text-white px-4 sm:px-8 py-2 sm:py-4 rounded-full font-black shadow-lg shadow-orange-600/20 active:scale-95 transition-all flex items-center gap-1.5 sm:gap-2 text-[10px] sm:text-sm tracking-wide outline-none">
                 SHOP NOW <FiArrowRight size={14} className="sm:w-4 sm:h-4" />
               </Link>
             </motion.div>
@@ -482,7 +490,7 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
               <button 
                 key={idx} 
                 onClick={() => setCurrentSlide(idx)} 
-                className={`h-1 sm:h-1.5 rounded-full transition-all duration-300 ${currentSlide === idx ? 'w-6 sm:w-8 bg-white' : 'w-1.5 sm:w-2 bg-white/40 hover:bg-white/60'}`} 
+                className={`h-1 sm:h-1.5 rounded-full transition-all duration-300 outline-none ${currentSlide === idx ? 'w-6 sm:w-8 bg-white' : 'w-1.5 sm:w-2 bg-white/40 hover:bg-white/60'}`} 
               />
             ))}
           </div>
@@ -525,7 +533,7 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
                 </div>
                 <h3 className="text-lg sm:text-3xl md:text-4xl font-black tracking-tight text-slate-900">Deal of the Day</h3>
               </div>
-              <Link to="/shop" className="text-slate-600 font-bold text-[10px] sm:text-sm hover:text-[#FF4500] transition-colors flex items-center gap-1 bg-slate-50 px-2 sm:px-4 py-1.5 sm:py-2 rounded-full border border-slate-200 duration-200 whitespace-nowrap">
+              <Link to="/shop" className="text-slate-600 font-bold text-[10px] sm:text-sm hover:text-[#FF4500] transition-colors flex items-center gap-1 bg-slate-50 px-2 sm:px-4 py-1.5 sm:py-2 rounded-full border border-slate-200 duration-200 whitespace-nowrap outline-none">
                 View All <FiArrowRight size={12} className="sm:w-4 sm:h-4" />
               </Link>
             </div>
@@ -546,7 +554,7 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
                 Trending Now <span className="text-lg sm:text-3xl pointer-events-none">🔥</span>
               </h3>
             </div>
-            <Link to="/shop" className="text-slate-600 font-bold text-[10px] sm:text-sm hover:text-[#FF4500] transition-colors flex items-center gap-1 bg-white px-2 sm:px-4 py-1.5 sm:py-2 rounded-full border border-slate-200 shadow-sm duration-200 whitespace-nowrap">
+            <Link to="/shop" className="text-slate-600 font-bold text-[10px] sm:text-sm hover:text-[#FF4500] transition-colors flex items-center gap-1 bg-white px-2 sm:px-4 py-1.5 sm:py-2 rounded-full border border-slate-200 shadow-sm duration-200 whitespace-nowrap outline-none">
               Explore All <FiArrowRight size={12} className="sm:w-4 sm:h-4" />
             </Link>
           </div>
@@ -602,7 +610,7 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
           <span className="text-xs font-bold">Comparing ({compareList.length}/2)</span>
           <button 
             onClick={() => setIsCompareModalOpen(true)}
-            className="bg-[#FF4500] text-white text-xs font-black px-4 py-2 rounded-full shadow-md active:scale-95 transition-transform"
+            className="bg-[#FF4500] text-white text-xs font-black px-4 py-2 rounded-full shadow-md active:scale-95 transition-transform outline-none"
           >
             View Comparison
           </button>

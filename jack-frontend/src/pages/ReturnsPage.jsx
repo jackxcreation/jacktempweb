@@ -1,9 +1,16 @@
-import React from 'react';
+// src/pages/ReturnsPage.jsx
+import React, { useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { FiRefreshCw, FiBox, FiCheckCircle, FiShield, FiArrowRight, FiClock, FiXCircle, FiAlertCircle } from 'react-icons/fi';
 import { Link } from 'react-router-dom';
 
 const ReturnsPage = () => {
+  // 🔥 Scroll to top on mount & set professional SEO title
+  useEffect(() => {
+    window.scrollTo(0, 0);
+    document.title = "Returns & Refunds | Jack Essentials — Hassle-Free Policies";
+  }, []);
+
   // Animation Variants
   const fadeUp = {
     hidden: { opacity: 0, y: 30 },
@@ -16,7 +23,7 @@ const ReturnsPage = () => {
   };
 
   return (
-    <div className="min-h-screen bg-[#0B0F19] text-slate-200 font-sans pb-20 overflow-hidden">
+    <div className="min-h-screen bg-[#0B0F19] text-slate-200 font-sans pb-20 overflow-hidden selection:bg-[#FF4500] selection:text-white">
       
       {/* HEADER SECTION */}
       <div className="relative pt-32 pb-16 px-6 text-center border-b border-slate-800">
@@ -44,7 +51,7 @@ const ReturnsPage = () => {
           {/* Card 1: 7-Day Returns */}
           <motion.div variants={fadeUp} className="bg-slate-800/30 p-8 rounded-3xl border border-slate-700/50 hover:border-green-500/50 transition-colors md:col-span-2">
             <div className="flex items-center mb-6">
-              <div className="w-12 h-12 bg-green-500/10 rounded-xl flex items-center justify-center mr-4">
+              <div className="w-12 h-12 bg-green-500/10 rounded-xl flex items-center justify-center mr-4 shrink-0">
                 <FiBox className="text-green-500 w-6 h-6" />
               </div>
               <h2 className="text-2xl font-bold text-white">7-Day Free Returns</h2>
@@ -71,7 +78,7 @@ const ReturnsPage = () => {
           {/* Card 2: Lightning Fast Refunds */}
           <motion.div variants={fadeUp} className="bg-slate-800/30 p-8 rounded-3xl border border-slate-700/50 hover:border-blue-500/50 transition-colors">
             <div className="flex items-center mb-6">
-              <div className="w-12 h-12 bg-blue-500/10 rounded-xl flex items-center justify-center mr-4">
+              <div className="w-12 h-12 bg-blue-500/10 rounded-xl flex items-center justify-center mr-4 shrink-0">
                 <FiClock className="text-blue-500 w-6 h-6" />
               </div>
               <h2 className="text-xl font-bold text-white">Lightning Fast Refunds</h2>
@@ -84,7 +91,7 @@ const ReturnsPage = () => {
           {/* Card 3: Flexible Cancellations */}
           <motion.div variants={fadeUp} className="bg-slate-800/30 p-8 rounded-3xl border border-slate-700/50 hover:border-[#FF4500]/50 transition-colors">
             <div className="flex items-center mb-6">
-              <div className="w-12 h-12 bg-[#FF4500]/10 rounded-xl flex items-center justify-center mr-4">
+              <div className="w-12 h-12 bg-[#FF4500]/10 rounded-xl flex items-center justify-center mr-4 shrink-0">
                 <FiXCircle className="text-[#FF4500] w-6 h-6" />
               </div>
               <h2 className="text-xl font-bold text-white">Flexible Cancellations</h2>
@@ -99,7 +106,7 @@ const ReturnsPage = () => {
           <motion.div variants={fadeUp} className="bg-slate-800/30 p-8 rounded-3xl border border-slate-700/50 hover:border-yellow-500/50 transition-colors md:col-span-2 relative overflow-hidden">
             <div className="absolute top-0 right-0 w-32 h-32 bg-yellow-500/5 rounded-bl-full pointer-events-none"></div>
             <div className="flex items-center mb-6 relative z-10">
-              <div className="w-12 h-12 bg-yellow-500/10 rounded-xl flex items-center justify-center mr-4">
+              <div className="w-12 h-12 bg-yellow-500/10 rounded-xl flex items-center justify-center mr-4 shrink-0">
                 <FiAlertCircle className="text-yellow-500 w-6 h-6" />
               </div>
               <h2 className="text-xl font-bold text-white">Non-Returnable Items</h2>
@@ -120,7 +127,7 @@ const ReturnsPage = () => {
             <h4 className="font-black text-white text-2xl mb-2">Need to raise a request?</h4>
             <p className="text-slate-400 text-sm">Our support team is available to assist you instantly.</p>
           </div>
-          <Link to="/support" className="bg-[#FF4500] hover:bg-orange-600 px-8 py-4 rounded-full font-bold text-white flex items-center gap-2 transition-all shadow-lg hover:shadow-orange-500/25 active:scale-95 whitespace-nowrap">
+          <Link to="/support" className="bg-[#FF4500] hover:bg-orange-600 px-8 py-4 rounded-full font-bold text-white flex items-center gap-2 transition-all shadow-lg hover:shadow-orange-500/25 active:scale-95 whitespace-nowrap outline-none focus-visible:ring-4 focus-visible:ring-orange-500/30">
             Visit Help Center <FiArrowRight />
           </Link>
         </motion.div>

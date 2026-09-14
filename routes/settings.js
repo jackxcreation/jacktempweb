@@ -12,30 +12,37 @@ const { checkPermission } = require('../middleware/rbacMiddleware');
 // ==========================================
 router.get('/', async (req, res) => {
   try {
-    let settings = await Setting.findOne().lean();
+    // 🔥 Leverage the singleton static method defined in Setting model
+    let settings = await Setting.getSettings();
 
-    // Agar database ekdum khali hai, toh default values se ek create kar do
-    if (!settings) {
-      const newSettings = new Setting({
-        shopLinks: [
-          { title: "Electronics", url: "/shop/electronics" },
-          { title: "Men's Fashion", url: "/shop/fashion" },
-          { title: "Super Offers 🔥", url: "/shop" }
-        ],
-        supportLinks: [
-          { title: "Track Your Order", url: "/track-order" },
-          { title: "Returns & Exchanges", url: "/returns" },
-          { title: "Contact Us", url: "/contact" }
-        ]
-      });
-      await newSettings.save();
-      settings = newSettings.toObject();
+    // Agar shopLinks ya supportLinks khali hain, toh default values assign kar do
+    let needsSave = false;
+    if (!settings.shopLinks || settings.shopLinks.length === 0) {
+      settings.shopLinks = [
+        { title: "Electronics", url: "/shop/electronics" },
+        { title: "Men's Fashion", url: "/shop/fashion" },
+        { title: "Super Offers 🔥", url: "/shop" }
+      ];
+      needsSave = true;
     }
 
-    res.json(settings);
+    if (!settings.supportLinks || settings.supportLinks.length === 0) {
+      settings.supportLinks = [
+        { title: "Track Your Order", url: "/track-order" },
+        { title: "Returns & Exchanges", url: "/returns" },
+        { title: "Contact Us", url: "/contact" }
+      ];
+      needsSave = true;
+    }
+
+    if (needsSave) {
+      await settings.save();
+    }
+
+    return res.json(settings.toObject ? settings.toObject() : settings);
   } catch (error) {
     console.error("Fetch Settings Error:", error);
-    res.status(500).json({ error: "Failed to load store configuration." });
+    return res.status(500).json({ error: "Failed to load store configuration." });
   }
 });
 
@@ -77,10 +84,10 @@ router.put('/', protect, checkPermission('settings:all'), async (req, res) => {
       await settings.save();
     }
 
-    res.json({ message: "Store configuration updated successfully!", settings });
+    return res.json({ message: "Store configuration updated successfully!", settings });
   } catch (error) {
     console.error("Update Settings Error:", error);
-    res.status(500).json({ error: "Failed to update store configuration." });
+    return res.status(500).json({ error: "Failed to update store configuration." });
   }
 });
 

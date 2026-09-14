@@ -95,6 +95,11 @@ const checkPermission = (requiredPermission) => {
         return res.status(403).json({ success: false, message: 'Access Denied: No role assigned or session invalid.' });
       }
 
+      // 🔥 Pro Feature: Block locked or inactive users instantly during RBAC check
+      if (user.isLocked || user.isActive === false) {
+        return res.status(403).json({ success: false, message: 'Access Denied: Account is locked, suspended, or inactive.' });
+      }
+
       // Super Admin or Admin with global wildcard bypasses all checks
       if (user.role === 'super_admin' || user.role === 'admin') {
         return next();
@@ -121,9 +126,43 @@ const checkPermission = (requiredPermission) => {
       next();
     } catch (error) {
       console.error("RBAC Middleware Error:", error);
-      res.status(500).json({ success: false, message: 'Internal Server Error during authorization enforcement.' });
+      return res.status(500).json({ success: false, message: 'Internal Server Error during authorization enforcement.' });
     }
   };
 };
 
-module.exports = { checkPermission, ROLE_PERMISSIONS };
+// ==========================================
+// 🔥 PRO FEATURE: Multi-Permission Checkers (Any / All)
+// ==========================================
+const checkAnyPermission = (...permissions) => {
+  return (req, res, next) => {
+    try {
+      const user = req.user;
+      if (!user || !user.role) {
+        return res.status(403).json({ success: false, message: 'Access Denied: No role assigned.' });
+      }
+      if (user.isLocked || user.isActive === false) {
+        return res.status(403).json({ success: false, message: 'Access Denied: Account is locked or inactive.' });
+      }
+      if (user.role === 'super_admin' || user.role === 'admin') {
+        return next();
+      }
+
+      const userPermissions = ROLE_PERMISSIONS[user.role] || [];
+      const hasAny = permissions.some(perm => {
+        const [module] = perm.split(':');
+        return userPermissions.includes(perm) || userPermissions.includes(`${module}:all`) || userPermissions.includes('all');
+      });
+
+      if (!hasAny) {
+        return res.status(403).json({ success: false, message: `Access Denied: Requires at least one of these permissions.` });
+      }
+      next();
+    } catch (error) {
+      console.error("RBAC Any Error:", error);
+      return res.status(500).json({ success: false, message: 'Internal Server Error.' });
+    }
+  };
+};
+
+module.exports = { checkPermission, checkAnyPermission, ROLE_PERMISSIONS };

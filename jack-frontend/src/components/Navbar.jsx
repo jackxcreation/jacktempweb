@@ -1,22 +1,24 @@
-import React, { useState, useEffect } from 'react';
+// jack-frontend/src/components/Navbar.jsx
+import React, { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FiSearch, FiShoppingCart, FiUser, FiMenu, FiHeart, FiX, FiHome, FiGrid } from 'react-icons/fi';
 import { useCart } from '../context/CartContext';
 import { useUser } from '../context/UserContext'; 
-import { LanguageSelector } from './LanguageSelector'; // 🔥 ADDED: Multi-lingual selector component
+import { LanguageSelector } from './LanguageSelector'; // Multi-lingual selector component
 
 const Navbar = ({ isLoggedIn }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { cart, cartCount } = useCart(); // 🔥 FIX: Destructured cartCount from useCart for accurate total quantity tracking
+  const { cart, cartCount } = useCart(); // Destructured cartCount from useCart for accurate total quantity tracking
   const { user, logoutUser } = useUser(); 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
+  const [searchQuery, setSearchQuery] = useState(''); // 🔥 Added search input state
 
-  const totalItems = cartCount !== undefined ? cartCount : cart.length; // 🔥 FIX: Using cartCount so multi-quantity items count correctly
+  const totalItems = cartCount !== undefined ? cartCount : cart.length; // Using cartCount so multi-quantity items count correctly
 
-  useEffect(() => {
+  React.useEffect(() => {
     const handleScroll = () => {
       setScrolled(window.scrollY > 20);
     };
@@ -29,6 +31,15 @@ const Navbar = ({ isLoggedIn }) => {
     navigate('/login');
   };
 
+  // 🔥 UPGRADE: Handle Search Submission
+  const handleSearchSubmit = (e) => {
+    e.preventDefault();
+    if (searchQuery && searchQuery.trim()) {
+      navigate(`/shop?search=${encodeURIComponent(searchQuery.trim())}`);
+      setSearchQuery('');
+    }
+  };
+
   return (
     <>
       <header className={`w-full sticky top-0 z-50 transition-all duration-300 bg-white ${scrolled ? 'shadow-lg shadow-slate-200/50' : 'border-b border-slate-200'}`}>
@@ -39,14 +50,15 @@ const Navbar = ({ isLoggedIn }) => {
           {/* Logo & Mobile Menu Toggle */}
           <div className="flex items-center gap-4">
             <button 
-              className="md:hidden text-slate-800 hover:text-[#FF4500] transition-colors"
+              aria-label="Open Menu"
+              className="md:hidden text-slate-800 hover:text-[#FF4500] transition-colors cursor-pointer"
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
             >
               {isMobileMenuOpen ? <FiX size={26} /> : <FiMenu size={26} />}
             </button>
             
             <Link to="/" className="flex items-center space-x-2 group outline-none">
-              {/* 🔥 FIXED: High Contrast Logo (JE) 🔥 */}
+              {/* High Contrast Logo (JE) */}
               <span className="text-3xl sm:text-4xl font-black tracking-tighter text-slate-900 group-hover:scale-105 transition-transform">
                 J<span className="text-[#FF4500]">E</span>
               </span>
@@ -55,21 +67,27 @@ const Navbar = ({ isLoggedIn }) => {
           </div>
 
           {/* Centered Search Bar (Desktop) */}
-          <div className="hidden md:flex flex-1 max-w-2xl mx-10 relative group">
+          <form onSubmit={handleSearchSubmit} className="hidden md:flex flex-1 max-w-2xl mx-10 relative group">
             <input 
               type="text" 
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search premium products, brands..." 
               className="w-full py-3 pl-6 pr-14 rounded-full text-slate-900 bg-slate-100/80 border border-transparent focus:bg-white focus:outline-none focus:border-[#FF4500]/50 focus:ring-4 focus:ring-[#FF4500]/10 transition-all placeholder:text-slate-400 font-medium shadow-inner"
             />
-            <button className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-slate-500 hover:text-[#FF4500] hover:bg-orange-50 transition-colors rounded-full">
+            <button 
+              type="submit"
+              aria-label="Search"
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-slate-500 hover:text-[#FF4500] hover:bg-orange-50 transition-colors rounded-full cursor-pointer"
+            >
               <FiSearch size={22} />
             </button>
-          </div>
+          </form>
 
           {/* Action Icons (Right Side) */}
           <div className="flex items-center space-x-5 sm:space-x-7 text-slate-700">
             
-            {/* 🔥 Multi-Lingual Selector */}
+            {/* Multi-Lingual Selector */}
             <div className="hidden lg:block">
               <LanguageSelector />
             </div>
@@ -94,8 +112,8 @@ const Navbar = ({ isLoggedIn }) => {
               )}
             </div>
             
-            {/* 🔥 FIX: Wishlist link updated to /wishlist instead of /profile */}
-            <Link to="/wishlist" className="hidden sm:flex flex-col items-center hover:text-[#FF4500] transition-colors">
+            {/* Wishlist link updated to /wishlist */}
+            <Link to="/wishlist" className="hidden sm:flex flex-col items-center hover:text-[#FF4500] transition-colors relative">
               <FiHeart size={24} className="stroke-[2px]" />
               <span className="text-[10px] font-black uppercase tracking-wider mt-1.5">Wishlist</span>
             </Link>
@@ -131,10 +149,10 @@ const Navbar = ({ isLoggedIn }) => {
             <FiGrid className="mr-2 group-hover:rotate-12 transition-transform text-[#FF4500]" size={18}/> Shop All
           </Link>
           <div className="w-px h-5 bg-slate-300"></div>
-          <Link to="/shop" className="hover:text-[#FF4500] transition-colors">Electronics</Link>
-          <Link to="/shop" className="hover:text-[#FF4500] transition-colors">Fashion</Link>
-          <Link to="/shop" className="hover:text-[#FF4500] transition-colors">Home & Living</Link>
-          <Link to="/shop" className="text-slate-900 flex items-center ml-auto bg-orange-100/50 px-5 py-2 rounded-full border border-orange-200 hover:bg-orange-100 transition-colors shadow-sm">
+          <Link to="/shop?category=electronics" className="hover:text-[#FF4500] transition-colors">Electronics</Link>
+          <Link to="/shop?category=fashion" className="hover:text-[#FF4500] transition-colors">Fashion</Link>
+          <Link to="/shop?category=home" className="hover:text-[#FF4500] transition-colors">Home & Living</Link>
+          <Link to="/shop?offer=super" className="text-slate-900 flex items-center ml-auto bg-orange-100/50 px-5 py-2 rounded-full border border-orange-200 hover:bg-orange-100 transition-colors shadow-sm">
             <span className="animate-pulse mr-2 text-lg">🔥</span> <span className="font-black text-[#FF4500] tracking-wide">Super Offers</span>
           </Link>
         </div>
@@ -149,6 +167,10 @@ const Navbar = ({ isLoggedIn }) => {
         <Link to="/shop" className={`flex flex-col items-center gap-1.5 ${location.pathname === '/shop' ? 'text-[#FF4500]' : 'text-slate-500'}`}>
           <FiGrid size={22} className="stroke-[2px]" />
           <span className="text-[10px] font-black tracking-wide">Shop</span>
+        </Link>
+        <Link to="/wishlist" className={`flex flex-col items-center gap-1.5 ${location.pathname === '/wishlist' ? 'text-[#FF4500]' : 'text-slate-500'}`}>
+          <FiHeart size={22} className="stroke-[2px]" />
+          <span className="text-[10px] font-black tracking-wide">Wishlist</span>
         </Link>
         <Link to="/profile" className={`flex flex-col items-center gap-1.5 ${location.pathname === '/profile' ? 'text-[#FF4500]' : 'text-slate-500'}`}>
           <FiUser size={22} className="stroke-[2px]" />
@@ -171,17 +193,17 @@ const Navbar = ({ isLoggedIn }) => {
             >
               <div className="p-6 bg-white border-b border-slate-100 flex justify-between items-center">
                 <span className="text-3xl font-black tracking-tighter text-slate-900">J<span className="text-[#FF4500]">E</span></span>
-                <button onClick={() => setIsMobileMenuOpen(false)} className="p-2.5 bg-slate-100 rounded-full text-slate-600 hover:text-slate-900 hover:bg-slate-200 transition-colors"><FiX size={22}/></button>
+                <button onClick={() => setIsMobileMenuOpen(false)} aria-label="Close Menu" className="p-2.5 bg-slate-100 rounded-full text-slate-600 hover:text-slate-900 hover:bg-slate-200 transition-colors cursor-pointer"><FiX size={22}/></button>
               </div>
               
               <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex flex-col gap-4">
                 {isLoggedIn && user ? (
                   <div className="flex items-center gap-4">
                     <div className="w-14 h-14 rounded-full bg-slate-900 text-white flex items-center justify-center font-black text-2xl shadow-lg">{user.name ? user.name.charAt(0).toUpperCase() : 'U'}</div>
-                    <div>
+                    <div className="overflow-hidden">
                       <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1">Welcome back</p>
-                      <p className="font-black text-xl text-slate-900 leading-none">{user.name}</p>
-                      <p className="text-xs text-slate-500 mt-1.5 font-medium">{user.email}</p>
+                      <p className="font-black text-xl text-slate-900 leading-none truncate">{user.name}</p>
+                      <p className="text-xs text-slate-500 mt-1.5 font-medium truncate">{user.email}</p>
                     </div>
                   </div>
                 ) : (
@@ -194,19 +216,34 @@ const Navbar = ({ isLoggedIn }) => {
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto py-6">
+              {/* Mobile Search Input */}
+              <div className="p-4 border-b border-slate-100">
+                <form onSubmit={(e) => { handleSearchSubmit(e); setIsMobileMenuOpen(false); }} className="relative">
+                  <input 
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search products..."
+                    className="w-full py-2.5 pl-4 pr-10 bg-slate-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#FF4500]/20"
+                  />
+                  <button type="submit" aria-label="Search" className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500">
+                    <FiSearch size={18} />
+                  </button>
+                </form>
+              </div>
+
+              <div className="flex-1 overflow-y-auto py-4">
                 <nav className="flex flex-col space-y-2 px-4">
-                  <Link to="/" onClick={() => setIsMobileMenuOpen(false)} className="px-4 py-3.5 text-slate-800 font-black tracking-wide hover:bg-slate-100 rounded-xl flex items-center gap-4 text-lg"><FiHome className="text-slate-400" size={22}/> Home</Link>
-                  <Link to="/shop" onClick={() => setIsMobileMenuOpen(false)} className="px-4 py-3.5 text-slate-800 font-black tracking-wide hover:bg-slate-100 rounded-xl flex items-center gap-4 text-lg"><FiGrid className="text-slate-400" size={22}/> Shop All</Link>
-                  <Link to="/profile" onClick={() => setIsMobileMenuOpen(false)} className="px-4 py-3.5 text-slate-800 font-black tracking-wide hover:bg-slate-100 rounded-xl flex items-center gap-4 text-lg"><FiUser className="text-slate-400" size={22}/> My Account</Link>
-                  {/* 🔥 FIX: Mobile menu wishlist link updated to /wishlist */}
-                  <Link to="/wishlist" onClick={() => setIsMobileMenuOpen(false)} className="px-4 py-3.5 text-slate-800 font-black tracking-wide hover:bg-slate-100 rounded-xl flex items-center gap-4 text-lg"><FiHeart className="text-slate-400" size={22}/> Wishlist</Link>
+                  <Link to="/" onClick={() => setIsMobileMenuOpen(false)} className="px-4 py-3.5 text-slate-800 font-black tracking-wide hover:bg-slate-100 rounded-xl flex items-center gap-4 text-base"><FiHome className="text-slate-400" size={20}/> Home</Link>
+                  <Link to="/shop" onClick={() => setIsMobileMenuOpen(false)} className="px-4 py-3.5 text-slate-800 font-black tracking-wide hover:bg-slate-100 rounded-xl flex items-center gap-4 text-base"><FiGrid className="text-slate-400" size={20}/> Shop All</Link>
+                  <Link to="/profile" onClick={() => setIsMobileMenuOpen(false)} className="px-4 py-3.5 text-slate-800 font-black tracking-wide hover:bg-slate-100 rounded-xl flex items-center gap-4 text-base"><FiUser className="text-slate-400" size={20}/> My Account</Link>
+                  <Link to="/wishlist" onClick={() => setIsMobileMenuOpen(false)} className="px-4 py-3.5 text-slate-800 font-black tracking-wide hover:bg-slate-100 rounded-xl flex items-center gap-4 text-base"><FiHeart className="text-slate-400" size={20}/> Wishlist</Link>
                 </nav>
               </div>
 
               {isLoggedIn && (
                 <div className="p-6 border-t border-slate-100">
-                  <button onClick={() => { handleLogout(); setIsMobileMenuOpen(false); }} className="w-full py-4 text-red-600 font-black bg-red-50 hover:bg-red-100 rounded-xl transition-colors tracking-widest flex justify-center items-center gap-2">
+                  <button onClick={() => { handleLogout(); setIsMobileMenuOpen(false); }} className="w-full py-4 text-red-600 font-black bg-red-50 hover:bg-red-100 rounded-xl transition-colors tracking-widest flex justify-center items-center gap-2 cursor-pointer">
                     <FiX size={18} /> LOGOUT
                   </button>
                 </div>

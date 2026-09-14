@@ -1,3 +1,4 @@
+// models/ContentPost.js
 const mongoose = require('mongoose');
 
 const contentPostSchema = new mongoose.Schema({
@@ -24,7 +25,28 @@ const contentPostSchema = new mongoose.Schema({
   views: { type: Number, default: 0 }
 }, { timestamps: true });
 
+// ==========================================
+// 🔥 PRO FEATURE: INDEXES FOR PERFORMANCE & SEARCH
+// ==========================================
 contentPostSchema.index({ type: 1, createdAt: -1 });
+
+// Full-text search index across titles, excerpts, and keywords for blog/comparison search
+contentPostSchema.index({ 
+  title: 'text', 
+  excerpt: 'text', 
+  'seo.keywords': 'text' 
+});
+
+// ==========================================
+// 🔥 PRO FEATURE: HELPER STATIC METHODS
+// ==========================================
+contentPostSchema.statics.incrementViews = function(slug) {
+  return this.findOneAndUpdate(
+    { slug }, 
+    { $inc: { views: 1 } }, 
+    { new: true }
+  );
+};
 
 module.exports = {
   ContentPost: mongoose.models.ContentPost || mongoose.model('ContentPost', contentPostSchema)

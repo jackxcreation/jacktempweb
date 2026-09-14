@@ -1,7 +1,9 @@
+// routes/shippingRouter.js
 const express = require('express');
 const router = express.Router();
 const rateLimit = require('express-rate-limit');
 const Redis = require('ioredis'); 
+const mongoose = require('mongoose'); // 🔥 Added for safe ObjectId validation
 const { Order } = require('../models');
 
 if (process.env.NODE_ENV === 'production' && !process.env.REDIS_URL) {
@@ -46,8 +48,8 @@ const evaluateCodEligibility = async (pincode, cartTotalPaise, userId) => {
       return { codAvailable, codFeePaise, riskLevel: 'MEDIUM', reason };
     }
 
-    // 🔥 PHASE 2 FIX: Ultra-fast counting instead of fetching whole DB array
-    if (userId) {
+    // 🔥 PHASE 2 FIX: Ultra-fast counting with safe ObjectId validation
+    if (userId && mongoose.Types.ObjectId.isValid(userId)) {
       const cancelledCount = await Order.countDocuments({
         userId,
         status: { $in: ['Cancelled', 'Returned'] }
@@ -77,8 +79,10 @@ router.get('/delivery-check', pincodeLimiter, async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid Pincode. Please enter a 6-digit number.' });
         }
 
+        const parsedCartTotal = parseInt(cartTotal) || 0;
+
         // 🔥 PHASE 2 FIX: Removed userId from Cache Key. Now 10,000 users hitting the same pincode/amount will share 1 cache!
-        const cacheKey = `delivery_pincode_${pincode}_${cartTotal}`;
+        const cacheKey = `delivery_pincode_${pincode}_${parsedCartTotal}`;
 
         const cachedData = await redisClient.get(cacheKey);
         if (cachedData) {
@@ -86,7 +90,7 @@ router.get('/delivery-check', pincodeLimiter, async (req, res) => {
             
             // Re-evaluate user risk dynamically outside cache
             if (userId) {
-               const codIntel = await evaluateCodEligibility(pincode, parseInt(cartTotal), userId);
+               const codIntel = await evaluateCodEligibility(pincode, parsedCartTotal, userId);
                parsedData.codAvailable = parsedData.codAvailable && codIntel.codAvailable;
                parsedData.codFeePaise = codIntel.codFeePaise;
                parsedData.riskLevel = codIntel.riskLevel;
@@ -94,13 +98,27 @@ router.get('/delivery-check', pincodeLimiter, async (req, res) => {
             return res.status(200).json(parsedData);
         }
 
-        const response = await fetch(`https://track.delhivery.com/c/api/pin-codes/json/?filter_codes=${pincode}`, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Token ${process.env.DELHIVERY_TOKEN}`,
-                'Content-Type': 'application/json'
-            }
-        });
+        // 🔥 Pro Feature: Fetch with AbortController timeout (5 seconds) to prevent hanging requests
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+        let response;
+        try {
+            response = await fetch(`https://track.delhivery.com/c/api/pin-codes/json/?filter_codes=${pincode}`, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Token ${process.env.DELHIVERY_TOKEN}`,
+                    'Content-Type': 'application/json'
+                },
+                signal: controller.signal
+            });
+        } catch (fetchError) {
+            clearTimeout(timeoutId);
+            console.error("Delhivery API Network Timeout/Error:", fetchError);
+            return res.status(502).json({ success: false, message: "Courier service is temporarily down. Please try again later." });
+        } finally {
+            clearTimeout(timeoutId);
+        }
         
         const rawText = await response.text();
         let data;
@@ -117,7 +135,7 @@ router.get('/delivery-check', pincodeLimiter, async (req, res) => {
             const courierCodAvailable = zoneInfo.cod === "Y";
             
             // Pure delivery intel for cache
-            const baseCodIntel = await evaluateCodEligibility(pincode, parseInt(cartTotal), null);
+            const baseCodIntel = await evaluateCodEligibility(pincode, parsedCartTotal, null);
             
             let transitDays = 5; 
             if (pincode.startsWith('75') || pincode.startsWith('76')) {
@@ -151,7 +169,7 @@ router.get('/delivery-check', pincodeLimiter, async (req, res) => {
 
         // Inject specific user risks before sending response
         if (userId) {
-            const userCodIntel = await evaluateCodEligibility(pincode, parseInt(cartTotal), userId);
+            const userCodIntel = await evaluateCodEligibility(pincode, parsedCartTotal, userId);
             resultResponse.codAvailable = resultResponse.codAvailable && userCodIntel.codAvailable;
             resultResponse.codFeePaise = userCodIntel.codFeePaise;
             resultResponse.riskLevel = userCodIntel.riskLevel;
@@ -160,7 +178,7 @@ router.get('/delivery-check', pincodeLimiter, async (req, res) => {
         return res.json(resultResponse);
     } catch (error) {
         console.error("Delivery Check API Error:", error);
-        res.status(500).json({ success: false, message: "Server error while checking pincode" });
+        return res.status(500).json({ success: false, message: "Server error while checking pincode" });
     }
 });
 
@@ -179,10 +197,26 @@ router.get('/pincode-info/:pincode', pincodeLimiter, async (req, res) => {
             return res.status(200).json({ success: true, source: 'cache', data: JSON.parse(cachedData) });
         }
 
-        const response = await fetch(`https://api.postalpincode.in/pincode/${pincode}`);
+        // 🔥 Pro Feature: Fetch with AbortController timeout (5 seconds)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+        let response;
+        try {
+            response = await fetch(`https://api.postalpincode.in/pincode/${pincode}`, {
+                signal: controller.signal
+            });
+        } catch (fetchError) {
+            clearTimeout(timeoutId);
+            console.error("Postal API Network Timeout/Error:", fetchError);
+            return res.status(502).json({ success: false, message: "Postal service temporarily unavailable." });
+        } finally {
+            clearTimeout(timeoutId);
+        }
+
         const data = await response.json();
 
-        if (!response.ok || !data || data[0].Status !== 'Success') {
+        if (!response.ok || !data || !data[0] || data[0].Status !== 'Success') {
             return res.status(404).json({ success: false, message: 'Pincode details not found.' });
         }
 
@@ -199,7 +233,7 @@ router.get('/pincode-info/:pincode', pincodeLimiter, async (req, res) => {
         return res.status(200).json({ success: true, source: 'api', data: result });
     } catch (error) {
         console.error("Postal API Error:", error);
-        res.status(500).json({ success: false, message: "Server error fetching pincode details." });
+        return res.status(500).json({ success: false, message: "Server error fetching pincode details." });
     }
 });
 

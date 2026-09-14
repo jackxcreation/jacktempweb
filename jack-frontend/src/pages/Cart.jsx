@@ -1,11 +1,11 @@
-import React, { useState, useMemo, memo, useCallback } from 'react';
+// src/pages/Cart.jsx
+import React, { useState, useMemo, memo, useCallback, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom'; 
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   FiTrash2, FiMinus, FiPlus, FiArrowRight, FiShoppingBag, 
-  FiShield, FiTruck, FiTag, FiCheckCircle, FiAlertCircle, FiInfo 
+  FiShield, FiTruck, FiTag, FiCheckCircle, FiAlertCircle, FiInfo, FiHeart 
 } from 'react-icons/fi';
-import Navbar from '../components/Navbar';
 import { useCart } from '../context/CartContext';
 import { useUser } from '../context/UserContext'; 
 import { getOptimizedImageUrl } from '../utils/imageOptimizer';
@@ -144,7 +144,13 @@ const Cart = ({ isLoggedIn, setIsLoggedIn }) => {
   const [isCouponApplied, setIsCouponApplied] = useState(false);
   const [isCheckoutLoading, setIsCheckoutLoading] = useState(false);
 
-  // 🔥 NAYA FIX: Unified Premium Toast System for Cart Page
+  // 🔥 Scroll to top on mount & set professional SEO title
+  useEffect(() => {
+    window.scrollTo(0, 0);
+    document.title = "Shopping Bag | Jack Essentials — Secure Checkout";
+  }, []);
+
+  // 🔥 Toast Notification System for Cart Page
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
 
   const showToast = useCallback((message, type = 'success') => {
@@ -199,8 +205,6 @@ const Cart = ({ isLoggedIn, setIsLoggedIn }) => {
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] font-sans pb-24 selection:bg-[#FF4500] selection:text-white antialiased relative">
-      <Navbar isLoggedIn={isLoggedIn} setIsLoggedIn={setIsLoggedIn} />
-
       {/* 🔥 PREMIUM TOAST NOTIFICATION 🔥 */}
       <AnimatePresence>
         {toast.show && (
@@ -244,13 +248,22 @@ const Cart = ({ isLoggedIn, setIsLoggedIn }) => {
             <p className="text-slate-400 font-medium mb-8 text-sm sm:text-base max-w-md leading-relaxed">
               Looks like you haven't added any premium items yet. Explore the marketplace updates and claim active offers.
             </p>
-            <Link 
-              to="/" 
-              className="bg-slate-950 hover:bg-[#FF4500] focus:bg-[#FF4500] text-white font-bold py-4 px-8 rounded-xl transition-all shadow-md shadow-slate-950/10 flex items-center space-x-2 active:scale-98 text-sm sm:text-base outline-none focus-visible:ring-4 focus-visible:ring-orange-300"
-            >
-              <span>EXPLORE LATEST ARRIVALS</span>
-              <FiArrowRight size={18} />
-            </Link>
+            <div className="flex flex-col sm:flex-row items-center gap-4 w-full justify-center">
+              <Link 
+                to="/shop" 
+                className="bg-slate-950 hover:bg-[#FF4500] focus:bg-[#FF4500] text-white font-bold py-4 px-8 rounded-xl transition-all shadow-md shadow-slate-950/10 flex items-center space-x-2 active:scale-98 text-sm sm:text-base outline-none focus-visible:ring-4 focus-visible:ring-orange-300 w-full sm:w-auto justify-center"
+              >
+                <span>EXPLORE LATEST ARRIVALS</span>
+                <FiArrowRight size={18} />
+              </Link>
+              <Link 
+                to="/wishlist" 
+                className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold py-4 px-6 rounded-xl transition-all flex items-center space-x-2 text-sm sm:text-base w-full sm:w-auto justify-center"
+              >
+                <FiHeart size={16} className="text-[#FF4500]" />
+                <span>View Wishlist</span>
+              </Link>
+            </div>
           </motion.section>
         ) : (
           

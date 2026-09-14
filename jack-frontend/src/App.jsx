@@ -1,3 +1,4 @@
+// jack-frontend/src/App.js
 import React, { useState, useEffect, Suspense, lazy, Component } from 'react';
 import { BrowserRouter as Router, Routes, Route, useLocation, Navigate, Outlet } from 'react-router-dom';
 import { motion } from 'framer-motion';
@@ -18,6 +19,7 @@ import { SettingsProvider } from './context/SettingsContext';
 import { CompareProvider } from './context/CompareContext'; // Compare Context Provider
 
 // Components
+import Navbar from './components/Navbar'; // 🔥 Global Navbar import
 import Footer from './components/Footer';
 import { SmartPriceDropToast } from './components/SmartPriceDropToast'; // Real-time Price Drop Toast Notification
 import { SmartStockAlertToast } from './components/SmartStockAlertToast'; // Real-time Stock Alert Toast Notification
@@ -45,7 +47,7 @@ const TermsOfService = lazy(() => import('./pages/TermsOfService'));
 const ContactUs = lazy(() => import('./pages/ContactUs'));
 const TrackOrder = lazy(() => import('./pages/TrackOrder')); // Real-time tracking page load
 const Wishlist = lazy(() => import('./pages/Wishlist')); // Wishlist Page lazy load
-const Comparisons = lazy(() => import('./pages/Comparisons')); // 🔥 ADDED: SEO Comparisons Hub Page
+const Comparisons = lazy(() => import('./pages/Comparisons')); // SEO Comparisons Hub Page
 
 // --- Phase 8: TanStack Query Setup ---
 const queryClient = new QueryClient({
@@ -144,7 +146,7 @@ class GlobalErrorBoundary extends Component {
               storage.remove('jack_user');
               window.location.replace('/');
             }}
-            className="bg-slate-900 hover:bg-[#FF4500] text-white px-8 py-3 rounded-xl font-bold transition-all focus:ring-4 focus:ring-slate-300 outline-none"
+            className="bg-slate-900 hover:bg-[#FF4500] text-white px-8 py-3 rounded-xl font-bold transition-all focus:ring-4 focus:ring-slate-300 outline-none cursor-pointer"
           >
             Return to Homepage
           </button>
@@ -228,7 +230,6 @@ const EnterpriseAnalyticsManager = () => {
         };
         window.EnterpriseDataLayer.push(eventContext);
         
-        // 🔥 FIX: Replaced process.env with Vite's import.meta.env.DEV
         if (import.meta.env.DEV) {
           console.debug(`[Analytics Event]: ${eventName}`, eventContext);
         }
@@ -264,20 +265,30 @@ const SEOManager = () => {
 
 // --- Layout & Routing Architecture ---
 
-const StoreLayout = () => (
-  <div className="flex flex-col min-h-screen w-full bg-white">
-    <main className="flex-grow flex flex-col relative w-full outline-none" tabIndex="-1">
-      <Suspense fallback={<PageLoader />}>
-        <Outlet />
-      </Suspense>
-    </main>
-    <Footer />
-    <SmartPriceDropToast /> 
-    <SmartStockAlertToast />
-    <PWAPrompt />
-    <WhatsAppWidget /> 
-  </div>
-);
+const StoreLayout = ({ isLoggedIn }) => {
+  const location = useLocation();
+  
+  // 🔥 Automatically hide Navbar, Footer, and widgets on authentication routes for a clean D2C UX
+  const hideLayoutElements = ['/login', '/register', '/forgot-password', '/secure-account', '/unlock-account'].includes(location.pathname);
+
+  return (
+    <div className="flex flex-col min-h-screen w-full bg-white">
+      {!hideLayoutElements && <Navbar isLoggedIn={isLoggedIn} />}
+      
+      <main className="flex-grow flex flex-col relative w-full outline-none" tabIndex="-1">
+        <Suspense fallback={<PageLoader />}>
+          <Outlet />
+        </Suspense>
+      </main>
+      
+      {!hideLayoutElements && <Footer />}
+      {!hideLayoutElements && <SmartPriceDropToast />} 
+      {!hideLayoutElements && <SmartStockAlertToast />}
+      {!hideLayoutElements && <PWAPrompt />}
+      {!hideLayoutElements && <WhatsAppWidget />} 
+    </div>
+  );
+};
 
 const RequireAuth = ({ isLoggedIn, children }) => {
   const location = useLocation();
@@ -309,7 +320,7 @@ const NotFound = () => (
       <p className="text-slate-500 font-medium mb-8">The page you are looking for doesn't exist or has been moved.</p>
       <a 
         href="/" 
-        className="bg-slate-900 hover:bg-[#FF4500] text-white px-8 py-4 rounded-xl font-bold transition-all shadow-lg active:scale-95 inline-block focus:ring-4 focus:ring-slate-300 outline-none"
+        className="bg-slate-900 hover:bg-[#FF4500] text-white px-8 py-4 rounded-xl font-bold transition-all shadow-lg active:scale-95 inline-block focus:ring-4 focus:ring-slate-300 outline-none cursor-pointer"
       >
         RETURN TO STORE
       </a>
@@ -333,7 +344,6 @@ const App = () => {
           const token = storage.get('token');
           const userId = user.id || user._id;
           
-          // Dummy lightweight fetch to verify JWT signature & expiry securely
           const res = await fetch(`${API_URL}/orders/user/${userId}?limit=1`, {
             headers: { 'Authorization': `Bearer ${token}` }
           });
@@ -343,21 +353,18 @@ const App = () => {
             isValid = false;
           }
         } catch (e) {
-          // Keep local validity if network fails (prevent random logouts offline)
           console.warn("Could not reach server for session validation", e);
         }
       }
 
       setIsLoggedIn(isValid);
       
-      // Cleanup corrupted or expired state actively
       if (!isValid && storage.get('token')) {
         storage.remove('token');
         storage.remove('jack_user');
       }
     };
 
-    // Run async validation on mount
     syncAuthState();
 
     const handleStorageChange = () => syncAuthState();
@@ -382,7 +389,8 @@ const App = () => {
                     <SEOManager />
                     
                     <Routes>
-                      <Route element={<StoreLayout />}>
+                      {/* Pass isLoggedIn to StoreLayout so Navbar gets correct auth state */}
+                      <Route element={<StoreLayout isLoggedIn={isLoggedIn} />}>
                         
                         <Route path="/" element={withAuth(Home)} />
                         <Route path="/shop" element={withAuth(Shop)} />
@@ -394,7 +402,7 @@ const App = () => {
                           </RequireAuth>
                         } />
                         
-                        {/* 🔥 SEO Content Engine Routes */}
+                        {/* SEO Content Engine Routes */}
                         <Route path="/comparisons" element={withAuth(Comparisons)} />
 
                         <Route path="/help-center" element={<HelpCenter />} />

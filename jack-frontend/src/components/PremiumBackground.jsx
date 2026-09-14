@@ -1,3 +1,4 @@
+// jack-frontend/src/components/support/PremiumBackground.jsx
 import React from 'react';
 import { motion } from 'framer-motion';
 
@@ -11,7 +12,7 @@ const RealisticParcelBox = () => {
     <div className="w-[85px] h-[75px] bg-[#C19A6B] rounded-md mt-[-8px] relative z-10 shadow-[0_20px_30px_-10px_rgba(0,0,0,0.5)] flex flex-col items-center justify-center border-t-4 border-[#A0522D] overflow-hidden">
       
       {/* 3D Box Texture & Shadow */}
-      <div className="absolute inset-0 bg-gradient-to-br from-white/20 via-transparent to-black/40"></div>
+      <div className="absolute inset-0 bg-gradient-to-br from-white/20 via-transparent to-black/40 pointer-events-none"></div>
       
       {/* Premium Branded Tape */}
       <div className="absolute top-0 bottom-0 left-1/2 w-[14px] bg-[#111827] -translate-x-1/2 shadow-inner flex flex-col items-center justify-center overflow-hidden">
@@ -53,11 +54,12 @@ const AnimatedDrone = ({ delay, duration, startY, endY, leftPos, scale, isDistan
       <div className={`flex flex-col items-center ${isDistant ? 'blur-[2px] opacity-60' : 'drop-shadow-2xl opacity-95'}`} style={{ scale: scale }}>
         
         <div className="relative">
-          {/* Realistic Drone Image */}
+          {/* Realistic Drone Image with fallback safety */}
           <img 
             src={DRONE_IMG_URL} 
             alt="JACK Delivery Drone" 
             className="w-[160px] h-auto object-contain"
+            onError={(e) => { e.target.style.opacity = '0.3'; }}
           />
           
           {/* 🔥 PRO FEATURE: Blinking Navigation LED */}
@@ -78,7 +80,7 @@ const AnimatedDrone = ({ delay, duration, startY, endY, leftPos, scale, isDistan
 
 const PremiumBackground = () => {
   return (
-    <div className="fixed inset-0 overflow-hidden z-0 bg-sky-100">
+    <div className="fixed inset-0 overflow-hidden z-0 bg-sky-100 pointer-events-none">
       
       {/* Realistic Sky Image Background with Gradient Overlay for Text Readability */}
       <div className="absolute inset-0 z-0">
@@ -86,6 +88,7 @@ const PremiumBackground = () => {
           src={SKY_BG_URL} 
           alt="Sky Background" 
           className="w-full h-full object-cover opacity-90"
+          onError={(e) => { e.target.style.display = 'none'; }}
         />
         {/* Adds a slight dark gradient at the bottom so page content stays readable */}
         <div className="absolute inset-0 bg-gradient-to-b from-transparent via-white/10 to-slate-50/80"></div>

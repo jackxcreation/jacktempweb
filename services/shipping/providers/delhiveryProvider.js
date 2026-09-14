@@ -90,53 +90,75 @@ class DelhiveryProvider {
     urlEncodedData.append("format", "json");
     urlEncodedData.append("data", JSON.stringify(payloadData));
 
-    const dRes = await fetch(`${this.baseUrl}/api/cmu/create.json`, {
-      method: 'POST', 
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': `Token ${process.env.DELHIVERY_TOKEN}` },
-      body: urlEncodedData.toString()
-    });
-    
-    const rawDText = await dRes.text();
-    let dData;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+
     try {
-      dData = JSON.parse(rawDText);
-    } catch (e) {
-      throw new Error(`Invalid JSON response from Delhivery API: ${rawDText}`);
-    }
+      const dRes = await fetch(`${this.baseUrl}/api/cmu/create.json`, {
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': `Token ${process.env.DELHIVERY_TOKEN}` },
+        body: urlEncodedData.toString(),
+        signal: controller.signal
+      });
+      
+      const rawDText = await dRes.text();
+      let dData;
+      try {
+        dData = JSON.parse(rawDText);
+      } catch (e) {
+        throw new Error(`Invalid JSON response from Delhivery API: ${rawDText}`);
+      }
 
-    if (dData.success === false || (dData.error && typeof dData.error === 'string')) {
-      throw new Error(`Delhivery Error: ${dData.error || dData.rmk}`);
-    }
+      if (dData.success === false || (dData.error && typeof dData.error === 'string')) {
+        throw new Error(`Delhivery Error: ${dData.error || dData.rmk}`);
+      }
 
-    if (dData.packages && dData.packages.length > 0 && dData.packages[0].status === "Fail") {
-      const exactReason = Array.isArray(dData.packages[0].remarks) ? dData.packages[0].remarks.join(", ") : dData.packages[0].remarks;
-      throw new Error(`Delhivery Reject: ${exactReason}`);
-    }
+      if (dData.packages && dData.packages.length > 0 && dData.packages[0].status === "Fail") {
+        const exactReason = Array.isArray(dData.packages[0].remarks) ? dData.packages[0].remarks.join(", ") : dData.packages[0].remarks;
+        throw new Error(`Delhivery Reject: ${exactReason}`);
+      }
 
-    const waybillNo = dData.packages?.[0]?.waybill || dData.waybill;
-    if (!waybillNo) {
-      throw new Error("Delhivery responded successfully, but no AWB was found.");
-    }
+      const waybillNo = dData.packages?.[0]?.waybill || dData.waybill;
+      if (!waybillNo) {
+        throw new Error("Delhivery responded successfully, but no AWB was found.");
+      }
 
-    return {
-      success: true,
-      provider: 'delhivery',
-      waybill: waybillNo,
-      providerOrderId: dData.packages?.[0]?.refnum || '',
-      trackingStatus: 'Manifested'
-    };
+      return {
+        success: true,
+        provider: 'delhivery',
+        waybill: waybillNo,
+        providerOrderId: dData.packages?.[0]?.refnum || '',
+        trackingStatus: 'Manifested'
+      };
+    } catch (error) {
+      console.error("Delhivery generateAWB Error:", error.message);
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   async getLabel(awb) {
-    const response = await fetch(`${this.baseUrl}/api/p/packing_slip?format=json&wbns=${awb}`, {
-      method: 'GET',
-      headers: { 'Authorization': `Token ${process.env.DELHIVERY_TOKEN}`, 'Content-Type': 'application/json' }
-    });
-    const rawText = await response.text();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
     try {
-      return JSON.parse(rawText);
-    } catch (e) {
-      return { isHtml: true, htmlContent: rawText };
+      const response = await fetch(`${this.baseUrl}/api/p/packing_slip?format=json&wbns=${awb}`, {
+        method: 'GET',
+        headers: { 'Authorization': `Token ${process.env.DELHIVERY_TOKEN}`, 'Content-Type': 'application/json' },
+        signal: controller.signal
+      });
+      const rawText = await response.text();
+      try {
+        return JSON.parse(rawText);
+      } catch (e) {
+        return { isHtml: true, htmlContent: rawText };
+      }
+    } catch (error) {
+      console.error("Delhivery getLabel Error:", error.message);
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -157,41 +179,74 @@ class DelhiveryProvider {
       "expected_package_count": packageCount || 1
     };
 
-    const response = await fetch(`${this.baseUrl}/fm/request/new/`, {
-      method: 'POST',
-      headers: { 'Authorization': `Token ${process.env.DELHIVERY_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-    const rawText = await response.text();
     try {
-      return JSON.parse(rawText);
-    } catch (e) {
-      return { success: false, raw: rawText };
+      const response = await fetch(`${this.baseUrl}/fm/request/new/`, {
+        method: 'POST',
+        headers: { 'Authorization': `Token ${process.env.DELHIVERY_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+
+      const rawText = await response.text();
+      try {
+        return JSON.parse(rawText);
+      } catch (e) {
+        return { success: false, raw: rawText };
+      }
+    } catch (error) {
+      console.error("Delhivery schedulePickup Error:", error.message);
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
   async cancelShipment(waybill) {
-    const response = await fetch(`${this.baseUrl}/api/p/edit`, {
-      method: 'POST',
-      headers: { 'Authorization': `Token ${process.env.DELHIVERY_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ "waybill": waybill, "cancellation": true })
-    });
-    const rawText = await response.text();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
     try {
-      return JSON.parse(rawText);
-    } catch (e) {
-      return { success: false, raw: rawText };
+      const response = await fetch(`${this.baseUrl}/api/p/edit`, {
+        method: 'POST',
+        headers: { 'Authorization': `Token ${process.env.DELHIVERY_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ "waybill": waybill, "cancellation": true }),
+        signal: controller.signal
+      });
+      const rawText = await response.text();
+      try {
+        return JSON.parse(rawText);
+      } catch (e) {
+        return { success: false, raw: rawText };
+      }
+    } catch (error) {
+      console.error("Delhivery cancelShipment Error:", error.message);
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
   async trackShipment(awb) {
-    const response = await fetch(`${this.baseUrl}/api/v1/packages/json/?waybill=${awb}`, {
-      method: 'GET',
-      headers: { 'Authorization': `Token ${process.env.DELHIVERY_TOKEN}` }
-    });
-    const data = await response.json();
-    return { status: data?.ShipmentData?.[0]?.Shipment?.Status?.Status || 'In Transit' };
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    try {
+      const response = await fetch(`${this.baseUrl}/api/v1/packages/json/?waybill=${awb}`, {
+        method: 'GET',
+        headers: { 'Authorization': `Token ${process.env.DELHIVERY_TOKEN}` },
+        signal: controller.signal
+      });
+      const data = await response.json();
+      return { status: data?.ShipmentData?.[0]?.Shipment?.Status?.Status || 'In Transit' };
+    } catch (error) {
+      console.error("Delhivery trackShipment Error:", error.message);
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   async createManifest(awbs) {

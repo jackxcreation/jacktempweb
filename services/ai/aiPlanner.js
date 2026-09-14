@@ -17,7 +17,7 @@ Available Tools:
 2. "getRefundStatus" - Use if the user asks about a refund or money back.
 3. "getShipmentTimeline" - Use if the user asks for detailed tracking steps.
 
-Respond ONLY with a valid JSON object matching this schema:
+Respond ONLY with a valid JSON object matching this schema (no extra text or markdown formatting if possible):
 {
   "intent": "string (e.g., track_order, refund_inquiry, general_chat)",
   "requiresEscalation": boolean (true if user explicitly demands a human, is abusive, or has a complex legal issue),
@@ -28,19 +28,41 @@ Respond ONLY with a valid JSON object matching this schema:
 `;
 
   try {
-    const response = await callLLM([
+    // 🔥 FIX: Switched from deprecated Groq model to Gemini-3.5-flash
+    const rawResponse = await callLLM([
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: userText }
-    ], "allam-2-7b", true); // Ensure JSON mode is ON
+      { role: 'user', content: userText || "" }
+    ], "gemini-3.5-flash", true); // JSON mode enabled
+
+    // 🔥 FIX: Robustly parse response whether it returns as an object or a text string with markdown
+    let parsedResponse = rawResponse;
+    
+    if (typeof rawResponse === 'string') {
+      let cleanText = rawResponse.replace(/```json/g, '').replace(/```/g, '').trim();
+      parsedResponse = JSON.parse(cleanText);
+    } else if (rawResponse && rawResponse.content && typeof rawResponse.content === 'string') {
+      let cleanText = rawResponse.content.replace(/```json/g, '').replace(/```/g, '').trim();
+      parsedResponse = JSON.parse(cleanText);
+    } else if (rawResponse && rawResponse.message && typeof rawResponse.message.content === 'string') {
+      let cleanText = rawResponse.message.content.replace(/```json/g, '').replace(/```/g, '').trim();
+      parsedResponse = JSON.parse(cleanText);
+    }
 
     return {
-      ...response,
+      intent: parsedResponse?.intent || "general_chat",
+      requiresEscalation: Boolean(parsedResponse?.requiresEscalation),
+      tools: Array.isArray(parsedResponse?.tools) ? parsedResponse.tools : [],
       language: languageMeta.style
     };
   } catch (error) {
     console.error("AI Planner Error:", error);
-    // Safe fallback: escalate if we can't plan
-    return { intent: "unknown", requiresEscalation: true, tools: [], language: languageMeta.style };
+    // Safe fallback: escalate if we can't plan or parse JSON
+    return { 
+      intent: "unknown", 
+      requiresEscalation: true, 
+      tools: [], 
+      language: languageMeta.style 
+    };
   }
 };
 

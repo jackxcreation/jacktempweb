@@ -1,3 +1,4 @@
+// src/middleware/authMiddleware.js
 require('dotenv').config();
 const jwt = require('jsonwebtoken');
 const { User } = require('../models'); 
@@ -18,7 +19,7 @@ const protect = async (req, res, next) => {
     token = req.cookies.admin_token;
   } else if (req.cookies && req.cookies.token) {
     token = req.cookies.token;
-  } else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+  } else if (req.headers && req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
     token = req.headers.authorization.split(' ')[1];
   }
 
@@ -60,10 +61,10 @@ const protect = async (req, res, next) => {
         return res.status(401).json({ message: 'Invalid token signature. Unauthorized.' });
       }
 
-      res.status(401).json({ message: 'Not authorized, token failed' });
+      return res.status(401).json({ message: 'Not authorized, token failed' });
     }
   } else {
-    res.status(401).json({ message: 'Not authorized, no token provided' });
+    return res.status(401).json({ message: 'Not authorized, no token provided' });
   }
 };
 
@@ -78,7 +79,7 @@ const adminProtect = async (req, res, next) => {
     token = req.cookies.admin_token;
   } else if (req.cookies && req.cookies.token) {
     token = req.cookies.token; // Fallback for transition
-  } else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+  } else if (req.headers && req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
     token = req.headers.authorization.split(' ')[1];
   }
 
@@ -129,10 +130,10 @@ const adminProtect = async (req, res, next) => {
         return res.status(401).json({ message: 'Invalid admin token signature. Unauthorized.' });
       }
 
-      res.status(401).json({ message: 'Not authorized, admin token failed' });
+      return res.status(401).json({ message: 'Not authorized, admin token failed' });
     }
   } else {
-    res.status(401).json({ message: 'Not authorized, no admin token provided' });
+    return res.status(401).json({ message: 'Not authorized, no admin token provided' });
   }
 };
 
@@ -140,10 +141,32 @@ const admin = (req, res, next) => {
   // Strict Role Enforcement Check
   const privilegedRoles = ['admin', 'super_admin', 'operations_manager', 'catalog_manager', 'warehouse_manager', 'finance_manager'];
   if (req.user && privilegedRoles.includes(req.user.role)) {
+    // 🔥 Added account status check for standalone admin chain safety
+    if (req.user.isLocked || req.user.isActive === false) {
+      return res.status(403).json({ message: 'Access Denied: Account is locked, suspended, or inactive.' });
+    }
     next();
   } else {
-    res.status(403).json({ message: 'Not authorized as an admin or privileged manager' });
+    return res.status(403).json({ message: 'Not authorized as an admin or privileged manager' });
   }
 };
 
-module.exports = { protect, adminProtect, admin };
+// ==========================================
+// 🔥 PRO FEATURE: Dynamic Role Authorization Helper
+// ==========================================
+const authorizeRoles = (...allowedRoles) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ message: 'Not authorized, user context missing' });
+    }
+    if (req.user.isLocked || req.user.isActive === false) {
+      return res.status(403).json({ message: 'Access Denied: Account is locked or inactive.' });
+    }
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: `Access Denied: Requires one of these roles: ${allowedRoles.join(', ')}` });
+    }
+    next();
+  };
+};
+
+module.exports = { protect, adminProtect, admin, authorizeRoles };

@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FiUser, FiPackage, FiSettings, FiLogOut, FiMapPin, FiCreditCard, FiAward, FiShield, FiCheckCircle } from 'react-icons/fi';
-import Navbar from "../../components/Navbar";
 import { useUser } from "../../context/UserContext";
 
 // Import all Tab Components
@@ -43,7 +42,6 @@ const Profile = ({ isLoggedIn, setIsLoggedIn }) => {
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] font-sans pb-24 relative">
-      <Navbar isLoggedIn={isLoggedIn} setIsLoggedIn={setIsLoggedIn} />
 
       {/* 🔥 PREMIUM TOAST 🔥 */}
       <AnimatePresence>
@@ -93,13 +91,13 @@ const Profile = ({ isLoggedIn, setIsLoggedIn }) => {
                 {TABS.map(tab => (
                   <button 
                     key={tab.id} onClick={() => setActiveTab(tab.id)}
-                    className={`w-full flex items-center px-4 py-3.5 rounded-xl font-bold transition-all ${activeTab === tab.id ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}
+                    className={`w-full flex items-center px-4 py-3.5 rounded-xl font-bold transition-all outline-none ${activeTab === tab.id ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}
                   >
                     <span className={`mr-3 ${activeTab === tab.id ? 'text-indigo-600' : 'text-slate-400'}`}>{tab.icon}</span> {tab.name}
                   </button>
                 ))}
                 <div className="w-full h-px bg-slate-100 my-4"></div>
-                <button onClick={handleLogout} className="w-full flex items-center px-4 py-3.5 rounded-xl font-bold text-red-500 hover:bg-red-50 transition-all">
+                <button onClick={handleLogout} className="w-full flex items-center px-4 py-3.5 rounded-xl font-bold text-red-500 hover:bg-red-50 transition-all outline-none">
                   <span className="mr-3 text-red-400"><FiLogOut size={18}/></span> Secure Logout
                 </button>
               </nav>

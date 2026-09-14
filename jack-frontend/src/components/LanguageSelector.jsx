@@ -6,16 +6,23 @@ export const LanguageSelector = () => {
   const { i18n } = useTranslation();
 
   const changeLanguage = (e) => {
-    i18n.changeLanguage(e.target.value);
-    localStorage.setItem('jack_lang', e.target.value);
+    const selectedLang = e.target.value;
+    i18n.changeLanguage(selectedLang);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('jack_lang', selectedLang);
+    }
   };
 
+  // 🔥 UPGRADE: Normalize language code (e.g., 'en-US' -> 'en') to ensure dropdown select matches correctly
+  const currentLang = i18n.language ? i18n.language.split('-')[0] : 'en';
+
   return (
-    <div className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-xl transition-colors cursor-pointer border border-slate-200">
+    <div className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-xl transition-colors cursor-pointer border border-slate-200 relative">
       <FiGlobe className="text-slate-600 flex-shrink-0" size={14} />
       <select 
-        value={i18n.language || 'en'} 
+        value={currentLang} 
         onChange={changeLanguage}
+        aria-label="Select Language"
         className="bg-transparent text-xs font-bold text-slate-800 outline-none cursor-pointer uppercase tracking-wider"
       >
         <option value="en">English</option>
@@ -34,3 +41,5 @@ export const LanguageSelector = () => {
     </div>
   );
 };
+
+export default LanguageSelector;

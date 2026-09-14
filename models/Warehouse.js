@@ -1,3 +1,4 @@
+// models/Warehouse.js
 const mongoose = require('mongoose');
 
 const warehouseSchema = new mongoose.Schema({
@@ -35,19 +36,22 @@ const warehouseSchema = new mongoose.Schema({
     type: String, 
     required: [true, "City is required"], 
     trim: true,
-    maxlength: [50, "City name is too long"]
+    maxlength: [50, "City name is too long"],
+    index: true
   },
   state: { 
     type: String, 
     required: [true, "State is required"], 
     trim: true,
-    maxlength: [50, "State name is too long"]
+    maxlength: [50, "State name is too long"],
+    index: true
   },
   pincode: { 
     type: String, 
     required: [true, "Pincode is required"], 
     match: [/^\d{6}$/, "Invalid pincode format. Must be 6 digits"],
-    trim: true 
+    trim: true,
+    index: true
   },
   isActive: { 
     type: Boolean, 
@@ -59,4 +63,26 @@ const warehouseSchema = new mongoose.Schema({
   strict: true // Automatically strips out any unallowed fields passed in req.body
 });
 
-module.exports = mongoose.models.Warehouse || mongoose.model('Warehouse', warehouseSchema);
+// ==========================================
+// 🔥 PRO FEATURE: HELPER STATIC METHODS
+// ==========================================
+warehouseSchema.statics.findActive = function() {
+  return this.find({ isActive: true });
+};
+
+warehouseSchema.statics.findByPincode = function(pincode) {
+  return this.findOne({ pincode, isActive: true });
+};
+
+// ==========================================
+// 🔥 PRO FEATURE: INSTANCE METHODS (Full Address)
+// ==========================================
+warehouseSchema.methods.getFullAddress = function() {
+  const parts = [this.street, this.landmark, this.city, this.state, `Pin: ${this.pincode}`];
+  return parts.filter(Boolean).join(', ');
+};
+
+// Warehouse model ko overwrite hone se bachane ke liye safe export
+const Warehouse = mongoose.models.Warehouse || mongoose.model('Warehouse', warehouseSchema);
+
+module.exports = Warehouse;

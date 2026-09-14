@@ -1,5 +1,7 @@
+// workers/analyticsWorker.js
 const { Worker } = require('bullmq');
 const Redis = require('ioredis');
+const mongoose = require('mongoose'); // 🔥 Added for strict ObjectId validation
 const { Product, ProductDailyMetrics, ProductViewEvent, OrderMetric, TrafficEvent } = require('../models');
 
 // Safe logger import fallback to prevent undefined method crashes
@@ -11,26 +13,42 @@ try {
   logger = console;
 }
 
-// 🔥 Robust Upstash / Cloud Redis connection config using REDIS_URL and TLS
+// ==========================================
+// 🔥 ROBUST REDIS CONNECTION FOR BULLMQ WORKER
+// ==========================================
 const connection = process.env.REDIS_URL 
   ? new Redis(process.env.REDIS_URL, {
       tls: {
         rejectUnauthorized: false
       },
-      maxRetriesPerRequest: null
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false
     })
   : {
       host: process.env.REDIS_HOST || 'localhost',
-      port: process.env.REDIS_PORT || 6379,
+      port: parseInt(process.env.REDIS_PORT || '6379', 10),
       password: process.env.REDIS_PASSWORD || undefined,
-      maxRetriesPerRequest: null
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false
     };
+
+// 🔥 Prevent unhandled Redis error crashes
+if (connection instanceof Redis) {
+  connection.on('error', (err) => {
+    if (typeof logger.error === 'function') {
+      logger.error('Redis Analytics Worker Connection Error:', err.message);
+    } else {
+      console.error('Redis Analytics Worker Connection Error:', err.message);
+    }
+  });
+}
 
 // ==========================================
 // 🔥 BULLMQ ANALYTICS & AGGREGATION WORKER
 // ==========================================
 const analyticsWorker = new Worker('analytics-queue', async (job) => {
-  const { type, data } = job.data;
+  const { type, data } = job.data || {};
+  if (!type) return;
   
   // Normalized Date object for Mongoose Schema compatibility
   const todayDate = new Date();
@@ -39,10 +57,10 @@ const analyticsWorker = new Worker('analytics-queue', async (job) => {
   try {
     switch (type) {
       case 'PRODUCT_VIEW': {
-        const { productId, userId, sessionId } = data;
-        if (!productId) return;
+        const { productId, userId, sessionId } = data || {};
+        if (!productId || !mongoose.Types.ObjectId.isValid(productId)) return;
 
-        // 1. Log raw view event (🔥 FIXED: Changed productId to product to match schema)
+        // 1. Log raw view event
         await ProductViewEvent.create({ product: productId, userId: userId || null, sessionId: sessionId || '' });
 
         // 2. Increment Product global views counter safely
@@ -58,7 +76,7 @@ const analyticsWorker = new Worker('analytics-queue', async (job) => {
       }
 
       case 'ORDER_COMPLETED': {
-        const { orderId, totalPaise, cogsPaise, contributionPaise, items, trafficSource } = data;
+        const { orderId, totalPaise, cogsPaise, contributionPaise, items, trafficSource } = data || {};
         if (!orderId) return;
 
         // 1. Upsert daily order metric
@@ -88,6 +106,8 @@ const analyticsWorker = new Worker('analytics-queue', async (job) => {
         if (Array.isArray(items)) {
           for (const item of items) {
             const prodId = item.productId || item.id;
+            if (!prodId || !mongoose.Types.ObjectId.isValid(prodId)) continue;
+
             const qty = item.quantity || 1;
             const itemRev = (item.pricePaise || 0) * qty;
 
@@ -104,11 +124,13 @@ const analyticsWorker = new Worker('analytics-queue', async (job) => {
       }
 
       case 'ORDER_RETURN_OR_RTO': {
-        const { orderId, type: eventType, items } = data;
+        const { orderId, type: eventType, items } = data || {};
         if (!Array.isArray(items)) return;
 
         for (const item of items) {
           const prodId = item.productId || item.id;
+          if (!prodId || !mongoose.Types.ObjectId.isValid(prodId)) continue;
+
           const qty = item.quantity || 1;
 
           const updateQuery = eventType === 'RTO' ? { $inc: { rto: qty } } : { $inc: { returns: qty } };
@@ -141,9 +163,20 @@ const analyticsWorker = new Worker('analytics-queue', async (job) => {
   }
 }, { connection, concurrency: 5 });
 
+// Handle worker-level errors gracefully
+analyticsWorker.on('error', (err) => {
+  const workerErr = `Analytics Worker General Error: ${err.message}`;
+  if (typeof logger.error === 'function') {
+    logger.error(workerErr);
+  } else {
+    console.error(workerErr);
+  }
+});
+
 analyticsWorker.on('completed', (job) => {});
+
 analyticsWorker.on('failed', (job, err) => {
-  const failMsg = `Analytics Job ${job.id} failed with error: ${err.message}`;
+  const failMsg = `Analytics Job ${job?.id || 'Unknown'} failed with error: ${err.message}`;
   if (typeof logger.error === 'function') {
     logger.error(failMsg);
   } else {

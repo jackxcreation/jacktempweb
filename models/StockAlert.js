@@ -1,3 +1,4 @@
+// models/StockAlert.js
 const mongoose = require('mongoose');
 
 const stockAlertSchema = new mongoose.Schema({
@@ -15,16 +16,36 @@ const stockAlertSchema = new mongoose.Schema({
   },
   email: {
     type: String,
-    required: true
+    required: true,
+    trim: true,
+    lowercase: true
   },
   isNotified: {
     type: Boolean,
-    default: false
+    default: false,
+    index: true
+  },
+  notifiedAt: {
+    type: Date
   }
 }, { timestamps: true });
 
 // Prevent duplicate alert subscription for same user & product
 stockAlertSchema.index({ user: 1, product: 1 }, { unique: true });
 
-const StockAlert = mongoose.model('StockAlert', stockAlertSchema);
+// ==========================================
+// 🔥 PRO FEATURE: WORKER OPTIMIZATION INDEX
+// ==========================================
+stockAlertSchema.index({ product: 1, isNotified: 1 });
+
+// ==========================================
+// 🔥 PRO FEATURE: HELPER STATIC METHODS
+// ==========================================
+stockAlertSchema.statics.findPendingAlertsForProduct = function(productId) {
+  return this.find({ product: productId, isNotified: false });
+};
+
+// 🔥 SAFE MODEL COMPILATION PATTERN TO PREVENT OVERWRITE ERROR
+const StockAlert = mongoose.models.StockAlert || mongoose.model('StockAlert', stockAlertSchema);
+
 module.exports = StockAlert;

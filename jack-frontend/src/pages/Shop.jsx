@@ -1,11 +1,11 @@
+// src/pages/Shop.jsx
 import React, { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FiHeart, FiStar, FiShoppingCart, FiFilter, FiChevronDown, FiSearch, FiSliders, FiX, FiCheck } from 'react-icons/fi';
-import Navbar from '../components/Navbar';
 import { useCart } from '../context/CartContext';
 import { useProducts } from '../context/ProductContext'; 
-import { useCompare } from '../context/CompareContext'; // 🔥 Compare context integration
+import { useCompare } from '../context/CompareContext'; 
 import { getOptimizedImageUrl } from '../utils/imageOptimizer';
 
 // 🔥 CANONICAL CURRENCY FORMATTER UTILITY
@@ -55,9 +55,9 @@ const CompareModal = ({ isOpen, onClose }) => {
                 <p className="text-xs text-slate-400">Click "Compare" on any product card to start comparing.</p>
               </div>
             ) : (
-              <div className="grid grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
                 {/* Labels Column */}
-                <div className="space-y-6 pt-24 font-bold text-slate-400 text-sm uppercase tracking-wider">
+                <div className="hidden sm:block space-y-6 pt-24 font-bold text-slate-400 text-sm uppercase tracking-wider">
                   <div>Price</div>
                   <div>Rating</div>
                   <div>Category & Brand</div>
@@ -73,7 +73,7 @@ const CompareModal = ({ isOpen, onClose }) => {
                     <div key={product.id || product._id} className="bg-slate-50/50 rounded-3xl p-6 border border-slate-100 relative flex flex-col">
                       <button 
                         onClick={() => removeFromCompare(product.id || product._id)}
-                        className="absolute top-4 right-4 p-1.5 bg-white rounded-full text-slate-400 hover:text-red-500 shadow-sm"
+                        className="absolute top-4 right-4 p-1.5 bg-white rounded-full text-slate-400 hover:text-red-500 shadow-sm outline-none"
                       >
                         <FiX size={14} />
                       </button>
@@ -154,7 +154,7 @@ const Shop = ({ isLoggedIn, setIsLoggedIn }) => {
   const [showMobileFilters, setShowMobileFilters] = useState(false);
   const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
 
-  // 🔥 Powerful Filter States
+  // Powerful Filter States
   const [selectedBrand, setSelectedBrand] = useState("");
   const [minRating, setMinRating] = useState(0);
   const [inStockOnly, setInStockOnly] = useState(false);
@@ -166,11 +166,13 @@ const Shop = ({ isLoggedIn, setIsLoggedIn }) => {
   const [paginatedData, setPaginatedData] = useState({ products: [], total: 0, page: 1, pages: 1 });
   const [isLoading, setIsLoading] = useState(false);
 
+  // 🔥 Scroll to top on mount & set professional SEO title
   useEffect(() => {
     window.scrollTo(0, 0);
+    document.title = "Shop Collections | Jack Essentials — Explore Catalog";
   }, []);
 
-  // 🔥 FLIPKART-SCALE SERVER-SIDE FETCHING & FILTERING
+  // FLIPKART-SCALE SERVER-SIDE FETCHING & FILTERING
   const loadFilteredProducts = useCallback(async () => {
     setIsLoading(true);
     try {
@@ -206,9 +208,7 @@ const Shop = ({ isLoggedIn, setIsLoggedIn }) => {
   const filteredProducts = paginatedData.products || [];
 
   return (
-    <div className="min-h-screen bg-[#F8F9FA] font-sans pb-24">
-      <Navbar isLoggedIn={isLoggedIn} setIsLoggedIn={setIsLoggedIn} />
-
+    <div className="min-h-screen bg-[#F8F9FA] font-sans pb-24 selection:bg-[#FF4500] selection:text-white">
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 md:mt-10">
         
         {/* Breadcrumb & Header */}
@@ -232,11 +232,11 @@ const Shop = ({ isLoggedIn, setIsLoggedIn }) => {
                 placeholder="Search products..." 
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-white border border-slate-200 rounded-full py-3 pl-11 pr-4 text-sm font-medium outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all shadow-sm"
+                className="w-full bg-white border border-slate-200 rounded-full py-3 pl-11 pr-4 text-sm font-medium outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all shadow-sm text-slate-800"
               />
-              {searchQuery && <button onClick={() => setSearchQuery('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"><FiX size={14}/></button>}
+              {searchQuery && <button onClick={() => setSearchQuery('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 outline-none"><FiX size={14}/></button>}
             </div>
-            <button onClick={() => setShowMobileFilters(true)} className="md:hidden bg-slate-900 text-white p-3 rounded-full shadow-md active:scale-95 transition-transform">
+            <button onClick={() => setShowMobileFilters(true)} className="md:hidden bg-slate-900 text-white p-3 rounded-full shadow-md active:scale-95 transition-transform outline-none">
               <FiSliders size={20} />
             </button>
           </div>
@@ -250,11 +250,11 @@ const Shop = ({ isLoggedIn, setIsLoggedIn }) => {
               <div className="flex justify-between items-center border-b border-slate-100 pb-4">
                 <h3 className="text-lg font-black text-slate-800 flex items-center"><FiFilter className="mr-2 text-indigo-500" /> Filters</h3>
                 {(selectedCategory !== 'All' || searchQuery || selectedBrand || minRating > 0 || inStockOnly || selectedColor || selectedSize) && (
-                  <button onClick={() => {setSelectedCategory('All'); setSearchQuery(''); setSelectedBrand(''); setMinRating(0); setInStockOnly(false); setSelectedColor(''); setSelectedSize('');}} className="text-xs font-bold text-[#FF4500] hover:underline">Clear All</button>
+                  <button onClick={() => {setSelectedCategory('All'); setSearchQuery(''); setSelectedBrand(''); setMinRating(0); setInStockOnly(false); setSelectedColor(''); setSelectedSize('');}} className="text-xs font-bold text-[#FF4500] hover:underline outline-none">Clear All</button>
                 )}
               </div>
               
-              {/* Category Filter (Premium Pills) */}
+              {/* Category Filter */}
               <div>
                 <h4 className="font-bold text-slate-400 mb-3 uppercase text-xs tracking-widest">Categories</h4>
                 <div className="flex flex-wrap gap-2">
@@ -262,7 +262,7 @@ const Shop = ({ isLoggedIn, setIsLoggedIn }) => {
                     <button 
                       key={cat}
                       onClick={() => setSelectedCategory(cat)}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border ${selectedCategory === cat ? 'bg-slate-900 border-slate-900 text-white shadow-md' : 'bg-slate-50 border-slate-100 text-slate-600 hover:border-slate-300'}`}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border outline-none ${selectedCategory === cat ? 'bg-slate-900 border-slate-900 text-white shadow-md' : 'bg-slate-50 border-slate-100 text-slate-600 hover:border-slate-300'}`}
                     >
                       {cat}
                     </button>
@@ -322,7 +322,7 @@ const Shop = ({ isLoggedIn, setIsLoggedIn }) => {
                     <button 
                       key={col}
                       onClick={() => setSelectedColor(selectedColor === col ? '' : col)}
-                      className={`px-3 py-1 rounded-lg text-xs font-bold border transition-all ${selectedColor === col ? 'bg-slate-900 text-white border-slate-900' : 'bg-slate-50 text-slate-600 border-slate-200'}`}
+                      className={`px-3 py-1 rounded-lg text-xs font-bold border outline-none transition-all ${selectedColor === col ? 'bg-slate-900 text-white border-slate-900' : 'bg-slate-50 text-slate-600 border-slate-200'}`}
                     >
                       {col}
                     </button>
@@ -338,7 +338,7 @@ const Shop = ({ isLoggedIn, setIsLoggedIn }) => {
                     <button 
                       key={sz}
                       onClick={() => setSelectedSize(selectedSize === sz ? '' : sz)}
-                      className={`px-3 py-1 rounded-lg text-xs font-bold border transition-all ${selectedSize === sz ? 'bg-slate-900 text-white border-slate-900' : 'bg-slate-50 text-slate-600 border-slate-200'}`}
+                      className={`px-3 py-1 rounded-lg text-xs font-bold border outline-none transition-all ${selectedSize === sz ? 'bg-slate-900 text-white border-slate-900' : 'bg-slate-50 text-slate-600 border-slate-200'}`}
                     >
                       {sz}
                     </button>
@@ -377,7 +377,7 @@ const Shop = ({ isLoggedIn, setIsLoggedIn }) => {
                 <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: "spring", damping: 25, stiffness: 200 }} className="w-4/5 max-w-sm bg-white h-full shadow-2xl p-6 flex flex-col">
                   <div className="flex justify-between items-center mb-6 border-b border-slate-100 pb-4">
                     <h3 className="text-xl font-black text-slate-900">Filters & Sort</h3>
-                    <button onClick={() => setShowMobileFilters(false)} className="p-2 bg-slate-100 rounded-full text-slate-500"><FiX size={20}/></button>
+                    <button onClick={() => setShowMobileFilters(false)} className="p-2 bg-slate-100 rounded-full text-slate-500 outline-none"><FiX size={20}/></button>
                   </div>
                   
                   <div className="flex-1 overflow-y-auto space-y-6 pr-1">
@@ -385,7 +385,7 @@ const Shop = ({ isLoggedIn, setIsLoggedIn }) => {
                       <h4 className="font-bold text-slate-400 mb-3 uppercase text-xs tracking-widest">Categories</h4>
                       <div className="flex flex-wrap gap-2">
                         {CATEGORIES.map(cat => (
-                          <button key={cat} onClick={() => setSelectedCategory(cat)} className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border ${selectedCategory === cat ? 'bg-[#FF4500] border-[#FF4500] text-white shadow-md' : 'bg-slate-50 border-slate-100 text-slate-600'}`}>
+                          <button key={cat} onClick={() => setSelectedCategory(cat)} className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border outline-none ${selectedCategory === cat ? 'bg-[#FF4500] border-[#FF4500] text-white shadow-md' : 'bg-slate-50 border-slate-100 text-slate-600'}`}>
                             {cat}
                           </button>
                         ))}
@@ -423,8 +423,8 @@ const Shop = ({ isLoggedIn, setIsLoggedIn }) => {
                   </div>
 
                   <div className="pt-6 border-t border-slate-100 flex gap-3 mt-auto">
-                    <button onClick={() => {setSelectedCategory('All'); setSortBy('popular'); setMinRating(0); setInStockOnly(false);}} className="w-1/3 py-3 text-slate-500 font-bold text-xs hover:bg-slate-50 rounded-xl transition-colors">Clear</button>
-                    <button onClick={() => setShowMobileFilters(false)} className="w-2/3 bg-slate-900 text-white font-black text-xs py-3 rounded-xl shadow-lg active:scale-95 transition-all">Show Results</button>
+                    <button onClick={() => {setSelectedCategory('All'); setSortBy('popular'); setMinRating(0); setInStockOnly(false);}} className="w-1/3 py-3 text-slate-500 font-bold text-xs hover:bg-slate-50 rounded-xl transition-colors outline-none">Clear</button>
+                    <button onClick={() => setShowMobileFilters(false)} className="w-2/3 bg-slate-900 text-white font-black text-xs py-3 rounded-xl shadow-lg active:scale-95 transition-all outline-none">Show Results</button>
                   </div>
                 </motion.div>
               </motion.div>
@@ -475,7 +475,7 @@ const Shop = ({ isLoggedIn, setIsLoggedIn }) => {
                         </div>
 
                         {/* Wishlist Button */}
-                        <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); }} className="absolute top-3 right-3 sm:top-4 sm:right-4 z-10 p-2 sm:p-2.5 bg-white/90 backdrop-blur-md rounded-full text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all opacity-100 md:opacity-0 md:group-hover:opacity-100 shadow-sm md:translate-x-2 md:group-hover:translate-x-0">
+                        <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); }} className="absolute top-3 right-3 sm:top-4 sm:right-4 z-10 p-2 sm:p-2.5 bg-white/90 backdrop-blur-md rounded-full text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all opacity-100 md:opacity-0 md:group-hover:opacity-100 shadow-sm md:translate-x-2 md:group-hover:translate-x-0 outline-none">
                           <FiHeart size={16} />
                         </button>
 
@@ -493,13 +493,13 @@ const Shop = ({ isLoggedIn, setIsLoggedIn }) => {
                           <div className="absolute bottom-0 left-0 w-full p-2 translate-y-full group-hover:translate-y-0 transition-transform duration-300 hidden md:flex gap-1">
                             <button 
                               onClick={(e) => { e.preventDefault(); e.stopPropagation(); addToCart(product); }}
-                              className="flex-1 bg-slate-900/90 backdrop-blur-sm text-white font-bold py-2.5 rounded-xl flex items-center justify-center gap-1 hover:bg-[#FF4500] transition-colors shadow-lg text-xs"
+                              className="flex-1 bg-slate-900/90 backdrop-blur-sm text-white font-bold py-2.5 rounded-xl flex items-center justify-center gap-1 hover:bg-[#FF4500] transition-colors shadow-lg text-xs outline-none"
                             >
                               <FiShoppingCart size={14} /> Add
                             </button>
                             <button 
                               onClick={(e) => { e.preventDefault(); e.stopPropagation(); addToCompare(product); }}
-                              className="bg-white/90 backdrop-blur-sm text-slate-900 font-bold px-3 py-2.5 rounded-xl hover:bg-slate-900 hover:text-white transition-colors shadow-lg text-xs"
+                              className="bg-white/90 backdrop-blur-sm text-slate-900 font-bold px-3 py-2.5 rounded-xl hover:bg-slate-900 hover:text-white transition-colors shadow-lg text-xs outline-none"
                             >
                               Compare
                             </button>
@@ -527,13 +527,13 @@ const Shop = ({ isLoggedIn, setIsLoggedIn }) => {
                             <div className="flex gap-1 md:hidden">
                               <button 
                                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); addToCompare(product); }}
-                                className="bg-slate-100 text-slate-700 hover:bg-slate-900 hover:text-white p-2 rounded-xl transition-colors text-[10px] font-bold"
+                                className="bg-slate-100 text-slate-700 hover:bg-slate-900 hover:text-white p-2 rounded-xl transition-colors text-[10px] font-bold outline-none"
                               >
                                 Comp
                               </button>
                               <button 
                                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); addToCart(product); }}
-                                className="bg-slate-100 text-slate-900 hover:bg-[#FF4500] hover:text-white p-2.5 rounded-xl transition-colors"
+                                className="bg-slate-100 text-slate-900 hover:bg-[#FF4500] hover:text-white p-2.5 rounded-xl transition-colors outline-none"
                               >
                                 <FiShoppingCart size={16} />
                               </button>
@@ -552,7 +552,7 @@ const Shop = ({ isLoggedIn, setIsLoggedIn }) => {
                 </div>
                 <h2 className="text-2xl font-black text-slate-900 mb-2">No items found</h2>
                 <p className="text-slate-500 font-medium mb-8 max-w-sm">We couldn't find any products matching your current filters or search query.</p>
-                <button onClick={() => {setSelectedCategory("All"); setSearchQuery(""); setSelectedBrand(""); setMinRating(0); setInStockOnly(false); setSelectedColor(""); setSelectedSize("");}} className="bg-slate-900 hover:bg-[#FF4500] text-white px-8 py-3.5 rounded-xl font-black transition-all shadow-md active:scale-95">
+                <button onClick={() => {setSelectedCategory("All"); setSearchQuery(""); setSelectedBrand(""); setMinRating(0); setInStockOnly(false); setSelectedColor(""); setSelectedSize("");}} className="bg-slate-900 hover:bg-[#FF4500] text-white px-8 py-3.5 rounded-xl font-black transition-all shadow-md active:scale-95 outline-none">
                   Clear All Filters
                 </button>
               </motion.div>
@@ -568,7 +568,7 @@ const Shop = ({ isLoggedIn, setIsLoggedIn }) => {
           <span className="text-xs font-bold">Comparing ({compareList.length}/2)</span>
           <button 
             onClick={() => setIsCompareModalOpen(true)}
-            className="bg-[#FF4500] text-white text-xs font-black px-4 py-2 rounded-full shadow-md active:scale-95 transition-transform"
+            className="bg-[#FF4500] text-white text-xs font-black px-4 py-2 rounded-full shadow-md active:scale-95 transition-transform outline-none"
           >
             View Comparison
           </button>

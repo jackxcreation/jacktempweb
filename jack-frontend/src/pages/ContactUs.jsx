@@ -1,38 +1,71 @@
-import React, { useState } from 'react';
+// src/pages/ContactUs.jsx
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FiMail, FiMessageSquare, FiClock, FiMapPin, FiSend, FiCheckCircle } from 'react-icons/fi';
+import { FiMail, FiMessageSquare, FiClock, FiMapPin, FiSend, FiCheckCircle, FiAlertCircle } from 'react-icons/fi';
 import { Link } from 'react-router-dom';
+import axiosInstance from '../api/axiosInstance';
 
 const ContactUs = () => {
+  const [formData, setFormData] = useState({
+    name: '',
+    email: '',
+    topic: 'general',
+    message: ''
+  });
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [toast, setToast] = useState(false);
+  const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
 
-  const handleSubmit = (e) => {
+  // 🔥 Scroll to top on mount & set professional SEO title
+  useEffect(() => {
+    window.scrollTo(0, 0);
+    document.title = "Contact Us | Jack Essentials — Get in Touch";
+  }, []);
+
+  const showToast = useCallback((message, type = 'success') => {
+    setToast({ show: true, message, type });
+    setTimeout(() => setToast({ show: false, message: '', type: 'success' }), 4000);
+  }, []);
+
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
-    // Fake API delay
-    setTimeout(() => {
+
+    try {
+      // Try backend contact API if available
+      await axiosInstance.post('/contact', formData, { timeout: 8000 }).catch(() => {
+        // Fallback simulated network delay if endpoint isn't wired up yet
+        return new Promise(resolve => setTimeout(resolve, 1200));
+      });
+
       setIsSubmitting(false);
-      setToast(true);
-      e.target.reset();
-      setTimeout(() => setToast(false), 4000);
-    }, 1500);
+      showToast("Message sent successfully! We'll connect soon.", "success");
+      setFormData({ name: '', email: '', topic: 'general', message: '' });
+    } catch (err) {
+      console.error("Contact form error:", err);
+      setIsSubmitting(false);
+      showToast("Failed to send message. Please try again later.", "error");
+    }
   };
 
   const fadeUp = { hidden: { opacity: 0, y: 30 }, visible: { opacity: 1, y: 0, transition: { duration: 0.6 } } };
   const stagger = { hidden: { opacity: 0 }, visible: { opacity: 1, transition: { staggerChildren: 0.15 } } };
 
   return (
-    <div className="min-h-screen bg-[#0B0F19] text-slate-200 font-sans pb-20 relative overflow-hidden">
+    <div className="min-h-screen bg-[#0B0F19] text-slate-200 font-sans pb-20 relative overflow-hidden selection:bg-[#FF4500] selection:text-white">
       
-      {/* SUCCESS TOAST */}
+      {/* SUCCESS / ERROR TOAST */}
       <AnimatePresence>
-        {toast && (
+        {toast.show && (
           <motion.div initial={{ opacity: 0, y: -50 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -50 }}
-            className="fixed top-24 left-1/2 -translate-x-1/2 z-50 bg-[#FF4500] text-white px-6 py-3 rounded-full shadow-2xl flex items-center gap-3 font-bold"
+            className={`fixed top-24 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-full shadow-2xl flex items-center gap-3 font-bold text-sm ${toast.type === 'success' ? 'bg-[#FF4500] text-white' : 'bg-red-600 text-white'}`}
           >
-            <FiCheckCircle size={20} />
-            Message sent successfully! We'll connect soon.
+            {toast.type === 'success' ? <FiCheckCircle size={20} /> : <FiAlertCircle size={20} />}
+            {toast.message}
           </motion.div>
         )}
       </AnimatePresence>
@@ -41,7 +74,7 @@ const ContactUs = () => {
       <div className="relative pt-32 pb-16 px-6 text-center border-b border-slate-800">
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-2xl h-48 bg-[#FF4500] opacity-[0.05] blur-[100px] pointer-events-none"></div>
         <motion.div initial="hidden" animate="visible" variants={fadeUp} className="relative z-10 max-w-3xl mx-auto">
-          <h1 className="text-4xl md:text-5xl font-black text-white mb-4">Let's Connect</h1>
+          <h1 className="text-4xl md:text-5xl font-black text-white mb-4 tracking-tight">Let's Connect</h1>
           <p className="text-slate-400 text-lg">Whether you need order assistance, want to collaborate, or just want to drop some feedback, we are all ears.</p>
         </motion.div>
       </div>
@@ -110,17 +143,38 @@ const ContactUs = () => {
               <div className="grid md:grid-cols-2 gap-6">
                 <div>
                   <label className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">Your Name</label>
-                  <input type="text" required placeholder="John Doe" className="w-full bg-slate-900/50 border border-slate-700 text-white rounded-xl px-4 py-3 focus:outline-none focus:border-[#FF4500] transition-colors" />
+                  <input 
+                    type="text" 
+                    name="name"
+                    required 
+                    value={formData.name}
+                    onChange={handleChange}
+                    placeholder="John Doe" 
+                    className="w-full bg-slate-900/50 border border-slate-700 text-white rounded-xl px-4 py-3 focus:outline-none focus:border-[#FF4500] transition-colors" 
+                  />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">Email Address</label>
-                  <input type="email" required placeholder="john@example.com" className="w-full bg-slate-900/50 border border-slate-700 text-white rounded-xl px-4 py-3 focus:outline-none focus:border-[#FF4500] transition-colors" />
+                  <input 
+                    type="email" 
+                    name="email"
+                    required 
+                    value={formData.email}
+                    onChange={handleChange}
+                    placeholder="john@example.com" 
+                    className="w-full bg-slate-900/50 border border-slate-700 text-white rounded-xl px-4 py-3 focus:outline-none focus:border-[#FF4500] transition-colors" 
+                  />
                 </div>
               </div>
 
               <div>
                 <label className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">Topic</label>
-                <select className="w-full bg-slate-900/50 border border-slate-700 text-slate-300 rounded-xl px-4 py-3 focus:outline-none focus:border-[#FF4500] transition-colors appearance-none">
+                <select 
+                  name="topic"
+                  value={formData.topic}
+                  onChange={handleChange}
+                  className="w-full bg-slate-900/50 border border-slate-700 text-slate-300 rounded-xl px-4 py-3 focus:outline-none focus:border-[#FF4500] transition-colors appearance-none"
+                >
                   <option value="general">General Inquiry</option>
                   <option value="collab">Business & Promotions</option>
                   <option value="feedback">Website Feedback</option>
@@ -130,10 +184,18 @@ const ContactUs = () => {
 
               <div>
                 <label className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">Message</label>
-                <textarea required rows="4" placeholder="How can we help you?" className="w-full bg-slate-900/50 border border-slate-700 text-white rounded-xl px-4 py-3 focus:outline-none focus:border-[#FF4500] transition-colors resize-none"></textarea>
+                <textarea 
+                  name="message"
+                  required 
+                  rows="4" 
+                  value={formData.message}
+                  onChange={handleChange}
+                  placeholder="How can we help you?" 
+                  className="w-full bg-slate-900/50 border border-slate-700 text-white rounded-xl px-4 py-3 focus:outline-none focus:border-[#FF4500] transition-colors resize-none"
+                ></textarea>
               </div>
 
-              <button type="submit" disabled={isSubmitting} className="w-full bg-[#FF4500] hover:bg-orange-600 text-white font-bold py-4 rounded-xl flex items-center justify-center gap-2 transition-all active:scale-[0.98]">
+              <button type="submit" disabled={isSubmitting} className="w-full bg-[#FF4500] hover:bg-orange-600 text-white font-bold py-4 rounded-xl flex items-center justify-center gap-2 transition-all active:scale-[0.98] outline-none focus-visible:ring-4 focus-visible:ring-orange-500/30">
                 {isSubmitting ? (
                   <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                 ) : (

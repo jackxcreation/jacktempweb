@@ -1,3 +1,4 @@
+// src/pages/TrackOrder.jsx
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { FiPackage, FiShoppingBag, FiTruck, FiCheckCircle, FiClock, FiChevronRight } from 'react-icons/fi';
@@ -20,8 +21,10 @@ const TrackOrder = () => {
   // Order Tracking Stages
   const stages = ["Placed", "Processing", "Shipped", "Out for Delivery", "Delivered"];
 
+  // 🔥 Scroll to top on mount & set professional SEO title
   useEffect(() => {
     window.scrollTo(0, 0);
+    document.title = "Track Orders | Jack Essentials — Live Package Tracking";
     
     const checkAuthAndFetch = async () => {
       const storedUser = JSON.parse(localStorage.getItem('jack_user'));
@@ -36,7 +39,6 @@ const TrackOrder = () => {
 
       // 2. Fetch real orders
       try {
-        // 🔥 PHASE 1 FIX: Removed localhost and used axiosInstance
         const res = await axiosInstance.get(`/orders/user/${storedUser.id}`);
         setOrders(res.data);
       } catch (error) {
@@ -54,7 +56,7 @@ const TrackOrder = () => {
   const stagger = { hidden: { opacity: 0 }, visible: { opacity: 1, transition: { staggerChildren: 0.2 } } };
 
   return (
-    <div className="min-h-screen bg-[#0B0F19] text-slate-200 font-sans pb-20 overflow-hidden">
+    <div className="min-h-screen bg-[#0B0F19] text-slate-200 font-sans pb-20 overflow-hidden selection:bg-[#FF4500] selection:text-white">
       
       {/* HEADER SECTION */}
       <div className="relative pt-32 pb-16 px-6 text-center border-b border-slate-800">
@@ -88,7 +90,7 @@ const TrackOrder = () => {
             </div>
             <h2 className="text-2xl md:text-3xl font-black text-white mb-3">You haven't placed any orders yet.</h2>
             <p className="text-slate-400 mb-8 max-w-md mx-auto">Looks like your cart is waiting for some amazing products. Let's get you something special!</p>
-            <Link to="/shop" className="inline-block bg-[#FF4500] hover:bg-orange-600 text-white font-bold py-4 px-10 rounded-full transition-all shadow-lg shadow-orange-500/20 active:scale-95">
+            <Link to="/shop" className="inline-block bg-[#FF4500] hover:bg-orange-600 text-white font-bold py-4 px-10 rounded-full transition-all shadow-lg shadow-orange-500/20 active:scale-95 outline-none focus-visible:ring-4 focus-visible:ring-orange-500/30">
               Start Shopping
             </Link>
           </motion.div>
@@ -125,7 +127,7 @@ const TrackOrder = () => {
                         </p>
                       </div>
                     </div>
-                    <Link to={`/order/${orderIdStr}`} className="text-sm font-bold text-slate-300 hover:text-white bg-slate-700/50 hover:bg-slate-600 px-5 py-2.5 rounded-xl transition-all flex items-center gap-2 whitespace-nowrap">
+                    <Link to={`/order/${orderIdStr}`} className="text-sm font-bold text-slate-300 hover:text-white bg-slate-700/50 hover:bg-slate-600 px-5 py-2.5 rounded-xl transition-all flex items-center gap-2 whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-slate-400">
                       View Details <FiChevronRight />
                     </Link>
                   </div>

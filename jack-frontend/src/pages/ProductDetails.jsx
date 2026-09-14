@@ -1,8 +1,8 @@
+// jack-frontend/src/pages/ProductDetails.jsx
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom'; 
 import { motion, AnimatePresence } from 'framer-motion';
 import { FiStar, FiShoppingCart, FiZap, FiTruck, FiShield, FiRotateCcw, FiBox, FiMapPin, FiCheckCircle, FiHeart, FiShare2, FiEye, FiMessageCircle, FiXCircle, FiCheck, FiX, FiHelpCircle, FiBell } from 'react-icons/fi';
-import Navbar from '../components/Navbar';
 import { useCart } from '../context/CartContext';
 import { useProducts } from '../context/ProductContext'; 
 import { useUser } from '../context/UserContext'; 
@@ -46,10 +46,10 @@ const SimilarProductCard = ({ product }) => {
           <div className="mt-auto flex items-end justify-between">
             <span className="text-lg font-black text-slate-900 leading-none">{formatCurrency(productPricePaise)}</span>
             <div className="flex gap-1">
-              <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); addToCompare(product); }} className="bg-slate-100 text-slate-700 hover:bg-slate-900 hover:text-white px-2.5 py-2 rounded-xl transition-colors text-[10px] font-bold">
+              <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); addToCompare(product); }} className="bg-slate-100 text-slate-700 hover:bg-slate-900 hover:text-white px-2.5 py-2 rounded-xl transition-colors text-[10px] font-bold cursor-pointer">
                 Comp
               </button>
-              <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); addToCart(product); }} className="bg-slate-100 text-slate-900 hover:bg-[#FF4500] hover:text-white p-2 rounded-xl transition-colors">
+              <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); addToCart(product); }} className="bg-slate-100 text-slate-900 hover:bg-[#FF4500] hover:text-white p-2 rounded-xl transition-colors cursor-pointer" aria-label="Add to cart">
                 <FiShoppingCart size={16} />
               </button>
             </div>
@@ -68,13 +68,14 @@ const NotifyMeButton = ({ productId }) => {
   const [subscribed, setSubscribed] = useState(false);
 
   const handleNotify = async () => {
+    if (!productId || loading || subscribed) return;
     setLoading(true);
     try {
       // 🔥 PHASE 1 FIX: Removed `/api` prefix because axiosInstance already maps to /api
       const res = await axiosInstance.post('/stock-alerts/subscribe', { productId });
-      if (res.data.success) {
+      if (res?.data?.success) {
         setSubscribed(true);
-        alert(res.data.message);
+        alert(res.data.message || "You will be notified when available!");
       }
     } catch (err) {
       alert(err.response?.data?.message || "Please login to set back-in-stock alerts.");
@@ -87,10 +88,10 @@ const NotifyMeButton = ({ productId }) => {
     <button 
       onClick={handleNotify}
       disabled={loading || subscribed}
-      className={`w-full py-4 rounded-2xl font-black text-sm md:text-lg flex justify-center items-center gap-2 transition-all shadow-md ${subscribed ? 'bg-emerald-600 text-white cursor-default' : 'bg-slate-900 hover:bg-[#FF4500] text-white active:scale-95'}`}
+      className={`w-full py-4 rounded-2xl font-black text-sm md:text-lg flex justify-center items-center gap-2 transition-all shadow-md cursor-pointer ${subscribed ? 'bg-emerald-600 text-white cursor-default' : 'bg-slate-900 hover:bg-[#FF4500] text-white active:scale-95'}`}
     >
-      <FiBell size={20} />
-      <span>{subscribed ? "YOU WILL BE NOTIFIED" : "NOTIFY ME WHEN AVAILABLE"}</span>
+      <FiBell size={20} className={loading ? "animate-bounce" : ""} />
+      <span>{loading ? "PROCESSING..." : subscribed ? "YOU WILL BE NOTIFIED" : "NOTIFY ME WHEN AVAILABLE"}</span>
     </button>
   );
 };
@@ -118,8 +119,8 @@ const AddReviewModal = ({ isOpen, onClose, productId, onReviewAdded }) => {
         title,
         comment
       });
-      if (res.status === 201) {
-        onReviewAdded();
+      if (res.status === 201 || res.status === 200) {
+        if (onReviewAdded) onReviewAdded();
         onClose();
       }
     } catch (err) {
@@ -135,7 +136,7 @@ const AddReviewModal = ({ isOpen, onClose, productId, onReviewAdded }) => {
         <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-white rounded-[2rem] max-w-lg w-full p-6 shadow-2xl">
           <div className="flex justify-between items-center mb-6 border-b border-slate-100 pb-4">
             <h3 className="text-xl font-black text-slate-900">Write a Review</h3>
-            <button onClick={onClose} className="p-2 bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200"><FiX size={18}/></button>
+            <button onClick={onClose} aria-label="Close" className="p-2 bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200 cursor-pointer"><FiX size={18}/></button>
           </div>
 
           {errorMsg && <p className="bg-red-50 text-red-600 text-xs font-bold p-3 rounded-xl mb-4 border border-red-100">{errorMsg}</p>}
@@ -145,7 +146,7 @@ const AddReviewModal = ({ isOpen, onClose, productId, onReviewAdded }) => {
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Rating</label>
               <div className="flex gap-2">
                 {[1, 2, 3, 4, 5].map((star) => (
-                  <button type="button" key={star} onClick={() => setRating(star)} className={`text-2xl ${rating >= star ? 'text-yellow-400' : 'text-slate-300'}`}>★</button>
+                  <button type="button" key={star} onClick={() => setRating(star)} className={`text-2xl cursor-pointer ${rating >= star ? 'text-yellow-400' : 'text-slate-300'}`}>★</button>
                 ))}
               </div>
             </div>
@@ -160,7 +161,7 @@ const AddReviewModal = ({ isOpen, onClose, productId, onReviewAdded }) => {
               <textarea rows="4" placeholder="Write your experience..." value={comment} onChange={(e) => setComment(e.target.value)} required className="w-full border border-slate-200 rounded-xl p-3 text-sm font-medium outline-none focus:border-slate-900 resize-none"></textarea>
             </div>
 
-            <button type="submit" disabled={submitting} className="w-full bg-slate-900 hover:bg-[#FF4500] text-white font-black py-3.5 rounded-xl transition-all shadow-md active:scale-95 disabled:bg-slate-300">
+            <button type="submit" disabled={submitting} className="w-full bg-slate-900 hover:bg-[#FF4500] text-white font-black py-3.5 rounded-xl transition-all shadow-md active:scale-95 disabled:bg-slate-300 cursor-pointer">
               {submitting ? 'Submitting...' : 'Post Review'}
             </button>
           </form>
@@ -178,7 +179,7 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
   const { user, addRecentlyViewed } = useUser(); 
   const { addToCompare } = useCompare();
 
-  const product = products.find(p => String(p.id) === String(id) || String(p._id) === String(id));
+  const product = products.find(p => String(p.id || p._id) === String(id));
   const productIdSafeguard = product?.id || product?._id; 
 
   const [mainImage, setMainImage] = useState('');
@@ -204,7 +205,7 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
   const [isLoadingSimilar, setIsLoadingSimilar] = useState(true);
 
-  // 🔥 PHASE 1 FIX: Extracted WebSocket URL logically
+  // 🔥 Extracted WebSocket URL logically
   const socketURL = import.meta.env.VITE_API_URL 
       ? import.meta.env.VITE_API_URL.replace(/\/api$/, '') 
       : 'https://ecom-project-lwt4.onrender.com';
@@ -212,14 +213,14 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
   const fetchProductReviews = () => {
     if (!productIdSafeguard) return;
     axiosInstance.get(`/products/${productIdSafeguard}/reviews`)
-      .then(res => setProductReviews(res.data))
+      .then(res => setProductReviews(Array.isArray(res.data) ? res.data : (res.data.reviews || [])))
       .catch(err => console.log("Failed to load reviews"));
   };
 
   const fetchQuestions = () => {
     if (!productIdSafeguard) return;
     axiosInstance.get(`/products/${productIdSafeguard}/questions`)
-      .then(res => setQuestionsList(res.data))
+      .then(res => setQuestionsList(Array.isArray(res.data) ? res.data : (res.data.questions || [])))
       .catch(err => console.log("Failed to load questions"));
   };
 
@@ -276,7 +277,7 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
           "price": productPriceNum,
           "priceValidUntil": "2027-12-31",
           "itemCondition": "https://schema.org/NewCondition",
-          "availability": parseInt(product.inventory) > 0 ? "https://schema.org/InStock" : "https://schema.org/OutOfStock",
+          "availability": parseInt(product.inventory || 1) > 0 ? "https://schema.org/InStock" : "https://schema.org/OutOfStock",
           "seller": {
             "@type": "Organization",
             "name": "Jack Essentials"
@@ -305,7 +306,7 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
 
       axiosInstance.get(`/products/similar/${productIdSafeguard}`)
         .then(res => {
-          setSimilarProducts(res.data);
+          setSimilarProducts(Array.isArray(res.data) ? res.data : (res.data.products || []));
           setIsLoadingSimilar(false);
         })
         .catch(err => {
@@ -320,10 +321,12 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
     };
   }, [productIdSafeguard, product, addRecentlyViewed]); 
 
-  // 🔥 FIX: Added strictly token check for sockets
+  // 🔥 Robust Token Check for Sockets supporting multi-storage keys
   useEffect(() => {
     let socket;
-    const token = localStorage.getItem('token');
+    const token = localStorage.getItem('token') || 
+                  localStorage.getItem('jack_token') || 
+                  localStorage.getItem('adminToken');
     
     if (productIdSafeguard && token) {
       socket = io(socketURL, { 
@@ -345,10 +348,12 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
     };
   }, [productIdSafeguard, socketURL]);
 
-  // 🔥 FIX: Added strictly token check for visitor socket
+  // 🔥 Robust Visitor Socket
   useEffect(() => {
     let socketVisitor;
-    const token = localStorage.getItem('token');
+    const token = localStorage.getItem('token') || 
+                  localStorage.getItem('jack_token') || 
+                  localStorage.getItem('adminToken');
 
     if (productIdSafeguard && token) {
       socketVisitor = io(socketURL, { 
@@ -400,7 +405,6 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
 
     setDeliveryStatus('checking');
     try {
-      // 🔥 PHASE 1 FIX: Using axiosInstance instead of fetch
       const res = await axiosInstance.get(`/delivery-check?pincode=${pinCodeToCheck}`);
       const data = res.data;
       
@@ -462,7 +466,7 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
         <div className="w-24 h-24 bg-slate-200 rounded-full flex items-center justify-center mb-6"><FiBox size={40} className="text-slate-400" /></div>
         <h2 className="text-2xl font-black mb-4 text-slate-900">Product Not Found</h2>
         <p className="text-slate-500 mb-8 font-medium">This item might have been removed or is out of stock.</p>
-        <button onClick={() => navigate('/shop')} className="bg-slate-900 hover:bg-[#FF4500] text-white px-10 py-4 rounded-xl font-black transition-all shadow-lg active:scale-95">RETURN TO SHOP</button>
+        <button onClick={() => navigate('/shop')} className="bg-slate-900 hover:bg-[#FF4500] text-white px-10 py-4 rounded-xl font-black transition-all shadow-lg active:scale-95 cursor-pointer">RETURN TO SHOP</button>
       </div>
     );
   }
@@ -473,8 +477,6 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-24 md:pb-20 relative">
-      <Navbar isLoggedIn={isLoggedIn} setIsLoggedIn={setIsLoggedIn} />
-
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 md:mt-10">
         
         <div className="text-xs md:text-sm text-slate-500 mb-6 flex items-center space-x-2 font-medium">
@@ -493,7 +495,8 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
                   <button 
                     key={idx} 
                     onClick={() => setMainImage(img)}
-                    className={`w-16 h-16 md:w-20 md:h-20 rounded-xl overflow-hidden border-2 transition-all flex-shrink-0 bg-slate-50 ${mainImage === img ? 'border-slate-900 ring-2 ring-slate-900/10' : 'border-transparent hover:border-slate-300'}`}
+                    aria-label={`View image ${idx + 1}`}
+                    className={`w-16 h-16 md:w-20 md:h-20 rounded-xl overflow-hidden border-2 transition-all flex-shrink-0 bg-slate-50 cursor-pointer ${mainImage === img ? 'border-slate-900 ring-2 ring-slate-900/10' : 'border-transparent hover:border-slate-300'}`}
                   >
                     <img 
                       src={getOptimizedImageUrl(img, 100)} 
@@ -515,8 +518,8 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
               </div>
 
               <div className="absolute top-4 right-4 z-10 flex flex-col gap-2">
-                <button className="bg-white/80 backdrop-blur-md p-3 rounded-full shadow-sm text-slate-500 hover:text-red-500 hover:bg-white transition-all"><FiHeart size={20} /></button>
-                <button className="bg-white/80 backdrop-blur-md p-3 rounded-full shadow-sm text-slate-500 hover:text-indigo-600 hover:bg-white transition-all"><FiShare2 size={20} /></button>
+                <button aria-label="Add to Wishlist" className="bg-white/80 backdrop-blur-md p-3 rounded-full shadow-sm text-slate-500 hover:text-red-500 hover:bg-white transition-all cursor-pointer"><FiHeart size={20} /></button>
+                <button aria-label="Share" className="bg-white/80 backdrop-blur-md p-3 rounded-full shadow-sm text-slate-500 hover:text-indigo-600 hover:bg-white transition-all cursor-pointer"><FiShare2 size={20} /></button>
               </div>
 
               <AnimatePresence mode="wait">
@@ -606,7 +609,7 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
                   </div>
                   <button 
                     onClick={() => setIsEditingPincode(true)} 
-                    className="text-xs font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 px-4 py-2 rounded-lg transition-colors w-max"
+                    className="text-xs font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 px-4 py-2 rounded-lg transition-colors w-max cursor-pointer"
                   >
                     Change
                   </button>
@@ -628,7 +631,7 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
                     <button 
                       onClick={() => verifyPincode(pincode)} 
                       disabled={pincode.length !== 6 || deliveryStatus === 'checking'} 
-                      className="bg-slate-900 disabled:bg-slate-300 text-white font-black text-sm px-8 py-3.5 rounded-xl hover:bg-slate-800 transition-colors shadow-md"
+                      className="bg-slate-900 disabled:bg-slate-300 text-white font-black text-sm px-8 py-3.5 rounded-xl hover:bg-slate-800 transition-colors shadow-md cursor-pointer"
                     >
                       {deliveryStatus === 'checking' ? '...' : 'CHECK'}
                     </button>
@@ -636,7 +639,7 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
                   
                   {deliveryStatus === 'error' && (
                     <p className={`text-xs mt-4 font-bold flex items-center p-3 rounded-xl border ${deliveryInfo?.message?.includes('fast') ? 'text-amber-600 bg-amber-50 border-amber-200' : 'text-red-500 bg-red-50 border-red-100'}`}>
-                      <FiXCircle className="mr-2" size={16}/> 
+                      <FiXCircle className="mr-2 flex-shrink-0" size={16}/> 
                       {deliveryInfo?.message || "Invalid pincode or unserviceable area."}
                     </p>
                   )}
@@ -653,19 +656,19 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
               <div className="flex flex-col sm:flex-row gap-4 mt-auto">
                 <button 
                   onClick={() => addToCart(product)} 
-                  className="flex-1 bg-white border-2 border-slate-900 text-slate-900 hover:bg-slate-900 hover:text-white py-4 px-2 rounded-2xl font-black text-sm md:text-lg flex justify-center items-center gap-2 active:scale-95 transition-all"
+                  className="flex-1 bg-white border-2 border-slate-900 text-slate-900 hover:bg-slate-900 hover:text-white py-4 px-2 rounded-2xl font-black text-sm md:text-lg flex justify-center items-center gap-2 active:scale-95 transition-all cursor-pointer"
                 >
                   <FiShoppingCart size={20} /><span>ADD TO BAG</span>
                 </button>
                 <button 
                   onClick={() => addToCompare(product)} 
-                  className="bg-slate-100 hover:bg-slate-900 hover:text-white text-slate-900 py-4 px-6 rounded-2xl font-black text-sm md:text-lg flex justify-center items-center gap-2 transition-all active:scale-95"
+                  className="bg-slate-100 hover:bg-slate-900 hover:text-white text-slate-900 py-4 px-6 rounded-2xl font-black text-sm md:text-lg flex justify-center items-center gap-2 transition-all active:scale-95 cursor-pointer"
                 >
                   Compare
                 </button>
                 <button 
                   onClick={() => { addToCart(product); navigate('/checkout'); }} 
-                  className="flex-1 bg-gradient-to-r from-[#FF4500] to-orange-600 hover:from-[#E8004C] hover:to-red-600 text-white py-4 px-2 rounded-2xl font-black text-sm md:text-lg flex justify-center items-center gap-2 shadow-[0_10px_20px_-10px_rgba(255,69,0,0.6)] active:scale-95 transition-all"
+                  className="flex-1 bg-gradient-to-r from-[#FF4500] to-orange-600 hover:from-[#E8004C] hover:to-red-600 text-white py-4 px-2 rounded-2xl font-black text-sm md:text-lg flex justify-center items-center gap-2 shadow-[0_10px_20px_-10px_rgba(255,69,0,0.6)] active:scale-95 transition-all cursor-pointer"
                 >
                   <FiZap size={20} className="animate-pulse" /><span>BUY IT NOW</span>
                 </button>
@@ -715,7 +718,7 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
           <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 md:p-8 flex flex-col">
             <div className="flex justify-between items-center mb-6 border-b border-slate-100 pb-4">
               <h2 className="text-lg font-black text-slate-900 flex items-center"><FiMessageCircle className="mr-2 text-indigo-500" /> Ratings & Reviews</h2>
-              <button onClick={() => setIsReviewModalOpen(true)} className="bg-slate-900 hover:bg-[#FF4500] text-white text-xs font-bold px-3 py-2 rounded-xl transition-colors shadow-sm">
+              <button onClick={() => setIsReviewModalOpen(true)} className="bg-slate-900 hover:bg-[#FF4500] text-white text-xs font-bold px-3 py-2 rounded-xl transition-colors shadow-sm cursor-pointer">
                 Write Review
               </button>
             </div>
@@ -766,7 +769,7 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
           
           <form onSubmit={handlePostQuestion} className="flex gap-3 mb-8">
             <input type="text" placeholder="Have a question? Ask seller, support, or buyers..." value={newQuestionText} onChange={(e) => setNewQuestionText(e.target.value)} className="flex-1 border border-slate-200 rounded-xl p-3.5 text-sm font-medium outline-none focus:border-slate-900" />
-            <button type="submit" className="bg-slate-900 text-white font-bold px-6 py-3.5 rounded-xl hover:bg-[#FF4500] transition-colors">Ask Question</button>
+            <button type="submit" className="bg-slate-900 text-white font-bold px-6 py-3.5 rounded-xl hover:bg-[#FF4500] transition-colors cursor-pointer">Ask Question</button>
           </form>
 
           <div className="space-y-6">
@@ -797,11 +800,11 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
                   {replyingToQId === q._id ? (
                     <div className="flex gap-2 pt-2">
                       <input type="text" placeholder="Type your answer..." value={answerText} onChange={(e) => setAnswerText(e.target.value)} className="flex-1 border border-slate-200 rounded-xl p-2.5 text-xs outline-none bg-white" />
-                      <button onClick={() => handlePostAnswer(q._id)} className="bg-indigo-600 text-white text-xs font-bold px-4 py-2.5 rounded-xl">Send</button>
-                      <button onClick={() => setReplyingToQId(null)} className="text-xs text-slate-500 px-2 font-bold">Cancel</button>
+                      <button onClick={() => handlePostAnswer(q._id)} className="bg-indigo-600 text-white text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer">Send</button>
+                      <button onClick={() => setReplyingToQId(null)} className="text-xs text-slate-500 px-2 font-bold cursor-pointer">Cancel</button>
                     </div>
                   ) : (
-                    <button onClick={() => setReplyingToQId(q._id)} className="text-xs font-bold text-indigo-600 hover:underline">Answer this question</button>
+                    <button onClick={() => setReplyingToQId(q._id)} className="text-xs font-bold text-indigo-600 hover:underline cursor-pointer">Answer this question</button>
                   )}
                 </div>
               ))
@@ -835,21 +838,23 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
             initial={{ y: 100 }} animate={{ y: 0 }} exit={{ y: 100 }} transition={{ type: "spring", stiffness: 300, damping: 30 }}
             className="fixed bottom-0 left-0 w-full bg-white/90 backdrop-blur-md border-t border-slate-200 p-3 px-4 z-40 md:hidden shadow-[0_-10px_20px_rgba(0,0,0,0.05)] flex items-center justify-between gap-3"
           >
-            <div className="flex flex-col">
-              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest line-clamp-1">{product.title}</span>
+            <div className="flex flex-col min-w-0 flex-1">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest truncate">{product.title}</span>
               <span className="text-lg font-black text-slate-900 leading-none mt-0.5">{formatCurrency(productPricePaise)}</span>
             </div>
             {parseInt(product.inventory) === 0 ? (
               <button 
-                onClick={() => {}} 
-                className="bg-slate-900 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest shadow-md active:scale-95"
+                onClick={() => {
+                  window.scrollTo({ top: 400, behavior: 'smooth' });
+                }} 
+                className="bg-slate-900 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest shadow-md active:scale-95 cursor-pointer flex-shrink-0"
               >
                 Notify Me
               </button>
             ) : (
               <button 
                 onClick={() => addToCart(product)} 
-                className="bg-slate-900 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest shadow-md active:scale-95"
+                className="bg-slate-900 hover:bg-[#FF4500] text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest shadow-md active:scale-95 cursor-pointer flex-shrink-0 transition-colors"
               >
                 Add to Bag
               </button>

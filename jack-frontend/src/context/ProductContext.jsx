@@ -1,6 +1,7 @@
-import React, { createContext, useContext, useState } from 'react';
+// jack-frontend/src/context/ProductContext.jsx
+import React, { createContext, useContext } from 'react';
 import { API_URL } from '../config';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'; // 🔥 PHASE 8: Added TanStack Query
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'; // 🔥 PHASE 8: TanStack Query
 
 const ProductContext = createContext();
 export const useProducts = () => useContext(ProductContext);
@@ -8,8 +9,14 @@ export const useProducts = () => useContext(ProductContext);
 export const ProductProvider = ({ children }) => {
   const queryClient = useQueryClient();
 
-  // Helper to securely get token for Admin actions (Add/Delete)
-  const getToken = () => localStorage.getItem('adminToken') || localStorage.getItem('token');
+  // 🔥 UPGRADE: Securely get token across multiple possible localStorage keys for Admin actions
+  const getToken = () => {
+    if (typeof window === 'undefined') return null;
+    return localStorage.getItem('adminToken') || 
+           localStorage.getItem('token') || 
+           localStorage.getItem('admin_token') || 
+           localStorage.getItem('jack_token');
+  };
 
   // ==========================================
   // 1. DATABASE SE LIGHTWEIGHT INITIAL PRODUCTS (GET) - 🔥 OPTIMIZED TO PREVENT MEMORY CHOKE
@@ -78,7 +85,11 @@ export const ProductProvider = ({ children }) => {
       if (!response.ok) throw new Error('Failed to add product');
       return response.json();
     },
-    onSuccess: (savedProduct) => {
+    onSuccess: (savedResponse) => {
+      // Safely extract product object from various backend response wrappers
+      const savedProduct = savedResponse?.product || savedResponse?.data || savedResponse;
+      if (!savedProduct) return;
+
       // Turant UI update bina refresh ke (Optimistic Update)
       queryClient.setQueryData(['products'], (oldData = []) => {
         const oldProducts = Array.isArray(oldData) ? oldData : (oldData.products || []);
@@ -114,10 +125,13 @@ export const ProductProvider = ({ children }) => {
       return id;
     },
     onSuccess: (deletedId) => {
-      // Turant UI update bina refresh ke
+      // Turant UI update bina refresh ke using string-safe comparisons
       queryClient.setQueryData(['products'], (oldData = []) => {
         const oldProducts = Array.isArray(oldData) ? oldData : (oldData.products || []);
-        return oldProducts.filter(product => product.id !== deletedId && product._id !== deletedId);
+        return oldProducts.filter(product => {
+          const pId = String(product.id || product._id || '');
+          return pId !== String(deletedId);
+        });
       });
       queryClient.invalidateQueries({ queryKey: ['products'] });
     }
@@ -137,3 +151,5 @@ export const ProductProvider = ({ children }) => {
     </ProductContext.Provider>
   );
 };
+
+export default ProductProvider;

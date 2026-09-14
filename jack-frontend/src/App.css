@@ -1,3 +1,5 @@
+/* jack-frontend/src/index.css */
+
 /* Tailwind Base Imports */
 @tailwind base;
 @tailwind components;
@@ -72,4 +74,17 @@ body {
     -ms-overflow-style: none; /* IE and Edge */
     scrollbar-width: none; /* Firefox */
   }
+
+  /* 🔥 PRO ADDITION: Glassmorphism Utility for Modals & Floating Components */
+  .glass-card {
+    background: rgba(255, 255, 255, 0.9);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+}
+
+/* Global accessible focus outline */
+:focus-visible {
+  outline: 2px solid var(--brand-orange);
+  outline-offset: 2px;
 }

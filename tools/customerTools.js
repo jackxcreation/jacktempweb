@@ -1,22 +1,32 @@
-﻿const { User, Order } = require('../models');
+﻿const mongoose = require('mongoose');
+const { User, Order } = require('../models');
 
 const getCustomerProfile = async (args, customerId) => {
   if (!customerId) return { error: 'User is not authenticated.' };
 
+  // Prevent Mongoose CastError if customerId is a guest string or invalid object id
+  if (typeof customerId === 'string' && !mongoose.Types.ObjectId.isValid(customerId)) {
+    return { error: 'Invalid customer profile session.' };
+  }
+
   try {
-    const user = await User.findById(customerId).select('name email phone createdAt');
+    // 🔥 MEMORY FIX: Added .lean() for faster execution and lower memory overhead
+    const user = await User.findById(customerId).select('name email phone createdAt').lean();
+    
     if (!user) return { error: 'Customer profile not found.' };
 
     return {
       success: true,
       data: {
-        name: user.name,
-        email: user.email,
+        id: user._id.toString(),
+        name: user.name || 'Valued Customer',
+        email: user.email || 'N/A',
         phone: user.phone || 'Not provided',
         memberSince: user.createdAt
       }
     };
   } catch (error) {
+    console.error('Customer Profile Tool Error:', error.message);
     return { error: 'Failed to fetch customer profile.' };
   }
 };
@@ -24,24 +34,37 @@ const getCustomerProfile = async (args, customerId) => {
 const getCustomerOrders = async (args, customerId) => {
   if (!customerId) return { error: 'User is not authenticated.' };
 
+  // Prevent Mongoose CastError if customerId is a guest string or invalid object id
+  if (typeof customerId === 'string' && !mongoose.Types.ObjectId.isValid(customerId)) {
+    return { error: 'Invalid customer session for orders.' };
+  }
+
   try {
-    const orders = await Order.find({ user: customerId })
-      .sort({ createdAt: -1 })
+    // 🔥 SCHEMA FIX: Support both 'user' and 'userId' fields to prevent IDOR tracking failures
+    const query = { $or: [{ user: customerId }, { userId: customerId }] };
+
+    // 🔥 MEMORY FIX: Added .lean() to prevent memory bloat
+    const orders = await Order.find(query)
+      .sort({ createdAt: -1 }) // Latest orders first
       .limit(5)
-      .select('totalPrice status expectedDelivery createdAt');
+      .select('_id totalPrice totalPaise status expectedDelivery createdAt')
+      .lean();
 
     return {
       success: true,
       data: {
         recentOrders: orders.map(o => ({
-          orderId: o._id,
-          status: o.status,
-          total: o.totalPrice,
+          orderId: o._id.toString(),
+          status: o.status || 'PROCESSING',
+          // 🔥 PRICING FIX: Standardized currency parsing (Prioritize paise, fallback to price)
+          totalAmount: `₹${(o.totalPaise || (o.totalPrice ? o.totalPrice * 100 : 0)) / 100}`,
+          expectedDelivery: o.expectedDelivery || 'TBD',
           date: o.createdAt
         }))
       }
     };
   } catch (error) {
+    console.error('Customer Orders Tool Error:', error.message);
     return { error: 'Failed to fetch customer orders.' };
   }
 };

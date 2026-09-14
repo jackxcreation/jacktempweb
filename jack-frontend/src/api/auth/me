@@ -1,23 +1,43 @@
-// backend/routes/authRoutes.js (ya jahan bhi auth routes hain)
+// backend/routes/authRoutes.js
+const express = require('express');
+const router = express.Router();
+const User = require('../models/User'); // Mongoose User model import
 const verifyToken = require('../middleware/verifyToken'); // Tera auth middleware
 
+// @route   GET /api/auth/me
+// @desc    Get current authenticated user session data
+// @access  Private (Requires verifyToken)
 router.get('/me', verifyToken, async (req, res) => {
   try {
+    // 🔥 UPGRADE: Safe fallback for different token payload structures
+    const userId = req.user?.id || req.user?._id || req.user?.userId;
+
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Invalid token payload, user ID missing' });
+    }
+
     // req.user token se decode hokar middleware se aaya hai
-    const user = await User.findById(req.user.id).select('-password');
-    if (!user || !user.isActive) {
+    const user = await User.findById(userId).select('-password');
+    
+    if (!user || user.isActive === false) {
       return res.status(401).json({ success: false, message: 'User not found or inactive' });
     }
 
     res.status(200).json({
+      success: true,
       id: user._id || user.id,
       name: user.name,
       email: user.email,
+      phone: user.phone || user.phoneNumber || '',
       role: user.role || 'customer',
       isActive: user.isActive,
-      addresses: user.addresses || []
+      addresses: user.addresses || [],
+      avatar: user.avatar || user.profilePic || ''
     });
   } catch (error) {
+    console.error("🔥 Error during session validation (/me):", error);
     res.status(500).json({ success: false, message: 'Server error during session validation' });
   }
 });
+
+module.exports = router;

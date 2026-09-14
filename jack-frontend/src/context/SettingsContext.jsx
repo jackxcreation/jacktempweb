@@ -1,3 +1,4 @@
+// jack-frontend/src/context/SettingsContext.jsx
 import React, { createContext, useContext } from 'react';
 import { API_URL } from '../config'; 
 import { useQuery } from '@tanstack/react-query'; // 🔥 PHASE 8: TanStack Query for caching
@@ -10,7 +11,7 @@ export const SettingsProvider = ({ children }) => {
   // 🔥 PHASE 8: Replaced useState & useEffect with useQuery
   // Settings rarely change, so caching them saves database load!
   // ==========================================
-  const { data: settings = null, refetch: refreshSettings } = useQuery({
+  const { data: rawSettings = null, refetch: refreshSettings, isLoading, error } = useQuery({
     queryKey: ['settings'], // Unique cache key
     queryFn: async ({ signal }) => {
       // 🔥 Passed 'signal' to cancel stale requests if needed
@@ -22,12 +23,17 @@ export const SettingsProvider = ({ children }) => {
     retry: 2, // Network issue ho toh 2 baar retry karega
   });
 
+  // 🔥 UPGRADE: Safely unwrap settings if returned inside an envelope structure
+  const settings = rawSettings?.settings || rawSettings?.data || rawSettings || null;
+
   return (
     // 'refreshSettings' ka naam same rakha hai taaki Admin Panel directly update kar sake
-    <SettingsContext.Provider value={{ settings, refreshSettings }}>
+    <SettingsContext.Provider value={{ settings, refreshSettings, isLoading, error }}>
       {children}
     </SettingsContext.Provider>
   );
 };
 
 export const useSettings = () => useContext(SettingsContext);
+
+export default SettingsProvider;

@@ -3,25 +3,27 @@ import { API_URL } from '../config';
 import { normalizeError, notifyUser, reportTelemetry } from '../utils/errorNormalizer';
 
 const axiosInstance = axios.create({
-  // 🔥 PHASE 1 FIX: Backend URL strictly uses API_URL. 
-  // No localhost fallbacks here anymore, API_URL already has /api appended.
+  // Backend URL strictly uses API_URL (should already include /api)
   baseURL: API_URL, 
-  
-  // Add timeout (10 seconds). Infinite loop se bachane ke liye.
+  // 10 seconds timeout to prevent infinite hanging requests
   timeout: 10000, 
-
-  // CRITICAL FOR COOKIES: Allow browser to send and receive HttpOnly cookies cross-origin/same-origin
+  // Allow browser to send/receive HttpOnly cookies cross-origin/same-origin
   withCredentials: true,
 });
 
-// Helper function to safely retrieve token across subdomains and storage keys
+// Helper function to safely retrieve token across storages
 const getAuthToken = () => {
   if (typeof window === 'undefined') return null;
-  return localStorage.getItem('token') || 
-         localStorage.getItem('admin_token') || 
-         localStorage.getItem('jack_token') ||
-         document.cookie.replace(/(?:(?:^|.*;\s*)token\s*\=\s*([^;]*).*$)|^.*$/, "$1") ||
-         document.cookie.replace(/(?:(?:^|.*;\s*)admin_token\s*\=\s*([^;]*).*$)|^.*$/, "$1");
+  
+  // Check LocalStorage first
+  const localToken = localStorage.getItem('token') || 
+                     localStorage.getItem('admin_token') || 
+                     localStorage.getItem('jack_token');
+  if (localToken) return localToken;
+
+  // Fallback to safely parsing cookies if not in LocalStorage
+  const match = document.cookie.match(/(?:^|;\s*)(token|admin_token)=([^;]*)/);
+  return match ? match[2] : null;
 };
 
 // ==========================================
@@ -29,18 +31,17 @@ const getAuthToken = () => {
 // ==========================================
 axiosInstance.interceptors.request.use(
   (config) => {
-    // Backend still relies on Bearer token for strict authentication. 
     const token = getAuthToken();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
 
-    // Add correlation ID. Server logs mein debugging aasan karne ke liye
+    // Add correlation ID for easier server-side debugging
     config.headers['X-Request-ID'] = crypto.randomUUID 
       ? crypto.randomUUID() 
       : `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-    // 🔥 ENTERPRISE IDEMPOTENCY: Automatically inject Idempotency-Key for POST/PUT/PATCH/DELETE requests
+    // ENTERPRISE IDEMPOTENCY: Safely inject Idempotency-Key for mutating requests
     const method = config.method?.toLowerCase();
     if (['post', 'put', 'patch', 'delete'].includes(method)) {
       if (!config.headers['Idempotency-Key']) {
@@ -52,18 +53,14 @@ axiosInstance.interceptors.request.use(
 
     return config;
   },
-  (error) => {
-    return Promise.reject(error);
-  }
+  (error) => Promise.reject(error)
 );
 
 // ==========================================
-// 🔥 RESPONSE INTERCEPTOR (401 Auto-Logout & Unified Error Normalizer Pipeline)
+// 🔥 RESPONSE INTERCEPTOR
 // ==========================================
 axiosInstance.interceptors.response.use(
-  (response) => {
-    return response;
-  },
+  (response) => response,
   (error) => {
     // Normalize raw Axios error into standard enterprise error envelope
     const normalizedErr = normalizeError(error);
@@ -78,6 +75,7 @@ axiosInstance.interceptors.response.use(
       localStorage.removeItem('jack_user');
       localStorage.removeItem('token'); 
       localStorage.removeItem('admin_token');
+      localStorage.removeItem('jack_token');
 
       window.dispatchEvent(new Event('jack_auth_change'));
 
@@ -93,47 +91,62 @@ axiosInstance.interceptors.response.use(
       console.error(`⚠️ Request timeout for ${error.config?.url}. Server might be slow.`);
     }
 
+    // ALWAYS reject with the normalized error so UI components receive clean data
     return Promise.reject(normalizedErr);
   }
 );
 
 // ==========================================
 // 🔥 CRM & EMAIL MARKETING API HELPER FUNCTIONS
-// (Preserved completely without deleting anything)
 // ==========================================
 
-/**
- * Naya Email Campaign launch karne ke liye function
- * @param {Object} campaignConfig - { campaignId, segmentName, campaignType, customMessage, productData }
- */
 export const launchEmailCampaign = async (campaignConfig) => {
-  try {
-    // Fixed endpoint path to prevent double /api/api/ prefix duplication
-    const response = await axiosInstance.post('/crm/campaign', {
-      action: 'LAUNCH',
-      campaignConfig
-    });
-    return response.data;
-  } catch (error) {
-    throw error.response?.data || error.message;
-  }
+  const response = await axiosInstance.post('/crm/campaign', {
+    action: 'LAUNCH',
+    campaignConfig
+  });
+  return response.data;
 };
 
-/**
- * Email Open, Click ya Purchase (ROI) track karne ke liye function
- * @param {Object} eventData - { campaignId, userId, eventType, orderValue }
- */
 export const trackCampaignEvent = async (eventData) => {
-  try {
-    // Fixed endpoint path to prevent double /api/api/ prefix duplication
-    const response = await axiosInstance.post('/crm/campaign', {
-      action: 'TRACK',
-      eventData
-    });
-    return response.data;
-  } catch (error) {
-    throw error.response?.data || error.message;
-  }
+  const response = await axiosInstance.post('/crm/campaign', {
+    action: 'TRACK',
+    eventData
+  });
+  return response.data;
+};
+
+// ==========================================
+// 🔥 SUPPORT & CHAT HELPER FUNCTIONS
+// ==========================================
+
+export const fetchSupportHistory = async (conversationId) => {
+  const response = await axiosInstance.get(`/support/history/${conversationId}`);
+  return response.data;
+};
+
+export const createSupportTicket = async (ticketData) => {
+  const response = await axiosInstance.post('/support/tickets', ticketData);
+  return response.data;
+};
+
+export const submitSupportFeedback = async (feedbackData) => {
+  const response = await axiosInstance.post('/support/feedback', feedbackData);
+  return response.data;
+};
+
+// ==========================================
+// 🔥 WHATSAPP AUTHENTICATION & OTP HELPERS (NEWLY ADDED)
+// ==========================================
+
+export const sendWhatsAppOtp = async (phone) => {
+  const response = await axiosInstance.post('/whatsapp/send-otp', { phone });
+  return response.data;
+};
+
+export const verifyWhatsAppOtp = async (phone, otp, name = '') => {
+  const response = await axiosInstance.post('/whatsapp/verify-otp', { phone, otp, name });
+  return response.data;
 };
 
 export default axiosInstance;

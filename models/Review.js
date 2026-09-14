@@ -1,8 +1,8 @@
+// models/Review.js
 const mongoose = require('mongoose');
-// Purana import hata kar ye likho:
-const Review = require('../models/Review');
-const Product = require('../models/Product');
-const Order = require('../models/Order');
+
+// 🔥 FIX: Completely removed `Product` and `Order` requires from the top.
+// They are not needed here and were causing the "Cannot find module" / Circular Dependency crash.
 
 const reviewSchema = new mongoose.Schema({
   product: {
@@ -68,28 +68,33 @@ reviewSchema.index({ product: 1, user: 1 }, { unique: true });
 
 // Static method to calculate and update average product rating automatically
 reviewSchema.statics.calculateAverageRating = async function(productId) {
-  const stats = await this.aggregate([
-    { $match: { product: productId } },
-    {
-      $group: {
-        _id: '$product',
-        nRating: { $sum: 1 },
-        avgRating: { $avg: '$rating' }
+  try {
+    const stats = await this.aggregate([
+      { $match: { product: productId } },
+      {
+        $group: {
+          _id: '$product',
+          nRating: { $sum: 1 },
+          avgRating: { $avg: '$rating' }
+        }
       }
-    }
-  ]);
+    ]);
 
-  const Product = mongoose.model('Product');
-  if (stats.length > 0) {
-    await Product.findByIdAndUpdate(productId, {
-      rating: Math.round(stats[0].avgRating * 10) / 10, // Round to 1 decimal place
-      reviews: stats[0].nRating
-    });
-  } else {
-    await Product.findByIdAndUpdate(productId, {
-      rating: 4.8, // Fallback default
-      reviews: 0
-    });
+    // 🔥 Dynamically calling Product model to prevent circular dependency
+    const ProductModel = mongoose.model('Product');
+    if (stats.length > 0) {
+      await ProductModel.findByIdAndUpdate(productId, {
+        rating: Math.round(stats[0].avgRating * 10) / 10, // Round to 1 decimal place
+        reviews: stats[0].nRating
+      });
+    } else {
+      await ProductModel.findByIdAndUpdate(productId, {
+        rating: 4.8, // Fallback default
+        reviews: 0
+      });
+    }
+  } catch (err) {
+    console.error("Error calculating average product rating:", err);
   }
 };
 
@@ -105,6 +110,7 @@ reviewSchema.post('findOneAndDelete', async function(doc) {
   }
 });
 
-const Review = mongoose.model('Review', reviewSchema);
+// 🔥 SAFE MODEL COMPILATION PATTERN TO PREVENT OVERWRITE ERROR
+const Review = mongoose.models.Review || mongoose.model('Review', reviewSchema);
 
 module.exports = Review;

@@ -1,19 +1,15 @@
+// src/pages/Register.jsx
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Link, useNavigate, useLocation } from 'react-router-dom'; // 🔥 FIX: useLocation add kiya
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FiUser, FiMail, FiLock, FiEye, FiEyeOff, FiCheck, FiArrowRight, FiPhone } from 'react-icons/fi';
+import { FiUser, FiMail, FiLock, FiEye, FiEyeOff, FiCheck, FiArrowRight, FiPhone, FiCheckCircle } from 'react-icons/fi';
 import { FcGoogle } from 'react-icons/fc';
 import { auth, googleProvider } from '../firebase'; 
 import { signInWithPopup } from 'firebase/auth';
 import { API_URL } from '../config';
+import axiosInstance from '../api/axiosInstance'; // 🔥 Integrated for WhatsApp OTP backend calls
 
 import { useUser } from '../context/UserContext';
-
-const MailIcon = React.memo(() => (
-  <motion.div className="w-20 h-20 bg-indigo-50 text-indigo-600 rounded-full flex justify-center items-center mx-auto mb-6 shadow-inner" initial={{ scale: 0 }} animate={{ scale: 1, rotate: [0, -10, 10, 0] }} transition={{ duration: 0.6, type: 'spring' }}>
-    <FiMail size={32} aria-hidden="true" />
-  </motion.div>
-));
 
 const SuccessIcon = React.memo(() => (
   <motion.div className="w-24 h-24 bg-green-50 text-green-500 rounded-full flex justify-center items-center mx-auto mb-6 shadow-inner relative" initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: "spring", stiffness: 200, damping: 10 }}>
@@ -23,7 +19,7 @@ const SuccessIcon = React.memo(() => (
 ));
 
 const Register = ({ setIsLoggedIn }) => {
-  const [step, setStep] = useState(1); 
+  const [step, setStep] = useState(1); // Step 1: Form details, Step 2: WhatsApp OTP verification, Step 3: Success
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   
@@ -32,22 +28,34 @@ const Register = ({ setIsLoggedIn }) => {
   const [mobile, setMobile] = useState(''); 
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [otp, setOtp] = useState('');
+  const [whatsappOtp, setWhatsappOtp] = useState('');
   
+  // WhatsApp OTP Verification States
+  const [isOtpSent, setIsOtpSent] = useState(false);
+  const [isMobileVerified, setIsMobileVerified] = useState(false);
+  const [isSendingOtp, setIsSendingOtp] = useState(false);
+  const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
+
   const [cooldown, setCooldown] = useState(0);
   const [otpAttempts, setOtpAttempts] = useState(0);
 
   const [status, setStatus] = useState({ type: '', msg: '' });
   const navigate = useNavigate();
-  const location = useLocation(); // 🔥 FIX: Location track kiya
+  const location = useLocation(); 
   
-  // 🔥 MAGIC LOGIC: Check karo agar checkout (ya kisi aur page) se aaya hai
+  // Destination tracker after successful registration
   const from = location.state?.from || '/';
 
   const isMounted = useRef(true);
   const isRequesting = useRef(false); 
   
   const { loginUser, socialLoginUser } = useUser();
+
+  // Scroll to top on mount & set professional SEO title
+  useEffect(() => {
+    window.scrollTo(0, 0);
+    document.title = "Sign Up | Jack Essentials — Create Your Account";
+  }, []);
 
   // Component unmount cleanup
   useEffect(() => {
@@ -59,13 +67,13 @@ const Register = ({ setIsLoggedIn }) => {
 
   // Persistent Cooldown Setup
   useEffect(() => {
-    const savedEndTime = sessionStorage.getItem('otpCooldownEnd');
+    const savedEndTime = sessionStorage.getItem('whatsappOtpCooldownEnd');
     if (savedEndTime) {
       const remaining = Math.floor((parseInt(savedEndTime, 10) - Date.now()) / 1000);
       if (remaining > 0) {
         setCooldown(remaining);
       } else {
-        sessionStorage.removeItem('otpCooldownEnd');
+        sessionStorage.removeItem('whatsappOtpCooldownEnd');
       }
     }
   }, []);
@@ -74,12 +82,12 @@ const Register = ({ setIsLoggedIn }) => {
   useEffect(() => {
     let timer;
     if (cooldown > 0) {
-      sessionStorage.setItem('otpCooldownEnd', (Date.now() + cooldown * 1000).toString());
+      sessionStorage.setItem('whatsappOtpCooldownEnd', (Date.now() + cooldown * 1000).toString());
       timer = setInterval(() => {
         if (isMounted.current) setCooldown((prev) => prev - 1);
       }, 1000);
     } else {
-      sessionStorage.removeItem('otpCooldownEnd');
+      sessionStorage.removeItem('whatsappOtpCooldownEnd');
     }
     return () => clearInterval(timer);
   }, [cooldown]);
@@ -109,7 +117,6 @@ const Register = ({ setIsLoggedIn }) => {
         const data = isJson ? await res.json().catch(() => ({})) : {};
         
         if (!res.ok) {
-           // Retry strictly on 5xx Errors
            if (res.status >= 500 && res.status <= 599 && i < maxRetries - 1) {
               await new Promise(r => setTimeout(r, 1000 * Math.pow(2, i)));
               continue;
@@ -145,7 +152,6 @@ const Register = ({ setIsLoggedIn }) => {
            }
            return { ok: false, status: 408, message: 'Request timed out. Please check your connection.' };
         }
-        // Network connection error
         if (i < maxRetries - 1) {
            await new Promise(r => setTimeout(r, 1000 * Math.pow(2, i)));
            continue;
@@ -161,18 +167,25 @@ const Register = ({ setIsLoggedIn }) => {
     setMobile('');
     setPassword('');
     setConfirmPassword('');
-    setOtp('');
+    setWhatsappOtp('');
+    setIsOtpSent(false);
+    setIsMobileVerified(false);
     setOtpAttempts(0);
-    sessionStorage.removeItem('otpCooldownEnd');
+    sessionStorage.removeItem('whatsappOtpCooldownEnd');
   }, []);
 
   const handleEmailChange = useCallback((e) => setEmail(e.target.value.toLowerCase().trim()), []);
 
   const handleMobileChange = useCallback((e) => {
-    let val = e.target.value.replace(/\D/g, ''); // Extract only numbers
-    if (val.length > 10 && val.startsWith('91')) val = val.slice(2); // Sanitize Indian country code
-    setMobile(val.slice(0, 10)); // Force 10 digits
-  }, []);
+    let val = e.target.value.replace(/\D/g, ''); 
+    if (val.length > 10 && val.startsWith('91')) val = val.slice(2); 
+    setMobile(val.slice(0, 10)); 
+    // If mobile number changes after verification, reset verification status
+    if (isMobileVerified) {
+      setIsMobileVerified(false);
+      setIsOtpSent(false);
+    }
+  }, [isMobileVerified]);
 
   const validatePassword = useCallback((pass) => {
     if (pass.length < 8) return "Password must be at least 8 characters.";
@@ -200,7 +213,74 @@ const Register = ({ setIsLoggedIn }) => {
   const passStrength = useMemo(() => getPasswordStrength(), [getPasswordStrength]);
   const isValidEmail = useMemo(() => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), [email]);
 
-  const handleSendOtp = useCallback(async (e) => {
+  // 🔥 Send WhatsApp OTP Handler
+  const handleSendWhatsappOtp = useCallback(async () => {
+    if (isSendingOtp) return;
+    if (!navigator.onLine) return setStatus({ type: 'error', msg: 'No internet connection available.' });
+    if (mobile.length !== 10) return setStatus({ type: 'error', msg: 'Enter a valid 10-digit mobile number before requesting OTP.' });
+
+    let nextCooldown = 30; 
+    if (otpAttempts === 1) nextCooldown = 60; 
+    else if (otpAttempts === 2) nextCooldown = 300; 
+    else if (otpAttempts >= 3) nextCooldown = 600; 
+
+    setIsSendingOtp(true);
+    setStatus({ type: 'loading', msg: 'Sending WhatsApp verification code...' });
+
+    try {
+      // Calls the backend WhatsApp OTP route we configured earlier
+      const res = await axiosInstance.post('/whatsapp/send-otp', { phone: `+91${mobile}` });
+      
+      if (!isMounted.current) return;
+
+      if (res.data?.success) {
+        setStatus({ type: 'success', msg: 'WhatsApp OTP sent successfully!' });
+        setIsOtpSent(true);
+        setCooldown(nextCooldown);
+        setOtpAttempts(prev => prev + 1);
+      } else {
+        setStatus({ type: 'error', msg: res.data?.message || 'Failed to send WhatsApp OTP.' });
+      }
+    } catch (error) {
+      if (isMounted.current) {
+        setStatus({ type: 'error', msg: error.response?.data?.message || 'Failed to dispatch WhatsApp OTP.' });
+      }
+    } finally {
+      if (isMounted.current) setIsSendingOtp(false);
+    }
+  }, [mobile, otpAttempts, isSendingOtp]);
+
+  // 🔥 Verify WhatsApp OTP Handler
+  const handleVerifyWhatsappOtp = useCallback(async () => {
+    if (isVerifyingOtp) return;
+    if (!navigator.onLine) return setStatus({ type: 'error', msg: 'No internet connection available.' });
+    if (whatsappOtp.length !== 6) return setStatus({ type: 'error', msg: 'Enter the valid 6-digit WhatsApp code.' });
+
+    setIsVerifyingOtp(true);
+    setStatus({ type: 'loading', msg: 'Verifying WhatsApp number...' });
+
+    try {
+      const res = await axiosInstance.post('/whatsapp/verify-otp', { phone: `+91${mobile}`, otp: whatsappOtp });
+
+      if (!isMounted.current) return;
+
+      if (res.data?.success) {
+        setIsMobileVerified(true);
+        setStatus({ type: 'success', msg: 'WhatsApp number verified successfully!' });
+      } else {
+        setStatus({ type: 'error', msg: res.data?.message || 'Invalid WhatsApp OTP code.' });
+      }
+    } catch (error) {
+      if (isMounted.current) {
+        setStatus({ type: 'error', msg: error.response?.data?.message || 'Verification failed.' });
+      }
+    } finally {
+      if (isMounted.current) setIsVerifyingOtp(false);
+    }
+  }, [mobile, whatsappOtp, isVerifyingOtp]);
+
+  // Complete Registration Handler
+  const handleFinalRegister = useCallback(async (e) => {
     if (e) e.preventDefault();
     if (isRequesting.current) return;
     if (!navigator.onLine) return setStatus({ type: 'error', msg: 'No internet connection available.' });
@@ -209,71 +289,21 @@ const Register = ({ setIsLoggedIn }) => {
     if (passError) return setStatus({ type: 'error', msg: passError });
     if (password !== confirmPassword) return setStatus({ type: 'error', msg: 'Passwords do not match!' });
     if (!isValidEmail) return setStatus({ type: 'error', msg: 'Enter a valid email address.' });
-    if (mobile.length !== 10) return setStatus({ type: 'error', msg: 'Enter a valid 10-digit mobile number.' });
-    
-    // Smart Cooldown Logic
-    let nextCooldown = 30; 
-    if (otpAttempts === 1) nextCooldown = 60; 
-    else if (otpAttempts === 2) nextCooldown = 300; 
-    else if (otpAttempts >= 3) nextCooldown = 600; 
-
-    isRequesting.current = true;
-    setStatus({ type: 'loading', msg: 'Securing connection...' });
-
-    try {
-      const res = await safeFetch(`${API_URL}/public/send-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email })
-      });
-      
-      if (!isMounted.current) return;
-
-      if (res.ok) {
-        setStatus({ type: 'success', msg: 'OTP Sent successfully!' });
-        setStep(2); 
-        setCooldown(nextCooldown);
-        setOtpAttempts(prev => prev + 1);
-      } else {
-        setStatus({ type: 'error', msg: res.message });
-      }
-    } catch (error) {
-      if (isMounted.current) setStatus({ type: 'error', msg: 'Unexpected execution error.' });
-    } finally {
-      if (isMounted.current) isRequesting.current = false;
-    }
-  }, [email, password, confirmPassword, mobile, isValidEmail, otpAttempts, validatePassword]);
-
-  const handleVerifyAndRegister = useCallback(async (e) => {
-    if (e) e.preventDefault();
-    if (isRequesting.current) return;
-    if (!navigator.onLine) return setStatus({ type: 'error', msg: 'No internet connection available.' });
-    if(otp.length < 6) return setStatus({ type: 'error', msg: 'Enter the 6-digit code' });
+    if (!isMobileVerified) return setStatus({ type: 'error', msg: 'Please verify your mobile number via WhatsApp OTP before registering.' });
     
     isRequesting.current = true;
-    setStatus({ type: 'loading', msg: 'Verifying identity...' });
+    setStatus({ type: 'loading', msg: 'Setting up your secure profile...' });
 
     try {
-      const verifyRes = await safeFetch(`${API_URL}/public/verify-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, otp })
-      });
-      
-      if (!isMounted.current) return;
-
-      if (!verifyRes.ok) {
-        setStatus({ type: 'error', msg: verifyRes.message || 'Invalid or expired code.' });
-        isRequesting.current = false;
-        return;
-      }
-
-      setStatus({ type: 'loading', msg: 'Setting up your profile...' });
-
       const regRes = await safeFetch(`${API_URL}/users/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), email, mobile, password })
+        body: JSON.stringify({ 
+          name: name.trim(), 
+          email, 
+          mobile, // Securely verified mobile number saved to database
+          password 
+        })
       });
       
       if (!isMounted.current) return;
@@ -282,10 +312,9 @@ const Register = ({ setIsLoggedIn }) => {
         await loginUser(email, password);
         if (setIsLoggedIn) setIsLoggedIn(true);
         
-        setStep(3); 
+        setStep(3); // Success step
         resetForm();
         
-        // 🔥 FIX: Redirect properly based on 'from' state
         setTimeout(() => { if (isMounted.current) navigate(from, { replace: true }); }, 2500); 
       } else {
         setStatus({ type: 'error', msg: regRes.message || 'Registration failed' });
@@ -295,7 +324,7 @@ const Register = ({ setIsLoggedIn }) => {
     } finally {
       if (isMounted.current) isRequesting.current = false;
     }
-  }, [email, name, otp, mobile, password, loginUser, setIsLoggedIn, navigate, resetForm, from]);
+  }, [name, email, mobile, password, confirmPassword, isValidEmail, isMobileVerified, validatePassword, loginUser, setIsLoggedIn, navigate, resetForm, from]);
 
   const handleSocialRegister = useCallback(async (provider, providerName) => {
     if (isRequesting.current) return;
@@ -315,12 +344,10 @@ const Register = ({ setIsLoggedIn }) => {
         if (dbRes.isNewUser) {
           setStep(3); 
           resetForm();
-          // 🔥 FIX: Redirect properly for new social users
           setTimeout(() => { if (isMounted.current) navigate(from, { replace: true }); }, 2500);
         } else {
           setStatus({ type: 'success', msg: `Welcome back, ${result.user.displayName.split(' ')[0]}!` });
           resetForm();
-          // 🔥 FIX: Redirect properly for returning social users
           setTimeout(() => { if (isMounted.current) navigate(from, { replace: true }); }, 1500);
         }
       } else {
@@ -338,27 +365,22 @@ const Register = ({ setIsLoggedIn }) => {
     }
   }, [socialLoginUser, setIsLoggedIn, navigate, resetForm, from]);
 
-  const handleOtpPaste = useCallback((e) => {
-    e.preventDefault();
-    const pastedData = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
-    if (pastedData) setOtp(pastedData);
-  }, []);
-
   const isFormValid = useMemo(() => {
     return name.trim().length > 0 && 
            isValidEmail && 
            mobile.length === 10 && 
+           isMobileVerified && 
            validatePassword(password) === "" && 
            password === confirmPassword;
-  }, [name, isValidEmail, mobile, password, confirmPassword, validatePassword]);
+  }, [name, isValidEmail, mobile, isMobileVerified, password, confirmPassword, validatePassword]);
 
-  const isLoading = status.type === 'loading';
+  const isLoading = status.type === 'loading' || isSendingOtp || isVerifyingOtp;
 
   return (
-    <div className="flex min-h-screen bg-white font-sans relative overflow-hidden">
+    <div className="flex min-h-screen bg-white font-sans relative overflow-hidden selection:bg-[#FF4500] selection:text-white">
       
       {/* ================= LEFT PANEL ================= */}
-      <div className="hidden lg:flex lg:w-[45%] bg-[#0B0F19] text-white flex-col justify-between p-12 relative overflow-hidden shadow-2xl z-10" role="complementary">
+      <div className="hidden lg:flex lg:w-[45%] bg-[#0B0F19] text-white flex-col justify-between p-12 relative overflow-hidden shadow-2xl z-10 select-none" role="complementary">
         <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-indigo-600 rounded-full mix-blend-screen filter blur-[150px] opacity-20 pointer-events-none"></div>
         <div className="absolute bottom-[-10%] left-[-10%] w-[400px] h-[400px] bg-[#FF4500] rounded-full mix-blend-screen filter blur-[120px] opacity-20 pointer-events-none"></div>
 
@@ -368,7 +390,7 @@ const Register = ({ setIsLoggedIn }) => {
 
         <motion.div initial={{ opacity: 0, x: -30 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 1, delay: 0.2 }} className="z-10 mt-10 relative">
           <h1 className="text-6xl font-black tracking-tight leading-[1.1]">Join the <br /> Elite Club.</h1>
-          <p className="text-slate-400 mt-6 max-w-sm text-lg font-medium leading-relaxed">Create an account to unlock VIP pricing, early sale access, and a seamless checkout experience.</p>
+          <p className="text-slate-400 mt-6 max-w-sm text-lg font-medium leading-relaxed">Create an account with WhatsApp verification to unlock VIP pricing and instant order tracking.</p>
         </motion.div>
 
         <div className="z-10 mt-auto">
@@ -391,15 +413,15 @@ const Register = ({ setIsLoggedIn }) => {
 
           <AnimatePresence mode="wait">
             
-            {/* ---------------- STEP 1: FORM ---------------- */}
+            {/* ---------------- STEP 1: REGISTRATION FORM WITH WHATSAPP OTP ---------------- */}
             {step === 1 && (
               <motion.div key="step1" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -50 }} transition={{ duration: 0.3 }}>
-                <div className="mb-10 text-center lg:text-left">
+                <div className="mb-8 text-center lg:text-left">
                   <h2 className="text-3xl sm:text-4xl font-black text-slate-900 tracking-tight">Create Account</h2>
-                  <p className="text-slate-500 mt-2 font-medium">Please enter your details to get started.</p>
+                  <p className="text-slate-500 mt-2 font-medium">Verify your mobile via WhatsApp to register securely.</p>
                 </div>
 
-                <form onSubmit={handleSendOtp} className="space-y-4" noValidate>
+                <form onSubmit={handleFinalRegister} className="space-y-4" noValidate>
                   <div className="relative">
                     <FiUser className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
                     <input type="text" value={name} onChange={(e) => setName(e.target.value)} disabled={isLoading} className="w-full pl-12 pr-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl focus:bg-white focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600 focus:ring-opacity-50 outline-none transition-all font-medium text-slate-800 disabled:opacity-50" placeholder="Full Name" aria-label="Full Name" autoComplete="name" required />
@@ -410,9 +432,62 @@ const Register = ({ setIsLoggedIn }) => {
                     <input type="email" value={email} onChange={handleEmailChange} disabled={isLoading} className="w-full pl-12 pr-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl focus:bg-white focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600 focus:ring-opacity-50 outline-none transition-all font-medium text-slate-800 disabled:opacity-50" placeholder="Email Address" aria-label="Email Address" autoComplete="email" required />
                   </div>
 
-                  <div className="relative">
-                    <FiPhone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
-                    <input type="tel" value={mobile} onChange={handleMobileChange} maxLength="10" disabled={isLoading} className="w-full pl-12 pr-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl focus:bg-white focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600 focus:ring-opacity-50 outline-none transition-all font-medium text-slate-800 disabled:opacity-50" placeholder="Mobile Number" aria-label="Mobile Number" autoComplete="tel" required />
+                  {/* Mobile Number & WhatsApp OTP Inline Section */}
+                  <div className="space-y-2">
+                    <div className="relative flex items-center">
+                      <FiPhone className="absolute left-4 text-slate-400" aria-hidden="true" />
+                      <input 
+                        type="tel" 
+                        value={mobile} 
+                        onChange={handleMobileChange} 
+                        maxLength="10" 
+                        disabled={isLoading || isMobileVerified} 
+                        className={`w-full pl-12 pr-32 py-4 bg-slate-50 border rounded-2xl focus:bg-white focus:border-indigo-600 outline-none transition-all font-medium text-slate-800 disabled:opacity-70 ${isMobileVerified ? 'border-emerald-300 bg-emerald-50/30' : 'border-slate-200'}`} 
+                        placeholder="Mobile Number (10 digits)" 
+                        aria-label="Mobile Number" 
+                        autoComplete="tel" 
+                        required 
+                      />
+                      
+                      <div className="absolute right-2 flex items-center gap-1.5">
+                        {isMobileVerified ? (
+                          <span className="flex items-center gap-1 bg-emerald-100 text-emerald-700 font-bold text-xs px-3 py-2 rounded-xl">
+                            <FiCheckCircle size={14} /> Verified
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={handleSendWhatsappOtp}
+                            disabled={mobile.length !== 10 || isSendingOtp || cooldown > 0}
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-3.5 py-2.5 rounded-xl transition-all shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            {isSendingOtp ? 'Sending...' : cooldown > 0 ? `Resend (${cooldown}s)` : isOtpSent ? 'Resend OTP' : 'Send WhatsApp OTP'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* WhatsApp OTP Input Row (Appears after clicking Send OTP until verified) */}
+                    {isOtpSent && !isMobileVerified && (
+                      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center gap-2 pt-1">
+                        <input
+                          type="text"
+                          maxLength="6"
+                          value={whatsappOtp}
+                          onChange={(e) => setWhatsappOtp(e.target.value.replace(/\D/g, ''))}
+                          placeholder="Enter 6-digit WhatsApp OTP"
+                          className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 tracking-widest text-base font-black text-slate-900 outline-none focus:border-emerald-600"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleVerifyWhatsappOtp}
+                          disabled={whatsappOtp.length !== 6 || isVerifyingOtp}
+                          className="bg-slate-900 hover:bg-emerald-600 text-white font-bold text-xs px-5 py-3.5 rounded-xl transition-all disabled:opacity-40"
+                        >
+                          {isVerifyingOtp ? 'Verifying...' : 'Verify'}
+                        </button>
+                      </motion.div>
+                    )}
                   </div>
                   
                   <div className="relative">
@@ -423,16 +498,16 @@ const Register = ({ setIsLoggedIn }) => {
                     </button>
                   </div>
 
-                  {/* High Quality Password Strength Indicator */}
+                  {/* Password Strength Indicator */}
                   {password.length > 0 && (
                     <div className="flex flex-col gap-1 mt-1 px-2" aria-live="polite">
                       <div className="flex justify-between items-center text-xs font-bold uppercase tracking-widest text-slate-500">
                          <span>Password Strength</span>
                          <span className={`${
-                           passStrength.score === 1 ? 'text-red-500' :
-                           passStrength.score === 2 ? 'text-yellow-500' :
-                           passStrength.score === 3 ? 'text-blue-500' :
-                           'text-green-500'
+                          passStrength.score === 1 ? 'text-red-500' :
+                          passStrength.score === 2 ? 'text-yellow-500' :
+                          passStrength.score === 3 ? 'text-blue-500' :
+                          'text-green-500'
                          }`}>{passStrength.text}</span>
                       </div>
                       <div className="flex gap-1.5 mt-1" aria-label={`Password strength: ${passStrength.text}`}>
@@ -461,11 +536,11 @@ const Register = ({ setIsLoggedIn }) => {
                     {isLoading ? (
                       <div className="flex items-center gap-2">
                         <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" aria-hidden="true"></div>
-                        <span>SECURING CONNECTION...</span>
+                        <span>SECURING REGISTRATION...</span>
                       </div>
                     ) : (
                       <div className="flex items-center gap-2">
-                        <span>Continue</span>
+                        <span>Complete Registration</span>
                         <FiArrowRight size={18} aria-hidden="true" />
                       </div>
                     )}
@@ -480,6 +555,7 @@ const Register = ({ setIsLoggedIn }) => {
 
                 <div className="flex justify-center mb-8">
                   <button 
+                    type="button"
                     onClick={() => handleSocialRegister(googleProvider, 'Google')} 
                     disabled={isLoading}
                     className="w-full flex justify-center items-center gap-3 py-4 border-2 border-slate-200 rounded-xl hover:bg-slate-50 focus:bg-slate-50 focus:border-slate-400 hover:border-slate-300 transition-all shadow-sm active:scale-95 disabled:opacity-50 outline-none"
@@ -490,72 +566,10 @@ const Register = ({ setIsLoggedIn }) => {
                   </button>
                 </div>
 
-                {/* 🔥 FIX: State pass kiya wapas 'from' variable ke sath */}
                 <div className="text-center">
                   <p className="text-sm text-slate-500 font-medium">
                     Already have an account? <Link to="/login" state={{ from: from }} className="text-slate-900 font-bold hover:text-indigo-600 focus:outline-none focus:underline transition-colors ml-1">Sign in here</Link>
                   </p>
-                </div>
-              </motion.div>
-            )}
-
-            {/* ---------------- STEP 2: OTP ---------------- */}
-            {step === 2 && (
-              <motion.div key="step2" initial={{ opacity: 0, x: 50 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, scale: 0.9 }} transition={{ duration: 0.4 }} className="py-4">
-                <MailIcon />
-                <div className="text-center mb-8">
-                  <h2 className="text-3xl font-black text-slate-900 tracking-tight">Verify Email</h2>
-                  <p className="text-slate-500 text-sm mt-2 font-medium">Enter the 6-digit code sent to <br/><b className="text-slate-800">{email}</b></p>
-                </div>
-                <form onSubmit={handleVerifyAndRegister}>
-                  <div className="relative w-full h-16 flex justify-between mb-8 cursor-text gap-2">
-                    <input 
-                      type="text" 
-                      maxLength={6} 
-                      autoFocus 
-                      value={otp} 
-                      onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} 
-                      onPaste={handleOtpPaste}
-                      disabled={isLoading} 
-                      className="absolute inset-0 w-full h-full opacity-0 z-20 cursor-text" 
-                      aria-label="6 digit OTP" 
-                      autoComplete="one-time-code" 
-                    />
-                    {[0, 1, 2, 3, 4, 5].map((index) => (
-                      <div key={index} aria-hidden="true" className={`flex-1 h-14 sm:h-16 border-2 flex items-center justify-center text-xl sm:text-2xl font-black rounded-xl transition-all ${otp.length === index ? 'border-indigo-600 shadow-md scale-105 bg-white' : otp[index] ? 'border-slate-800 bg-slate-50 text-slate-900' : 'border-slate-200 bg-slate-50 text-transparent'}`}>
-                        {otp[index] || ''}
-                      </div>
-                    ))}
-                  </div>
-                  <button 
-                    type="submit" 
-                    disabled={otp.length !== 6 || isLoading}
-                    className="w-full bg-slate-900 text-white font-black py-4 rounded-xl hover:bg-indigo-600 focus:ring-4 focus:ring-indigo-600/50 transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed mt-2 active:scale-95 flex justify-center items-center h-[56px] outline-none"
-                    aria-live="polite"
-                  >
-                    {isLoading ? (
-                      <div className="flex items-center gap-2">
-                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" aria-hidden="true"></div>
-                        <span>VERIFYING...</span>
-                      </div>
-                    ) : (
-                      "CONFIRM & LOGIN"
-                    )}
-                  </button>
-                </form>
-                <div className="mt-8 text-center space-y-4">
-                  <p className="text-sm text-slate-500 font-medium">
-                    Didn't receive the code?{' '}
-                    <button 
-                      onClick={handleSendOtp} 
-                      disabled={isLoading || cooldown > 0} 
-                      className={`font-bold transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded px-1 ${cooldown > 0 ? 'text-slate-400 cursor-not-allowed' : 'text-indigo-600 hover:underline'}`}
-                      aria-label={cooldown > 0 ? `Resend code in ${Math.floor(cooldown / 60)} minutes and ${cooldown % 60} seconds` : "Resend code"}
-                    >
-                      {cooldown > 0 ? `Resend in ${Math.floor(cooldown / 60)}:${(cooldown % 60).toString().padStart(2, '0')}` : 'Resend'}
-                    </button>
-                  </p>
-                  <button onClick={() => setStep(1)} disabled={isLoading} className="text-xs font-bold text-slate-400 hover:text-slate-800 focus:outline-none focus:text-slate-800 focus:underline uppercase tracking-widest transition-colors">Change Email ID</button>
                 </div>
               </motion.div>
             )}

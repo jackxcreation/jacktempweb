@@ -1,3 +1,4 @@
+// routes/paymentRouter.js
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
@@ -43,18 +44,23 @@ router.post('/payment/create-order', jsonParser, protect, requireIdempotency, as
   try {
     const { orderId } = req.body; 
 
-    if (!orderId) return res.status(400).json({ success: false, error: "Order ID is required", requestId: req.requestId });
+    if (!orderId) {
+      return res.status(400).json({ success: false, error: "Order ID is required", requestId: req.requestId });
+    }
 
     const order = await Order.findOne({ _id: orderId, userId: req.user._id });
     
-    if (!order) return res.status(404).json({ success: false, error: "Order not found or unauthorized", requestId: req.requestId });
-    if (order.status !== 'Pending') return res.status(400).json({ success: false, error: "Order is already paid or processed", requestId: req.requestId });
+    if (!order) {
+      return res.status(404).json({ success: false, error: "Order not found or unauthorized", requestId: req.requestId });
+    }
+    if (order.status !== 'Pending') {
+      return res.status(400).json({ success: false, error: "Order is already paid or processed", requestId: req.requestId });
+    }
 
     // Idempotency check: Agar active PaymentIntent pehle se hai toh wahi return kar do
     const existingIntent = await PaymentIntent.findOne({ orderId: order._id, status: 'CREATED' });
     
     // 🔥 MASTER FIX 1: Strict Regex check to ensure it's a REAL Razorpay ID (No underscores allowed after 'order_')
-    // Agar database mein dummy ID hui (like order_1788245903295_770), toh yeh test fail hoga aur naya fresh order banega.
     const isValidRazorpayId = existingIntent && /^order_[a-zA-Z0-9]+$/.test(existingIntent.gatewayOrderId);
 
     if (isValidRazorpayId) {
@@ -96,7 +102,7 @@ router.post('/payment/create-order', jsonParser, protect, requireIdempotency, as
       { upsert: true, new: true }
     );
 
-    res.json({
+    return res.json({
       success: true,
       order_id: rzpOrder.id, // 🔥 Yeh har baar 100% original Razorpay ID bheja karega
       amount: rzpOrder.amount, 
@@ -234,7 +240,7 @@ router.post('/payment/verify', jsonParser, protect, async (req, res) => {
       await order.save();
     }
 
-    res.status(200).json({ success: true, message: "Payment verified and reconciled securely" });
+    return res.status(200).json({ success: true, message: "Payment verified and reconciled securely" });
   } catch (error) {
     return sendErrorResponse(res, req, error, "Payment verification failed");
   }
@@ -248,7 +254,9 @@ router.post('/payment/webhook', express.raw({ type: 'application/json' }), async
     const signature = req.headers['x-razorpay-signature'];
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET; 
 
-    if (!signature) return res.status(400).send('Missing Signature');
+    if (!signature) {
+      return res.status(400).send('Missing Signature');
+    }
 
     const expectedSignature = crypto
       .createHmac('sha256', webhookSecret)
@@ -406,10 +414,10 @@ router.post('/payment/webhook', express.raw({ type: 'application/json' }), async
       console.log(`✅ Webhook: Order ${razorpay_order_id} successfully reconciled and marked PAID atomically.`);
     }
 
-    res.status(200).send('OK');
+    return res.status(200).send('OK');
   } catch (error) {
     logger.error({ message: 'Webhook processing error', error: error.message, stack: error.stack });
-    res.status(500).send('Internal Server Error');
+    return res.status(500).send('Internal Server Error');
   }
 });
 

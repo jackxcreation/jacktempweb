@@ -1,5 +1,7 @@
+// routes/warehouseRouter.js
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose'); // 🔥 Added for ObjectId validation
 const { Warehouse, Product } = require('../models'); 
 const { z } = require('zod'); 
 
@@ -42,9 +44,10 @@ const stockAdjustmentSchema = z.object({
 router.get('/api/warehouse', protect, checkPermission('warehouse:all'), async (req, res) => {
   try {
     const warehouses = await Warehouse.find().sort({ createdAt: -1 }).lean();
-    res.status(200).json(warehouses.map(w => ({ ...w, id: w._id.toString() })));
+    return res.status(200).json(warehouses.map(w => ({ ...w, id: w._id.toString() })));
   } catch (error) {
-    res.status(500).json({ success: false, error: "Failed to fetch warehouse" });
+    console.error("Fetch Warehouses Error:", error);
+    return res.status(500).json({ success: false, error: "Failed to fetch warehouse" });
   }
 });
 
@@ -63,10 +66,10 @@ router.post('/api/warehouse', protect, checkPermission('warehouse:all'), async (
     const newWarehouse = new Warehouse(validationResult.data);
     const savedWarehouse = await newWarehouse.save();
     
-    res.status(201).json({ success: true, warehouse: { ...savedWarehouse._doc, id: savedWarehouse._id.toString() } });
+    return res.status(201).json({ success: true, warehouse: { ...savedWarehouse._doc, id: savedWarehouse._id.toString() } });
   } catch (error) {
     console.error("Create Warehouse Error:", error);
-    res.status(500).json({ success: false, error: "Failed to create warehouse" });
+    return res.status(500).json({ success: false, error: "Failed to create warehouse" });
   }
 });
 
@@ -85,6 +88,10 @@ router.post('/api/warehouse/stock-adjustment', protect, checkPermission('warehou
     }
 
     const { productId, type, source, quantity, targetState, reason, referenceId } = validationResult.data;
+
+    if (!mongoose.Types.ObjectId.isValid(productId)) {
+      return res.status(400).json({ success: false, message: "Invalid Product ID format" });
+    }
 
     const product = await Product.findById(productId);
     if (!product) {
@@ -135,7 +142,7 @@ router.post('/api/warehouse/stock-adjustment', protect, checkPermission('warehou
 
     await product.save();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: "Stock adjusted and ledger recorded successfully.",
       product: {
@@ -149,7 +156,7 @@ router.post('/api/warehouse/stock-adjustment', protect, checkPermission('warehou
 
   } catch (error) {
     console.error("Stock Adjustment Error:", error);
-    res.status(500).json({ success: false, message: "Failed to process stock adjustment." });
+    return res.status(500).json({ success: false, message: "Failed to process stock adjustment." });
   }
 });
 

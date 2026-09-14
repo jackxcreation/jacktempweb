@@ -118,7 +118,7 @@ const productSchema = new mongoose.Schema({
   trendingScore: { type: Number, default: 0, index: true }, 
   conversion: { type: Number, default: 0, index: true }, 
 
-  // 🔥 PRODUCT INTELLIGENCE METRICS (NEW)
+  // 🔥 PRODUCT INTELLIGENCE METRICS
   addToCartCount: { type: Number, default: 0 },
   checkoutCount: { type: Number, default: 0 },
   totalRevenuePaise: { type: Number, default: 0 },
@@ -132,7 +132,7 @@ const productSchema = new mongoose.Schema({
   description: { type: String, trim: true, maxlength: 2000, default: '' }, 
   weight: { type: String, trim: true }, 
   size: { type: String, trim: true }, 
-  sku: { type: String, required: [true, 'SKU is required'], unique: true, trim: true, uppercase: true, index: true }, 
+  sku: { type: String, required: [true, 'SKU is required'], unique: true, trim: true, uppercase: true }, 
   color: { type: String, trim: true }, 
   material: { type: String, trim: true }, 
   manufacturerName: { type: String, trim: true },
@@ -156,11 +156,9 @@ const productSchema = new mongoose.Schema({
 productSchema.virtual('healthScore').get(function() {
   let score = 70; // Base score
 
-  // 1. Conversion bonus/penalty (Healthy conversion is > 2%)
   if (this.conversion > 3) score += 15;
   else if (this.conversion < 1) score -= 15;
 
-  // 2. Return & RTO penalty (High returns drop health drastically)
   const totalOrders = (this.sales || 0) + (this.returnCount || 0) + (this.rtoCount || 0);
   if (totalOrders > 0) {
     const returnRate = (this.returnCount / totalOrders) * 100;
@@ -170,16 +168,14 @@ productSchema.virtual('healthScore').get(function() {
     if (rtoRate > 15) score -= 20;
   }
 
-  // 3. Stock availability bonus
   if (this.inventory > 5) score += 10;
-  else if (this.inventory === 0) score -= 30; // Out of stock heavy penalty
+  else if (this.inventory === 0) score -= 30;
 
-  // Clamp score between 0 and 100
   return Math.max(0, Math.min(100, score));
 });
 
 // ==========================================
-// 🔥 BULLETPROOF DATA CONVERSION HOOKS (FIXED SYNCHRONOUS HOOKS)
+// 🔥 BULLETPROOF DATA CONVERSION HOOKS
 // ==========================================
 productSchema.pre('save', function () {
   if (this.price !== undefined) this.price = Number(this.price) || 0;
@@ -210,36 +206,42 @@ productSchema.pre('save', function () {
 
 productSchema.pre('findOneAndUpdate', function () {
   const update = this.getUpdate();
-  if (update && update.$set) {
-    if (update.$set.price !== undefined) update.$set.price = Number(update.$set.price) || 0;
-    if (update.$set.mrp !== undefined) update.$set.mrp = Number(update.$set.mrp) || 0;
-    if (update.$set.cogs !== undefined) update.$set.cogs = Number(update.$set.cogs) || 0; 
-    if (update.$set.inventory !== undefined) {
-      update.$set.inventory = Number(update.$set.inventory) || 0;
-      update.$set['inventoryState.available'] = update.$set.inventory;
-      update.$set['inventoryState.sellable'] = update.$set.inventory;
-    }
-    if (update.$set.tax !== undefined) update.$set.tax = Number(update.$set.tax) || 0;
-    if (update.$set.minimumOrderQty !== undefined) update.$set.minimumOrderQty = Number(update.$set.minimumOrderQty) || 1;
-    if (update.$set.packOf !== undefined) update.$set.packOf = Number(update.$set.packOf) || 1;
-    if (update.$set.length !== undefined) update.$set.length = Number(update.$set.length) || 0;
-    if (update.$set.breadth !== undefined) update.$set.breadth = Number(update.$set.breadth) || 0;
-    if (update.$set.height !== undefined) update.$set.height = Number(update.$set.height) || 0;
+  if (!update) return;
+  const target = update.$set || update;
 
-    if (update.$set.price !== undefined && update.$set.pricePaise === undefined) {
-      update.$set.pricePaise = Math.round(update.$set.price * 100);
+  if (target.price !== undefined) target.price = Number(target.price) || 0;
+  if (target.mrp !== undefined) target.mrp = Number(target.mrp) || 0;
+  if (target.cogs !== undefined) target.cogs = Number(target.cogs) || 0; 
+  if (target.inventory !== undefined) {
+    target.inventory = Number(target.inventory) || 0;
+    if (update.$set) {
+      update.$set['inventoryState.available'] = target.inventory;
+      update.$set['inventoryState.sellable'] = target.inventory;
+    } else {
+      update['inventoryState.available'] = target.inventory;
+      update['inventoryState.sellable'] = target.inventory;
     }
-    if (update.$set.mrp !== undefined && update.$set.mrpPaise === undefined) {
-      update.$set.mrpPaise = Math.round(update.$set.mrp * 100);
-    }
-    if (update.$set.cogs !== undefined && update.$set.cogsPaise === undefined) {
-      update.$set.cogsPaise = Math.round(update.$set.cogs * 100); 
-    }
+  }
+  if (target.tax !== undefined) target.tax = Number(target.tax) || 0;
+  if (target.minimumOrderQty !== undefined) target.minimumOrderQty = Number(target.minimumOrderQty) || 1;
+  if (target.packOf !== undefined) target.packOf = Number(target.packOf) || 1;
+  if (target.length !== undefined) target.length = Number(target.length) || 0;
+  if (target.breadth !== undefined) target.breadth = Number(target.breadth) || 0;
+  if (target.height !== undefined) target.height = Number(target.height) || 0;
+
+  if (target.price !== undefined && target.pricePaise === undefined) {
+    target.pricePaise = Math.round(target.price * 100);
+  }
+  if (target.mrp !== undefined && target.mrpPaise === undefined) {
+    target.mrpPaise = Math.round(target.mrp * 100);
+  }
+  if (target.cogs !== undefined && target.cogsPaise === undefined) {
+    target.cogsPaise = Math.round(target.cogs * 100); 
   }
 });
 
 // ==========================================
-// 🔥 E-COMMERCE QUERY-PATTERN COMPOUND INDEXES (ESR RULE & INVENTORY IMPROVEMENTS)
+// 🔥 E-COMMERCE QUERY-PATTERN COMPOUND INDEXES
 // ==========================================
 productSchema.index({ category: 1, pricePaise: 1 });
 productSchema.index({ category: 1, createdAt: -1 });
@@ -247,12 +249,10 @@ productSchema.index({ brand: 1, pricePaise: 1 });
 productSchema.index({ warehouseId: 1, inventory: 1 });
 productSchema.index({ category: 1, views: -1 });
 productSchema.index({ title: 'text', description: 'text', searchKeywords: 'text' }); 
-// 🔥 Inventory Improvements Index
 productSchema.index({ 'warehouseInventories.warehouse': 1, 'warehouseInventories.inventoryState.available': 1 });
-productSchema.index({ sku: 1 });
 
 // ==========================================
-// 2. USER SCHEMA (CUSTOMER INDEX IMPROVEMENTS)
+// 2. USER SCHEMA
 // ==========================================
 const addressSchema = new mongoose.Schema({
   flat: { type: String, required: true },
@@ -269,7 +269,7 @@ const addressSchema = new mongoose.Schema({
 
 const userSchema = new mongoose.Schema({
   name: { type: String, required: [true, "Full name is required"], trim: true },
-  email: { type: String, required: [true, "Email address is required"], unique: true, lowercase: true, trim: true, index: true },
+  email: { type: String, required: [true, "Email address is required"], unique: true, lowercase: true, trim: true },
   phone: { type: String, trim: true },
   password: { type: String, select: false }, 
   googleId: { type: String },
@@ -290,13 +290,11 @@ const userSchema = new mongoose.Schema({
   }]
 }, { timestamps: true });
 
-// 🔥 Customer Index Improvements
-userSchema.index({ email: 1 });
 userSchema.index({ phone: 1 });
 userSchema.index({ createdAt: -1 });
 
 // ==========================================
-// 3. ORDER SCHEMA (🔥 ENTERPRISE SHIPMENT STRUCTURE & OPTIMIZED INDEXES)
+// 3. ORDER SCHEMA
 // ==========================================
 const shipmentSchema = new mongoose.Schema({
   provider: { type: String, enum: ['delhivery', 'shiprocket', 'none'], default: 'none' },
@@ -316,7 +314,6 @@ const orderSchema = new mongoose.Schema({
   totalAmount: String, 
   totalPaise: { type: Number, default: 0 },
 
-  // 🔥 CORE FINANCIAL LEDGER (Frozen at time of order for accurate P&L)
   cogsPaise: { type: Number, default: 0 }, 
   shippingCostPaise: { type: Number, default: 0 }, 
   paymentFeePaise: { type: Number, default: 0 }, 
@@ -367,7 +364,6 @@ orderSchema.virtual('shiprocketOrderId').get(function() {
   return this.shipment?.awb || '';
 });
 
-// 🔥 Orders Compound Indexes
 orderSchema.index({ userId: 1, createdAt: -1 });
 orderSchema.index({ status: 1, createdAt: -1 });
 orderSchema.index({ paymentMethod: 1, createdAt: -1 });
@@ -375,7 +371,7 @@ orderSchema.index({ fulfilledFromWarehouse: 1, status: 1 });
 orderSchema.index({ 'shipment.awb': 1 });
 
 // ==========================================
-// 🔥 3.1 ENTERPRISE PAYMENT ARCHITECTURE MODELS (NEW)
+// 🔥 3.1 ENTERPRISE PAYMENT ARCHITECTURE MODELS
 // ==========================================
 const paymentIntentSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
@@ -469,22 +465,71 @@ const emailTemplateSchema = new mongoose.Schema({
 });
 
 // ==========================================
-// 7. TICKET SCHEMA
+// 7. TICKET & SUPPORT SCHEMAS
 // ==========================================
 const ticketSchema = new mongoose.Schema({
-  userId: { type: String, index: true }, userName: String, orderId: String,
-  status: { type: String, default: "open", index: true }, 
-  aiCategory: { type: String, enum: ['Shipping', 'Billing', 'Product Issue', 'Returns & Refund', 'General Inquiry', 'Other'], default: 'General Inquiry', index: true },
-  priority: { type: String, enum: ['Low', 'Medium', 'High', 'Urgent'], default: 'Medium', index: true },
+  userId: { type: String, index: true }, 
+  customerId: { type: String, index: true },
+  conversationId: { type: String, index: true },
+  ticketNumber: { type: String, index: true },
+  userName: String, 
+  orderId: String,
+  status: { type: String, enum: ['OPEN', 'PENDING', 'RESOLVED', 'CLOSED', 'open'], default: "OPEN", index: true }, 
+  category: { type: String, default: 'GENERAL', index: true },
+  aiCategory: { type: String, enum: ['Shipping', 'Billing', 'Product Issue', 'Returns & Refund', 'General Inquiry', 'Other', 'GENERAL'], default: 'General Inquiry', index: true },
+  priority: { type: String, enum: ['LOW', 'MEDIUM', 'HIGH', 'URGENT', 'Low', 'Medium', 'High', 'Urgent'], default: 'MEDIUM', index: true },
   sentiment: { type: String, enum: ['Positive', 'Neutral', 'Negative'], default: 'Neutral' },
+  assignedAgentId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
   assignedAgent: { type: String, trim: true, default: 'Unassigned', index: true },
+  escalationReason: { type: String, default: '' },
+  sla: { type: Object, default: {} },
   slaDeadline: { type: Date, default: () => new Date(Date.now() + 24 * 60 * 60 * 1000) },
   firstResponseAt: { type: Date, default: null },
   resolvedAt: { type: Date, default: null },
+  closedAt: { type: Date, default: null },
   csatRating: { type: Number, min: 1, max: 5, default: null },
-  messages: [{ sender: { type: String, enum: ['user', 'admin', 'support', 'bot'] }, text: String, timestamp: { type: Date, default: Date.now } }],
+  messages: [{ sender: { type: String, enum: ['user', 'admin', 'support', 'bot', 'USER', 'ADMIN', 'BOT'] }, text: String, timestamp: { type: Date, default: Date.now } }],
   createdAt: { type: Date, default: Date.now, index: true }
 });
+
+// 🔥 NEW: Support Conversation Schema
+const supportConversationSchema = new mongoose.Schema({
+  conversationId: { type: String, required: true, unique: true, index: true },
+  customerId: { type: String, default: null, index: true },
+  guestId: { type: String, default: null },
+  status: { type: String, enum: ['ACTIVE', 'RESOLVED', 'ESCALATED', 'CLOSED'], default: 'ACTIVE', index: true },
+  lastMessageAt: { type: Date, default: Date.now, index: true }
+}, { timestamps: true });
+
+// 🔥 NEW: Support Message Schema (FIXED: Added messageId with unique/sparse/default & AI/CUSTOMER/AGENT to enum)
+const supportMessageSchema = new mongoose.Schema({
+  conversationId: { type: String, required: true, index: true },
+  messageId: { 
+    type: String, 
+    unique: true, 
+    sparse: true, 
+    default: () => `msg-${Date.now()}-${Math.random().toString(36).substring(2, 7)}` 
+  },
+  senderType: { 
+    type: String, 
+    enum: ['AI', 'ai', 'CUSTOMER', 'USER', 'AGENT', 'ADMIN', 'BOT', 'SYSTEM', 'customer', 'admin', 'user', 'bot', 'agent'], 
+    required: true, 
+    index: true 
+  },
+  senderId: { type: String, default: null },
+  content: { type: String, required: true },
+  contentType: { type: String, default: 'text' }
+}, { timestamps: true });
+supportMessageSchema.index({ conversationId: 1, createdAt: 1 });
+
+// 🔥 NEW: Support Knowledge Schema (FAQ)
+const supportKnowledgeSchema = new mongoose.Schema({
+  title: { type: String, required: true, trim: true, index: true },
+  content: { type: String, required: true, trim: true },
+  status: { type: String, enum: ['PUBLISHED', 'DRAFT'], default: 'PUBLISHED', index: true },
+  tags: [{ type: String, trim: true, lowercase: true }]
+}, { timestamps: true });
+supportKnowledgeSchema.index({ title: 'text', content: 'text' });
 
 // ==========================================
 // 8. ABANDONED CART SCHEMA
@@ -546,7 +591,7 @@ const stockAlertSchema = new mongoose.Schema({
 stockAlertSchema.index({ user: 1, product: 1 }, { unique: true });
 
 // ==========================================
-// 🔥 12. SEPARATED ANALYTICS MODELS (NEW)
+// 🔥 12. SEPARATED ANALYTICS MODELS
 // ==========================================
 const productDailyMetricsSchema = new mongoose.Schema({
   product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true, index: true },
@@ -587,7 +632,7 @@ const trafficEventSchema = new mongoose.Schema({
 trafficEventSchema.index({ timestamp: -1 });
 
 // ==========================================
-// 🔥 EXPORT ALL MODELS (INCLUDING SEPARATED ANALYTICS)
+// 🔥 EXPORT ALL MODELS (INCLUDING SUPPORT & ANALYTICS)
 // ==========================================
 module.exports = {
   Product: mongoose.models.Product || mongoose.model('Product', productSchema),
@@ -601,6 +646,10 @@ module.exports = {
   Subscriber: mongoose.models.Subscriber || mongoose.model('Subscriber', subscriberSchema),
   EmailTemplate: mongoose.models.EmailTemplate || mongoose.model('EmailTemplate', emailTemplateSchema),
   Ticket: mongoose.models.Ticket || mongoose.model('Ticket', ticketSchema),
+  SupportTicket: mongoose.models.SupportTicket || mongoose.model('SupportTicket', ticketSchema), // Alias for unified support
+  SupportConversation: mongoose.models.SupportConversation || mongoose.model('SupportConversation', supportConversationSchema),
+  SupportMessage: mongoose.models.SupportMessage || mongoose.model('SupportMessage', supportMessageSchema),
+  SupportKnowledge: mongoose.models.SupportKnowledge || mongoose.model('SupportKnowledge', supportKnowledgeSchema),
   AbandonedCart: mongoose.models.AbandonedCart || mongoose.model('AbandonedCart', abandonedCartSchema),
   Warehouse: mongoose.models.Warehouse || mongoose.model('Warehouse', warehouseSchema),
   PriceAlert: mongoose.models.PriceAlert || mongoose.model('PriceAlert', priceAlertSchema),

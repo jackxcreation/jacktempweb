@@ -1,3 +1,4 @@
+// routes/productRouter.js
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
@@ -47,10 +48,11 @@ const productValidationSchema = z.object({
     z.array(z.string()), 
     z.string()
   ]).optional().transform((val) => {
+    if (!val) return [];
     if (typeof val === 'string') {
       return val.split(',').map(s => s.trim()).filter(Boolean);
     }
-    return val;
+    return Array.isArray(val) ? val.filter(Boolean) : [];
   }),
 
   sku: z.string().optional(),
@@ -304,10 +306,10 @@ router.get('/api/products', async (req, res) => {
       });
     }
 
-    res.json(products.map(p => ({ ...p, id: p._id.toString() })));
+    return res.json(products.map(p => ({ ...p, id: p._id.toString() })));
   } catch (error) { 
     console.error("Fetch Products Error:", error);
-    res.status(500).json({ message: "Server Error" }); 
+    return res.status(500).json({ message: "Server Error" }); 
   }
 });
 
@@ -319,10 +321,10 @@ router.get('/api/products/trending/top', async (req, res) => {
       .limit(8)
       .lean();
       
-    res.json(trendingProducts.map(p => ({ ...p, id: p._id.toString() })));
+    return res.json(trendingProducts.map(p => ({ ...p, id: p._id.toString() })));
   } catch (error) {
     console.error("Trending Products Error:", error);
-    res.status(500).json({ message: "Error fetching trending products" });
+    return res.status(500).json({ message: "Error fetching trending products" });
   }
 });
 
@@ -337,10 +339,10 @@ router.get('/api/products/similar/:id', async (req, res) => {
       _id: { $ne: currentProduct._id }
     }).limit(5).lean();
 
-    res.json(similarProducts.map(p => ({ ...p, id: p._id.toString() })));
+    return res.json(similarProducts.map(p => ({ ...p, id: p._id.toString() })));
   } catch (error) {
     console.error("Similar Products Error:", error);
-    res.status(500).json({ message: "Error fetching similar products" });
+    return res.status(500).json({ message: "Error fetching similar products" });
   }
 });
 
@@ -365,10 +367,10 @@ router.get('/api/products/:id', async (req, res) => {
     const product = await productQuery.lean();
     if (!product) return res.status(404).json({ message: "Product not found" });
     
-    res.json({ ...product, id: product._id.toString() });
+    return res.json({ ...product, id: product._id.toString() });
   } catch (error) { 
     console.error("Fetch Single Product Error:", error);
-    res.status(500).json({ message: "Server Error" }); 
+    return res.status(500).json({ message: "Server Error" }); 
   }
 });
 
@@ -386,9 +388,9 @@ router.get('/api/recommendations/frequently-bought/:id', async (req, res) => {
       tags: { $in: product.tags || [] }
     }).limit(3).lean();
 
-    res.json(bundle.map(p => ({ ...p, id: p._id.toString() })));
+    return res.json(bundle.map(p => ({ ...p, id: p._id.toString() })));
   } catch (err) {
-    res.status(500).json({ message: "Error fetching bundle recommendations" });
+    return res.status(500).json({ message: "Error fetching bundle recommendations" });
   }
 });
 
@@ -403,9 +405,9 @@ router.get('/api/recommendations/also-viewed/:id', async (req, res) => {
       rating: { $gte: 4.0 }
     }).sort({ views: -1 }).limit(4).lean();
 
-    res.json(similar.map(p => ({ ...p, id: p._id.toString() })));
+    return res.json(similar.map(p => ({ ...p, id: p._id.toString() })));
   } catch (err) {
-    res.status(500).json({ message: "Error fetching viewed recommendations" });
+    return res.status(500).json({ message: "Error fetching viewed recommendations" });
   }
 });
 
@@ -416,9 +418,9 @@ router.get('/api/recommendations/trending', async (req, res) => {
       .limit(8)
       .lean();
 
-    res.json(trending.map(p => ({ ...p, id: p._id.toString() })));
+    return res.json(trending.map(p => ({ ...p, id: p._id.toString() })));
   } catch (err) {
-    res.status(500).json({ message: "Error fetching trending products" });
+    return res.status(500).json({ message: "Error fetching trending products" });
   }
 });
 
@@ -477,10 +479,10 @@ router.get('/api/recommendations/because-you-bought/:userId', protect, async (re
       recommended = recommended.concat(additional);
     }
 
-    res.json(recommended.map(p => ({ ...p, id: p._id.toString() })));
+    return res.json(recommended.map(p => ({ ...p, id: p._id.toString() })));
   } catch (err) {
     console.error("Because You Bought Recommendations Error:", err);
-    res.status(500).json({ message: "Error fetching personalized recommendations" });
+    return res.status(500).json({ message: "Error fetching personalized recommendations" });
   }
 });
 
@@ -542,10 +544,10 @@ router.post('/api/products', protect, checkPermission('products:create'), async 
       { id: savedProduct._id, title: savedProduct.title, price: savedProduct.price, inventory: savedProduct.inventory }
     );
 
-    res.status(201).json({ ...savedProduct._doc, id: savedProduct._id.toString() });
+    return res.status(201).json({ ...savedProduct._doc, id: savedProduct._id.toString() });
   } catch (error) { 
     console.error("Save Product Error:", error);
-    res.status(500).json({ message: "Error saving product" }); 
+    return res.status(500).json({ message: "Error saving product" }); 
   }
 });
 
@@ -626,10 +628,10 @@ router.put('/api/products/:id', protect, checkPermission('products:edit'), async
       { price: updatedProduct.pricePaise, inventory: updatedProduct.inventory, title: updatedProduct.title }
     );
 
-    res.json({ ...updatedProduct, id: updatedProduct._id.toString() });
+    return res.json({ ...updatedProduct, id: updatedProduct._id.toString() });
   } catch (error) {
     console.error("Update Product Error:", error);
-    res.status(500).json({ message: "Error updating product" });
+    return res.status(500).json({ message: "Error updating product" });
   }
 });
 
@@ -672,14 +674,14 @@ router.delete('/api/products/:id', protect, checkPermission('products:edit'), as
       { listingStatus: 'Inactive', inventory: 0 }
     );
 
-    res.json({ 
+    return res.json({ 
       success: true, 
       message: "Product safely moved to recycle bin (Soft Deleted) with audit logging.",
       auditReason: auditReason || "No reason provided"
     });
   } catch (error) { 
     console.error("Safe Delete Product Error:", error);
-    res.status(500).json({ message: "Error processing safe deletion" }); 
+    return res.status(500).json({ message: "Error processing safe deletion" }); 
   }
 });
 

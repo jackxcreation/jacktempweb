@@ -1,4 +1,5 @@
-﻿import React from 'react';
+﻿// jack-frontend/src/components/support/TypingIndicator.jsx
+import React from 'react';
 import { motion } from 'framer-motion';
 
 const TypingIndicator = ({ agentName }) => {
@@ -7,6 +8,7 @@ const TypingIndicator = ({ agentName }) => {
       initial={{ opacity: 0, y: 5 }} 
       animate={{ opacity: 1, y: 0 }} 
       exit={{ opacity: 0, scale: 0.9 }}
+      aria-label={agentName ? `${agentName} is typing` : "Typing indicator"}
       className="flex flex-col max-w-[85%] mr-auto items-start mb-4"
     >
       {agentName && (

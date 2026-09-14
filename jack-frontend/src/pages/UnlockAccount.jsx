@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+// src/pages/UnlockAccount.jsx
+import React, { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FiUnlock, FiAlertCircle, FiMessageSquare } from 'react-icons/fi';
+import { FiUnlock, FiAlertCircle, FiMessageSquare, FiCheckCircle } from 'react-icons/fi';
 import { API_URL } from '../config';
 
 const UnlockAccount = () => {
@@ -11,6 +12,12 @@ const UnlockAccount = () => {
   const [status, setStatus] = useState({ type: '', msg: '' });
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
+
+  // 🔥 Scroll to top on mount & set professional SEO title
+  useEffect(() => {
+    window.scrollTo(0, 0);
+    document.title = "Unlock Account | Jack Essentials — Security Verification";
+  }, []);
 
   const handleUnlock = async (e) => {
     e.preventDefault();
@@ -36,7 +43,7 @@ const UnlockAccount = () => {
         setStatus({ type: 'error', msg: data.error || "Incorrect Security PIN." });
       }
     } catch (err) {
-      setStatus({ type: 'error', msg: "Connection Error. Please try again." });
+      setStatus({ type: 'error', msg: "Connection Error. Please check your internet." });
     } finally {
       setIsLoading(false);
     }
@@ -48,7 +55,7 @@ const UnlockAccount = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#0B0F19] p-6 relative overflow-hidden font-sans">
+    <div className="min-h-screen flex items-center justify-center bg-[#0B0F19] p-6 relative overflow-hidden font-sans selection:bg-indigo-500 selection:text-white">
       
       <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-indigo-600/10 rounded-full blur-[120px] pointer-events-none"></div>
 
@@ -70,7 +77,7 @@ const UnlockAccount = () => {
               <span className="text-indigo-400 font-bold">(This is a one-time verification. Once verified, you can log in normally.)</span>
             </p>
           </div>
-          <p className="text-slate-500 text-xs mt-4 font-bold uppercase tracking-wider">{email}</p>
+          <p className="text-slate-500 text-xs mt-4 font-bold uppercase tracking-wider">{email || 'User'}</p>
         </div>
 
         <form onSubmit={handleUnlock} className="space-y-6">
@@ -81,6 +88,7 @@ const UnlockAccount = () => {
               value={pin} 
               onChange={handlePinChange}
               disabled={isLoading}
+              autoFocus
               className="w-full py-5 bg-slate-950 border-2 border-slate-800 rounded-2xl text-center text-3xl font-black tracking-[1em] text-white outline-none focus:border-indigo-500 transition-all shadow-inner"
             />
           </div>
@@ -88,7 +96,7 @@ const UnlockAccount = () => {
           <button 
             type="submit" 
             disabled={isLoading || pin.length < 4}
-            className="w-full bg-indigo-600 text-white font-black py-4 rounded-2xl hover:bg-indigo-500 active:scale-95 transition-all shadow-[0_0_20px_rgba(79,70,229,0.3)] disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center h-[60px]"
+            className="w-full bg-indigo-600 text-white font-black py-4 rounded-2xl hover:bg-indigo-500 active:scale-95 transition-all shadow-[0_0_20px_rgba(79,70,229,0.3)] disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center h-[60px] outline-none focus-visible:ring-4 focus-visible:ring-indigo-500/30"
           >
             {isLoading ? (
               <div className="w-6 h-6 border-4 border-white/30 border-t-white rounded-full animate-spin"></div>
@@ -104,8 +112,8 @@ const UnlockAccount = () => {
               initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
               className={`mt-6 p-4 rounded-xl text-sm font-bold flex items-start gap-3 ${status.type === 'error' ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 'bg-green-500/10 text-green-400 border border-green-500/20'}`}
             >
-              <FiAlertCircle size={18} className="shrink-0 mt-0.5" />
-              {status.msg}
+              {status.type === 'success' ? <FiCheckCircle size={18} className="shrink-0 mt-0.5" /> : <FiAlertCircle size={18} className="shrink-0 mt-0.5" />}
+              <span className="leading-snug">{status.msg}</span>
             </motion.div>
           )}
         </AnimatePresence>
@@ -113,7 +121,7 @@ const UnlockAccount = () => {
         <div className="mt-8 text-center border-t border-slate-800 pt-6">
           <p className="text-sm text-slate-400 font-medium flex items-center justify-center gap-2">
             Forgot security key? 
-            <Link to="/support" className="text-indigo-400 font-bold hover:text-indigo-300 transition-colors flex items-center gap-1">
+            <Link to="/support" className="text-indigo-400 font-bold hover:text-indigo-300 transition-colors flex items-center gap-1 outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 rounded px-1">
                Click here <FiMessageSquare size={14} />
             </Link>
           </p>

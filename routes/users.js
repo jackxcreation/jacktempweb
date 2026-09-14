@@ -1,4 +1,6 @@
+// routes/userRouter.js
 const express = require('express');
+const mongoose = require('mongoose'); // 🔥 CRITICAL FIX: Imported mongoose to prevent ReferenceError
 const router = express.Router();
 const { User, Product, Order, Ticket, Review } = require('../models'); 
 const bcrypt = require('bcryptjs');
@@ -16,8 +18,24 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 const otpStore = new Map();
 
+// ==========================================
+// 🔥 PRO FEATURE: MEMORY LEAK CLEANUP INTERVAL FOR OTP
+// ==========================================
+setInterval(() => {
+  const now = Date.now();
+  for (const [email, record] of otpStore.entries()) {
+    if (now > record.expiresAt) {
+      otpStore.delete(email);
+    }
+  }
+}, 15 * 60 * 1000); // Run every 15 minutes
+
 // 🔥 Generate Secure JWT Token Helper
 const generateToken = (id) => {
+  if (!process.env.JWT_SECRET) {
+    console.error("🚨 CRITICAL: JWT_SECRET is missing in .env!");
+    throw new Error("Server Configuration Error");
+  }
   return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '30d' });
 };
 
@@ -76,8 +94,9 @@ router.post('/api/public/send-otp', otpSendLimiter, async (req, res) => {
     }
 
     const { email } = validationResult.data;
+    const cleanEmail = email.toLowerCase().trim();
 
-    const existingUser = await User.findOne({ email });
+    const existingUser = await User.findOne({ email: cleanEmail });
     if (existingUser) {
       return res.status(400).json({ message: "User already available. Please login." });
     }
@@ -85,7 +104,7 @@ router.post('/api/public/send-otp', otpSendLimiter, async (req, res) => {
     // Cryptographically secure OTP generation (Not just Math.random)
     const otp = crypto.randomInt(100000, 999999).toString();
 
-    otpStore.set(email, {
+    otpStore.set(cleanEmail, {
       otp,
       expiresAt: Date.now() + 5 * 60 * 1000 
     });
@@ -102,16 +121,16 @@ router.post('/api/public/send-otp', otpSendLimiter, async (req, res) => {
     if (process.env.RESEND_API_KEY) {
       await resend.emails.send({
         from: 'Jack Essentials Security <updates@thejackessentials.com>', 
-        to: [email],
+        to: [cleanEmail],
         subject: 'Your Verification Code - Jack Essentials',
         html: htmlContent
       });
     }
 
-    res.status(200).json({ message: "OTP sent successfully!" });
+    return res.status(200).json({ message: "OTP sent successfully!" });
   } catch (error) {
     console.error("Send OTP Error:", error);
-    res.status(500).json({ message: "Server error while sending OTP" });
+    return res.status(500).json({ message: "Server error while sending OTP" });
   }
 });
 
@@ -124,21 +143,27 @@ router.post('/api/public/verify-otp', otpVerifyLimiter, async (req, res) => {
     }
 
     const { email, otp } = validationResult.data;
-    const record = otpStore.get(email);
+    const cleanEmail = email.toLowerCase().trim();
+    const record = otpStore.get(cleanEmail);
 
-    if (!record) return res.status(400).json({ message: "No OTP requested or it has expired." });
+    if (!record) {
+      return res.status(400).json({ message: "No OTP requested or it has expired." });
+    }
     
     if (Date.now() > record.expiresAt) {
-      otpStore.delete(email); 
+      otpStore.delete(cleanEmail); 
       return res.status(400).json({ message: "OTP has expired. Please resend." });
     }
     
-    if (record.otp !== otp) return res.status(400).json({ message: "Invalid OTP." });
+    if (record.otp !== String(otp).trim()) {
+      return res.status(400).json({ message: "Invalid OTP." });
+    }
 
-    otpStore.delete(email);
-    res.status(200).json({ message: "OTP verified successfully." });
+    otpStore.delete(cleanEmail);
+    return res.status(200).json({ message: "OTP verified successfully." });
   } catch (error) {
-    res.status(500).json({ message: "Server error during verification" });
+    console.error("Verify OTP Error:", error);
+    return res.status(500).json({ message: "Server error during verification" });
   }
 });
 
@@ -150,8 +175,11 @@ router.post('/api/public/verify-otp', otpVerifyLimiter, async (req, res) => {
 router.get('/api/users', protect, admin, async (req, res) => {
   try {
     const users = await User.find({}, 'name email createdAt role').lean();
-    res.json(users);
-  } catch (error) { res.status(500).json({ message: "Error fetching users" }); }
+    return res.json(users);
+  } catch (error) { 
+    console.error("Fetch Users Error:", error);
+    return res.status(500).json({ message: "Error fetching users" }); 
+  }
 });
 
 // ==========================================
@@ -160,8 +188,14 @@ router.get('/api/users', protect, admin, async (req, res) => {
 router.get('/api/users/:id/360-profile', protect, admin, async (req, res) => {
   try {
     const userId = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ success: false, message: "Invalid Customer ID format" });
+    }
+
     const user = await User.findById(userId).populate('wishlist').populate('recentlyViewed').lean();
-    if (!user) return res.status(404).json({ success: false, message: "Customer not found" });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "Customer not found" });
+    }
 
     // Fetch customer orders
     const orders = await Order.find({ userId: userId.toString() }).sort({ createdAt: -1 }).lean();
@@ -192,7 +226,7 @@ router.get('/api/users/:id/360-profile', protect, admin, async (req, res) => {
     }
     timeline.sort((a, b) => new Date(b.date) - new Date(a.date));
 
-    res.json({
+    return res.json({
       success: true,
       profile: user,
       metrics: {
@@ -211,7 +245,7 @@ router.get('/api/users/:id/360-profile', protect, admin, async (req, res) => {
     });
   } catch (error) {
     console.error("Customer 360 Error:", error);
-    res.status(500).json({ success: false, message: "Failed to generate Customer 360 profile" });
+    return res.status(500).json({ success: false, message: "Failed to generate Customer 360 profile" });
   }
 });
 
@@ -224,32 +258,43 @@ router.post('/api/users/register', async (req, res) => {
     }
 
     const { name, email, mobile, password } = validationResult.data;
-    const userExists = await User.findOne({ email });
-    if (userExists) return res.status(400).json({ message: "User already exists" });
+    const cleanEmail = email.toLowerCase().trim();
+
+    const userExists = await User.findOne({ email: cleanEmail });
+    if (userExists) {
+      return res.status(400).json({ message: "User already exists" });
+    }
 
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // Default role should be 'user'. You can manually change your DB entry to 'admin' later.
-    const newUser = new User({ name, email, mobile, password: hashedPassword, role: 'user' });
+    // Default role should be 'customer' (aligned with userSchema)
+    const newUser = new User({ 
+      name, 
+      email: cleanEmail, 
+      mobile: mobile || '', 
+      password: hashedPassword, 
+      role: 'customer' 
+    });
     await newUser.save();
 
     if (process.env.RESEND_API_KEY) {
       const htmlContent = getWelcomeTemplate(name || 'User');
       resend.emails.send({
         from: 'Jack Essentials <updates@thejackessentials.com>', 
-        to: [email],
+        to: [cleanEmail],
         subject: 'Welcome to the Elite Club! 🎉',
         html: htmlContent
-      }).catch(err => {});
+      }).catch(err => console.error("Welcome email error:", err));
     }
 
     // 🔥 GENERATE JWT TOKEN
     const token = generateToken(newUser._id);
 
-    res.status(201).json({ message: "User registered successfully", userId: newUser._id, token });
+    return res.status(201).json({ message: "User registered successfully", userId: newUser._id, token });
   } catch (error) { 
-    res.status(500).json({ message: "Registration failed" }); 
+    console.error("Registration Error:", error);
+    return res.status(500).json({ message: "Registration failed" }); 
   }
 });
 
@@ -262,12 +307,17 @@ router.post('/api/users/login', async (req, res) => {
     }
 
     const { email, password } = validationResult.data;
+    const cleanEmail = email.toLowerCase().trim();
     
-    const user = await User.findOne({ email }).select('+password');
-    if (!user) return res.status(400).json({ message: "Invalid email or password" });
+    const user = await User.findOne({ email: cleanEmail }).select('+password');
+    if (!user) {
+      return res.status(400).json({ message: "Invalid email or password" });
+    }
 
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ message: "Invalid email or password" });
+    if (!isMatch) {
+      return res.status(400).json({ message: "Invalid email or password" });
+    }
 
     if (user.isLocked) {
       return res.status(403).json({ message: "Account is LOCKED for security. Please use the unlock page.", isLocked: true });
@@ -290,10 +340,10 @@ router.post('/api/users/login', async (req, res) => {
       const htmlContent = getLoginAlertTemplate(user.name || 'User', userAgent, time, ip, lockLink);
       resend.emails.send({
         from: 'Jack Essentials Security <updates@thejackessentials.com>', 
-        to: [email],
+        to: [cleanEmail],
         subject: '⚠️ Security Alert: New Login to your Account',
         html: htmlContent
-      }).catch(err => {});
+      }).catch(err => console.error("Login alert error:", err));
     }
     
     // 🔥 GENERATE REAL JWT TOKEN
@@ -303,10 +353,10 @@ router.post('/api/users/login', async (req, res) => {
     const userResponse = { ...user._doc, id: user._id.toString() };
     delete userResponse.password;
 
-    res.json({ message: "Login successful", token, user: userResponse });
+    return res.json({ message: "Login successful", token, user: userResponse });
   } catch (error) { 
-    console.error(error);
-    res.status(500).json({ message: "Login failed" }); 
+    console.error("Login Error:", error);
+    return res.status(500).json({ message: "Login failed" }); 
   }
 });
 
@@ -316,17 +366,22 @@ router.post('/api/users/login', async (req, res) => {
 router.get('/api/users/verify-lock-link', async (req, res) => {
   try {
     const { token } = req.query;
-    if (!token) return res.json({ valid: false, reason: 'expired' });
+    if (!token) {
+      return res.json({ valid: false, reason: 'expired' });
+    }
 
     const user = await User.findOne({ resetPasswordToken: token });
     if (!user || user.resetPasswordExpire < Date.now()) {
       return res.json({ valid: false, reason: 'expired' });
     }
     
-    if (user.isLocked) return res.json({ valid: false, reason: 'used' });
+    if (user.isLocked) {
+      return res.json({ valid: false, reason: 'used' });
+    }
 
-    res.json({ valid: true, email: user.email });
+    return res.json({ valid: true, email: user.email });
   } catch (error) {
+    console.error("Verify Lock Link Error:", error);
     return res.json({ valid: false, reason: 'expired' });
   }
 });
@@ -337,7 +392,9 @@ router.get('/api/users/verify-lock-link', async (req, res) => {
 router.post('/api/users/lock-account', async (req, res) => {
   try {
     const { token, newSecurityCode } = req.body;
-    if (!token || !newSecurityCode) return res.status(400).json({ message: "Token and new Security PIN are required." });
+    if (!token || !newSecurityCode) {
+      return res.status(400).json({ message: "Token and new Security PIN are required." });
+    }
 
     const user = await User.findOne({ resetPasswordToken: token });
     if (!user || user.resetPasswordExpire < Date.now()) {
@@ -353,9 +410,10 @@ router.post('/api/users/lock-account', async (req, res) => {
     user.resetPasswordExpire = undefined;
     await user.save();
 
-    res.json({ success: true, message: "Account locked securely.", userId: user._id });
+    return res.json({ success: true, message: "Account locked securely.", userId: user._id });
   } catch (error) { 
-    res.status(500).json({ message: "Failed to lock account." }); 
+    console.error("Lock Account Error:", error);
+    return res.status(500).json({ message: "Failed to lock account." }); 
   }
 });
 
@@ -365,9 +423,15 @@ router.post('/api/users/lock-account', async (req, res) => {
 router.post('/api/users/unlock-account', async (req, res) => {
   try {
     const { email, securityCode } = req.body;
+    if (!email || !securityCode) {
+      return res.status(400).json({ error: "Email and security PIN are required." });
+    }
 
-    const user = await User.findOne({ email });
-    if (!user || !user.isLocked) return res.status(400).json({ error: "Account is not locked or not found." });
+    const cleanEmail = email.toLowerCase().trim();
+    const user = await User.findOne({ email: cleanEmail }).select('+securityCode');
+    if (!user || !user.isLocked) {
+      return res.status(400).json({ error: "Account is not locked or not found." });
+    }
 
     let isMatch = false;
     if (user.securityCode && user.securityCode.startsWith('$2')) {
@@ -376,15 +440,18 @@ router.post('/api/users/unlock-account', async (req, res) => {
       isMatch = (securityCode === user.securityCode);
     }
 
-    if (!isMatch) return res.status(400).json({ error: "Incorrect Security PIN." });
+    if (!isMatch) {
+      return res.status(400).json({ error: "Incorrect Security PIN." });
+    }
 
     user.isLocked = false;
     user.securityCode = undefined;
     await user.save();
 
-    res.json({ success: true, message: "Account Unlocked" });
+    return res.json({ success: true, message: "Account Unlocked" });
   } catch (error) {
-    res.status(500).json({ error: "Failed to unlock account." });
+    console.error("Unlock Account Error:", error);
+    return res.status(500).json({ error: "Failed to unlock account." });
   }
 });
 
@@ -394,18 +461,28 @@ router.post('/api/users/unlock-account', async (req, res) => {
 router.post('/api/users/social-login', async (req, res) => {
   try {
     const { name, email, firebaseId } = req.body;
-    if (!email) return res.status(400).json({ message: "Email is required" });
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
 
-    let user = await User.findOne({ email });
+    const cleanEmail = email.toLowerCase().trim();
+    let user = await User.findOne({ email: cleanEmail });
     let isNewUser = false; 
     
     if (!user) {
-      user = new User({ name: name || 'User', email, password: firebaseId || 'social_login', role: 'user' });
+      user = new User({ 
+        name: name || 'User', 
+        email: cleanEmail, 
+        password: firebaseId || 'social_login', 
+        role: 'customer' 
+      });
       await user.save();
       isNewUser = true; 
     }
 
-    if (user.isLocked) return res.status(403).json({ message: "Account is LOCKED. Please login via Email/Password to enter your PIN.", isLocked: true });
+    if (user.isLocked) {
+      return res.status(403).json({ message: "Account is LOCKED. Please login via Email/Password to enter your PIN.", isLocked: true });
+    }
     
     // 🔥 GENERATE REAL JWT TOKEN
     const token = generateToken(user._id);
@@ -413,9 +490,10 @@ router.post('/api/users/social-login', async (req, res) => {
     const userResponse = { ...user._doc, id: user._id.toString() };
     delete userResponse.password;
     
-    res.json({ message: "Login successful", isNewUser, token, user: userResponse });
+    return res.json({ message: "Login successful", isNewUser, token, user: userResponse });
   } catch (error) { 
-    res.status(500).json({ message: "Social login failed" }); 
+    console.error("Social Login Error:", error);
+    return res.status(500).json({ message: "Social login failed" }); 
   }
 });
 
@@ -424,8 +502,13 @@ router.post('/api/users/social-login', async (req, res) => {
 // ==========================================
 router.put('/api/users/:id', protect, async (req, res) => {
   try {
+    const targetUserId = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(targetUserId)) {
+      return res.status(400).json({ success: false, message: "Invalid User ID format" });
+    }
+
     // Only the user themselves OR an admin can update the profile
-    if (req.user._id.toString() !== req.params.id && req.user.role !== 'admin') {
+    if (req.user._id.toString() !== targetUserId && req.user.role !== 'admin' && req.user.role !== 'super_admin') {
       return res.status(403).json({ message: "Access Denied: You cannot update someone else's profile." });
     }
 
@@ -442,13 +525,20 @@ router.put('/api/users/:id', protect, async (req, res) => {
     const updateData = validationResult.data;
 
     // Protect role modification (only admins can make other admins)
-    if (updateData.role && req.user.role !== 'admin') {
+    if (updateData.role && req.user.role !== 'admin' && req.user.role !== 'super_admin') {
       delete updateData.role; 
     }
 
-    const updatedUser = await User.findByIdAndUpdate(req.params.id, updateData, { returnDocument: 'after' });
-    res.json({ ...updatedUser._doc, id: updatedUser._id.toString() });
-  } catch (error) { res.status(500).json({ message: "Update failed" }); }
+    const updatedUser = await User.findByIdAndUpdate(targetUserId, updateData, { new: true, runValidators: true }).lean();
+    if (!updatedUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    return res.json({ ...updatedUser, id: updatedUser._id.toString() });
+  } catch (error) { 
+    console.error("Update User Error:", error);
+    return res.status(500).json({ message: "Update failed" }); 
+  }
 });
 
 // ==========================================
@@ -456,18 +546,26 @@ router.put('/api/users/:id', protect, async (req, res) => {
 // ==========================================
 router.get('/api/users/get-valid-recently-viewed/:userId', protect, async (req, res) => {
   try {
+    const targetUserId = req.params.userId;
+    if (!mongoose.Types.ObjectId.isValid(targetUserId)) {
+      return res.status(400).json({ success: false, message: "Invalid User ID format" });
+    }
+
     // IDOR Check
-    if (req.user._id.toString() !== req.params.userId && req.user.role !== 'admin') {
+    if (req.user._id.toString() !== targetUserId && req.user.role !== 'admin' && req.user.role !== 'super_admin') {
       return res.status(403).json({ message: "Access Denied" });
     }
 
-    const user = await User.findById(req.params.userId);
-    if (!user || !user.recentlyViewed || user.recentlyViewed.length === 0) return res.json([]);
+    const user = await User.findById(targetUserId).lean();
+    if (!user || !user.recentlyViewed || user.recentlyViewed.length === 0) {
+      return res.json([]);
+    }
 
-    const validProducts = await Product.find({ _id: { $in: user.recentlyViewed } });
-    res.json(validProducts);
+    const validProducts = await Product.find({ _id: { $in: user.recentlyViewed } }).lean();
+    return res.json(validProducts.map(p => ({ ...p, id: p._id.toString() })));
   } catch (error) {
-    res.status(500).json({ message: "Error" });
+    console.error("Get Recently Viewed Error:", error);
+    return res.status(500).json({ message: "Error fetching recently viewed products" });
   }
 });
 

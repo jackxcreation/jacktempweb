@@ -1,3 +1,5 @@
+/* jack-frontend/src/index.css */
+
 /* =========================================
    1. TAILWIND CORE (v4 FIX)
 ========================================= */
@@ -9,6 +11,7 @@
 :root {
   --brand-orange: #FF4500;
   --brand-dark: #0B0F19;
+  --brand-indigo: #4F46E5; /* 🔥 Restored for global UI consistency */
 }
 
 html {
@@ -70,4 +73,17 @@ body {
     -ms-overflow-style: none;
     scrollbar-width: none; 
   }
+
+  /* 🔥 Pro Addition: Glassmorphism Effect for Modals and Floating Bars */
+  .glass-card {
+    background: rgba(255, 255, 255, 0.9);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+}
+
+/* Accessible Keyboard Focus Outline */
+:focus-visible {
+  outline: 2px solid var(--brand-orange);
+  outline-offset: 2px;
 }

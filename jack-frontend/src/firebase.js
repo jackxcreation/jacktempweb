@@ -1,4 +1,5 @@
-import { initializeApp } from "firebase/app";
+// jack-frontend/src/firebase.js (or config/firebase.js)
+import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
 
 // 🔥 PRODUCTION SECURITY: Using Environment Variables with fallback to avoid crashes
@@ -11,8 +12,16 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:486613236039:web:da6329f8d57a53f4103462"
 };
 
-const app = initializeApp(firebaseConfig);
+// 🔥 Prevent duplicate app initialization during development hot-reloads
+const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
 // Initialize Authentication exports
 export const auth = getAuth(app);
+
 export const googleProvider = new GoogleAuthProvider();
+// 🔥 Pro feature: Force account selection prompt on Google Sign-In
+googleProvider.setCustomParameters({
+  prompt: 'select_account'
+});
+
+export default app;

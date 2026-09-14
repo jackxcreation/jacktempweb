@@ -12,17 +12,31 @@ class ShiprocketProvider {
       throw new Error("Shiprocket credentials are missing in environment configuration.");
     }
 
-    const res = await fetch(`${this.baseUrl}/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email: process.env.SHIPROCKET_EMAIL,
-        password: process.env.SHIPROCKET_PASSWORD
-      })
-    });
-    const data = await res.json();
-    if (!data.token) throw new Error("Failed to authenticate with Shiprocket");
-    return data.token;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    try {
+      const res = await fetch(`${this.baseUrl}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: process.env.SHIPROCKET_EMAIL,
+          password: process.env.SHIPROCKET_PASSWORD
+        }),
+        signal: controller.signal
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.token) {
+        throw new Error(data.message || "Failed to authenticate with Shiprocket");
+      }
+      return data.token;
+    } catch (error) {
+      console.error("Shiprocket Token Generation Error:", error.message);
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   async generateAWB(order) {
@@ -48,113 +62,157 @@ class ShiprocketProvider {
         name: item.title || "Product",
         sku: item.sku || "SKU-DEFAULT",
         units: item.quantity || 1,
-        selling_price: item.price || 0,
+        selling_price: item.pricePaise ? item.pricePaise / 100 : (item.price || 0),
         discount: 0,
         tax: 0,
-        hsn: 0
+        hsn: item.hsnCode || 0
       })),
-      payment_method: (order.paymentMethod || 'COD').toUpperCase() === 'COD' ? 'COD' : 'Prepaid',
-      sub_total: order.totalAmount || (order.totalPaise ? order.totalPaise / 100 : 0),
-      length: 10,
-      breadth: 10,
-      height: 10,
-      weight: 0.5
+      payment_method: (order.paymentMethod || 'COD').toUpperCase().includes('COD') ? 'COD' : 'Prepaid',
+      sub_total: order.totalPaise ? order.totalPaise / 100 : (order.totalAmount || 0),
+      length: order.length || 10,
+      breadth: order.breadth || 10,
+      height: order.height || 10,
+      weight: order.weight || 0.5
     };
 
-    // 2. Create Order on Shiprocket
-    const createRes = await fetch(`${this.baseUrl}/orders/create/adhoc`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify(orderPayload)
-    });
-    
-    const createData = await createRes.json();
-    if (!createData.order_id && !createData.shipment_id) {
-      throw new Error(`Shiprocket Order Creation Failed: ${createData.message || JSON.stringify(createData)}`);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    try {
+      // 2. Create Order on Shiprocket
+      const createRes = await fetch(`${this.baseUrl}/orders/create/adhoc`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(orderPayload),
+        signal: controller.signal
+      });
+      
+      const createData = await createRes.json();
+      if (!createRes.ok || (!createData.order_id && !createData.shipment_id)) {
+        throw new Error(`Shiprocket Order Creation Failed: ${createData.message || JSON.stringify(createData)}`);
+      }
+
+      const shipmentId = createData.shipment_id;
+
+      // 3. Generate AWB for the shipment
+      const awbRes = await fetch(`${this.baseUrl}/courier/assign/awb`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          shipment_id: shipmentId
+        }),
+        signal: controller.signal
+      });
+
+      const awbData = await awbRes.json();
+      const awbDetails = awbData.response?.data || awbData;
+
+      if (!awbRes.ok || (awbDetails.status !== 1 && !awbDetails.awb_code)) {
+        throw new Error(`Shiprocket AWB Generation Failed: ${awbData.message || JSON.stringify(awbData)}`);
+      }
+
+      return {
+        success: true,
+        provider: 'shiprocket',
+        waybill: awbDetails.awb_code || awbDetails.ladebillabel || awbDetails.response?.data?.awb_code,
+        shiprocketOrderId: createData.order_id,
+        shipmentId: shipmentId,
+        courierName: awbDetails.courier_name || 'Standard Courier',
+        trackingStatus: 'AWB Assigned'
+      };
+    } catch (error) {
+      console.error("Shiprocket generateAWB Error:", error.message);
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    const shipmentId = createData.shipment_id;
-
-    // 3. Generate AWB for the shipment
-    const awbRes = await fetch(`${this.baseUrl}/courier/assign/awb`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({
-        shipment_id: shipmentId
-      })
-    });
-
-    const awbData = await awbRes.json();
-    if (!awbData.response || awbData.response.data.status !== 1) {
-      throw new Error(`Shiprocket AWB Generation Failed: ${awbData.message || JSON.stringify(awbData)}`);
-    }
-
-    const awbDetails = awbData.response.data;
-
-    return {
-      success: true,
-      provider: 'shiprocket',
-      waybill: awbDetails.awb_code || awbDetails.ladebillabel,
-      shiprocketOrderId: createData.order_id,
-      shipmentId: shipmentId,
-      courierName: awbDetails.courier_name,
-      trackingStatus: 'AWB Assigned'
-    };
   }
 
   async getLabel(awb) {
     const token = await this.getToken();
-    // Shiprocket label generation endpoint using shipment_id or awb
-    const res = await fetch(`${this.baseUrl}/courier/generate/label`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({
-        shipment_id: [awb] // can be shipment ids comma separated or array
-      })
-    });
-    const data = await res.json();
-    return data;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    try {
+      const res = await fetch(`${this.baseUrl}/courier/generate/label`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          shipment_id: [awb] // can be shipment ids comma separated or array
+        }),
+        signal: controller.signal
+      });
+      const data = await res.json();
+      return data;
+    } catch (error) {
+      console.error("Shiprocket getLabel Error:", error.message);
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   async schedulePickup(packageCount, locationName) {
     const token = await this.getToken();
-    const res = await fetch(`${this.baseUrl}/courier/generate/pickup`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({
-        pickup_location: locationName || "Primary"
-      })
-    });
-    const data = await res.json();
-    return data;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    try {
+      const res = await fetch(`${this.baseUrl}/courier/generate/pickup`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          pickup_location: locationName || "Primary"
+        }),
+        signal: controller.signal
+      });
+      const data = await res.json();
+      return data;
+    } catch (error) {
+      console.error("Shiprocket schedulePickup Error:", error.message);
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   async cancelShipment(waybill) {
     const token = await this.getToken();
-    const res = await fetch(`${this.baseUrl}/orders/cancel/shipment/awb`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({
-        awbs: [waybill]
-      })
-    });
-    const data = await res.json();
-    return data;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    try {
+      const res = await fetch(`${this.baseUrl}/orders/cancel/shipment/awb`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          awbs: [waybill]
+        }),
+        signal: controller.signal
+      });
+      const data = await res.json();
+      return data;
+    } catch (error) {
+      console.error("Shiprocket cancelShipment Error:", error.message);
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 }
 

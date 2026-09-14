@@ -1,9 +1,16 @@
-import React from "react";
+// src/pages/AboutUs.jsx
+import React, { useEffect } from "react";
 import { motion } from "framer-motion";
 import { Link } from "react-router-dom";
-import { FiCpu, FiGlobe, FiHeart, FiTarget, FiZap, FiShoppingBag } from "react-icons/fi";
+import { FiCpu, FiGlobe, FiHeart, FiShoppingBag, FiAward, FiShield, FiTrendingUp } from "react-icons/fi";
 
 export default function AboutUs() {
+  // 🔥 Scroll to top on mount & set document title for professional SEO
+  useEffect(() => {
+    window.scrollTo(0, 0);
+    document.title = "About Us | Jack Essentials — Redefining Smart Shopping";
+  }, []);
+
   // Animation Variants
   const fadeUp = {
     hidden: { opacity: 0, y: 40 },
@@ -39,8 +46,37 @@ export default function AboutUs() {
         </motion.div>
       </div>
 
+      {/* 1.1 🔥 NEW: ENTERPRISE STATS STRIP 🔥 */}
+      <div className="max-w-7xl mx-auto px-6 mb-20">
+        <motion.div 
+          initial="hidden" whileInView="visible" viewport={{ once: true }} variants={fadeUp}
+          className="grid grid-cols-2 md:grid-cols-4 gap-6 bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-md"
+        >
+          <div className="text-center p-4">
+            <FiTrendingUp className="text-[#FF4500] w-6 h-6 mx-auto mb-2" />
+            <h4 className="text-2xl md:text-3xl font-black text-white">100%</h4>
+            <p className="text-xs text-slate-400 uppercase tracking-wider mt-1">Automated Systems</p>
+          </div>
+          <div className="text-center p-4">
+            <FiShield className="text-blue-500 w-6 h-6 mx-auto mb-2" />
+            <h4 className="text-2xl md:text-3xl font-black text-white">256-Bit</h4>
+            <p className="text-xs text-slate-400 uppercase tracking-wider mt-1">Secure Checkout</p>
+          </div>
+          <div className="text-center p-4">
+            <FiAward className="text-green-500 w-6 h-6 mx-auto mb-2" />
+            <h4 className="text-2xl md:text-3xl font-black text-white">4+</h4>
+            <p className="text-xs text-slate-400 uppercase tracking-wider mt-1">Courier Partners</p>
+          </div>
+          <div className="text-center p-4">
+            <FiCpu className="text-purple-500 w-6 h-6 mx-auto mb-2" />
+            <h4 className="text-2xl md:text-3xl font-black text-white">AI-First</h4>
+            <p className="text-xs text-slate-400 uppercase tracking-wider mt-1">D2C Architecture</p>
+          </div>
+        </motion.div>
+      </div>
+
       {/* 2. THE ORIGIN STORY (Emotional Core) */}
-      <div className="max-w-7xl mx-auto px-6 py-16">
+      <div className="max-w-7xl mx-auto px-6 py-10">
         <motion.div 
           initial="hidden" whileInView="visible" viewport={{ once: true, margin: "-100px" }} variants={fadeUp}
           className="bg-slate-800/50 border border-slate-700/50 rounded-3xl p-8 md:p-14 relative overflow-hidden"

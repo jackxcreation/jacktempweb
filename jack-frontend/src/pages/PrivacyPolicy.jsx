@@ -1,9 +1,16 @@
-import React from "react";
+// src/pages/PrivacyPolicy.jsx
+import React, { useEffect } from "react";
 import { motion } from "framer-motion";
 import { FiShield, FiDatabase, FiShare2, FiEye, FiUserCheck, FiLifeBuoy, FiArrowRight } from "react-icons/fi";
 import { Link } from "react-router-dom";
 
 export default function PrivacyPolicy() {
+  // 🔥 Scroll to top on mount & set professional SEO title
+  useEffect(() => {
+    window.scrollTo(0, 0);
+    document.title = "Privacy Policy | Jack Essentials — Data Security";
+  }, []);
+
   // Animation Variants
   const fadeUp = {
     hidden: { opacity: 0, y: 30 },
@@ -16,7 +23,7 @@ export default function PrivacyPolicy() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0B0F19] text-slate-200 font-sans pb-20 overflow-hidden">
+    <div className="min-h-screen bg-[#0B0F19] text-slate-200 font-sans pb-20 overflow-hidden selection:bg-[#FF4500] selection:text-white">
       
       {/* HEADER SECTION */}
       <div className="relative pt-32 pb-16 px-6 text-center border-b border-slate-800">
@@ -42,9 +49,9 @@ export default function PrivacyPolicy() {
         >
           
           {/* Rule 1 */}
-          <motion.section variants={fadeUp} className="bg-slate-800/30 p-8 rounded-3xl border border-slate-700/50 hover:border-blue-500/50 transition-colors">
+          <motion.section variants={fadeUp} id="collection" className="bg-slate-800/30 p-8 rounded-3xl border border-slate-700/50 hover:border-blue-500/50 transition-colors">
             <div className="flex items-center mb-4">
-              <FiDatabase className="text-blue-400 w-6 h-6 mr-3" />
+              <FiDatabase className="text-blue-400 w-6 h-6 mr-3 shrink-0" />
               <h2 className="text-2xl font-bold text-white">1. Information We Collect</h2>
             </div>
             <p className="text-slate-400 leading-relaxed text-sm md:text-base mb-4">
@@ -58,9 +65,9 @@ export default function PrivacyPolicy() {
           </motion.section>
 
           {/* Rule 2 */}
-          <motion.section variants={fadeUp} className="bg-slate-800/30 p-8 rounded-3xl border border-slate-700/50 hover:border-green-500/50 transition-colors">
+          <motion.section variants={fadeUp} id="sharing" className="bg-slate-800/30 p-8 rounded-3xl border border-slate-700/50 hover:border-green-500/50 transition-colors">
             <div className="flex items-center mb-4">
-              <FiShare2 className="text-green-400 w-6 h-6 mr-3" />
+              <FiShare2 className="text-green-400 w-6 h-6 mr-3 shrink-0" />
               <h2 className="text-2xl font-bold text-white">2. How We Share Your Data</h2>
             </div>
             <p className="text-slate-400 leading-relaxed text-sm md:text-base mb-4">
@@ -79,9 +86,9 @@ export default function PrivacyPolicy() {
           </motion.section>
 
           {/* Rule 3 */}
-          <motion.section variants={fadeUp} className="bg-slate-800/30 p-8 rounded-3xl border border-slate-700/50 hover:border-purple-500/50 transition-colors">
+          <motion.section variants={fadeUp} id="cookies" className="bg-slate-800/30 p-8 rounded-3xl border border-slate-700/50 hover:border-purple-500/50 transition-colors">
             <div className="flex items-center mb-4">
-              <FiEye className="text-purple-400 w-6 h-6 mr-3" />
+              <FiEye className="text-purple-400 w-6 h-6 mr-3 shrink-0" />
               <h2 className="text-2xl font-bold text-white">3. Cookies & Tracking</h2>
             </div>
             <p className="text-slate-400 leading-relaxed text-sm md:text-base">
@@ -90,9 +97,9 @@ export default function PrivacyPolicy() {
           </motion.section>
 
           {/* Rule 4 */}
-          <motion.section variants={fadeUp} className="bg-slate-800/30 p-8 rounded-3xl border border-slate-700/50 hover:border-yellow-500/50 transition-colors">
+          <motion.section variants={fadeUp} id="age" className="bg-slate-800/30 p-8 rounded-3xl border border-slate-700/50 hover:border-yellow-500/50 transition-colors">
             <div className="flex items-center mb-4">
-              <FiUserCheck className="text-yellow-400 w-6 h-6 mr-3" />
+              <FiUserCheck className="text-yellow-400 w-6 h-6 mr-3 shrink-0" />
               <h2 className="text-2xl font-bold text-white">4. Age Restrictions</h2>
             </div>
             <p className="text-slate-400 leading-relaxed text-sm md:text-base">
@@ -101,16 +108,16 @@ export default function PrivacyPolicy() {
           </motion.section>
 
           {/* Rule 5 (CTA) */}
-          <motion.section variants={fadeUp} className="bg-gradient-to-br from-slate-800 to-slate-900 p-8 rounded-3xl border border-[#FF4500]/30 shadow-lg relative overflow-hidden group">
+          <motion.section variants={fadeUp} id="support" className="bg-gradient-to-br from-slate-800 to-slate-900 p-8 rounded-3xl border border-[#FF4500]/30 shadow-lg relative overflow-hidden group">
             <div className="absolute top-0 right-0 w-32 h-32 bg-[#FF4500] opacity-10 rounded-bl-full group-hover:scale-110 transition-transform"></div>
             <div className="flex items-center mb-4 relative z-10">
-              <FiLifeBuoy className="text-[#FF4500] w-6 h-6 mr-3" />
+              <FiLifeBuoy className="text-[#FF4500] w-6 h-6 mr-3 shrink-0" />
               <h2 className="text-2xl font-bold text-white">5. Data Deletion & Support</h2>
             </div>
             <p className="text-slate-400 leading-relaxed text-sm md:text-base mb-6 relative z-10">
               Have questions about your privacy? Want to update your information or request the complete deletion of your account data? We are completely transparent and here to help.
             </p>
-            <Link to="/support" className="inline-flex items-center gap-2 bg-[#FF4500] hover:bg-orange-600 text-white font-bold py-3 px-8 rounded-xl transition-all shadow-lg relative z-10">
+            <Link to="/support" className="inline-flex items-center gap-2 bg-[#FF4500] hover:bg-orange-600 text-white font-bold py-3 px-8 rounded-xl transition-all shadow-lg relative z-10 outline-none focus-visible:ring-4 focus-visible:ring-orange-500/30">
               Raise a Support Ticket <FiArrowRight />
             </Link>
           </motion.section>
@@ -125,8 +132,8 @@ export default function PrivacyPolicy() {
           className="mt-16 text-center border-t border-slate-800 pt-8"
         >
           <p className="text-slate-500 text-sm">
-            Last Updated: {new Date().toLocaleDateString()} <br />
-            Jack Essentials ™ - Cuttack, Odisha
+            Last Updated: {new Date().toLocaleDateString('en-IN', { month: 'long', day: 'numeric', year: 'numeric' })} <br />
+            Jack Essentials ™ — Cuttack, Odisha, India
           </p>
         </motion.div>
       </div>

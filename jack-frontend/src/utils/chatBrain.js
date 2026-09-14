@@ -10,11 +10,20 @@ export const predefinedOptions = [
   { label: "Talk to Human", reply: "[TRANSFER_TO_AGENT]" }
 ];
 
-// ✅ LANGUAGE DETECTOR PRESERVED
+// ✅ LANGUAGE DETECTOR UPGRADED (Regex Word Boundaries added to prevent false positives)
 export const detectLanguageStyle = (text = "") => {
-  const lower = text.toLowerCase();
-  const hinglishWords = ["bhai", "kya", "kaise", "mera", "mujhe", "kr", "kar", "acha", "haan", "nahi", "kyu", "tum", "aap", "jaldi", "order", "refund"];
-  const hasHinglish = hinglishWords.some(word => lower.includes(word));
+  const cleanText = String(text || "").toLowerCase();
+  const hinglishWords = [
+    "bhai", "kya", "kaise", "mera", "mujhe", "kr", "kar", 
+    "acha", "haan", "nahi", "kyu", "tum", "aap", "jaldi", 
+    "kab", "ayega", "kahan", "hoga", "hai", "hain", "karna", 
+    "karo", "paisa", "payment", "chal", "chahiye", "wala", 
+    "bhejo", "dekh", "kaha", "mat"
+  ];
+  const hasHinglish = hinglishWords.some(word => {
+    const regex = new RegExp(`\\b${word}\\b`, 'i');
+    return regex.test(cleanText);
+  });
   return hasHinglish ? "hinglish" : "english";
 };
 
@@ -68,18 +77,19 @@ export const fetchAIResponse = async ({
 }) => {
   const activeToken = token || (
     typeof window !== 'undefined' 
-      ? (localStorage.getItem('token') || localStorage.getItem('admin_token') || localStorage.getItem('jack_token')) 
+      ? (localStorage.getItem('token') || localStorage.getItem('admin_token') || localStorage.getItem('jack_token') || localStorage.getItem('jwt')) 
       : null
   );
 
   const languageStyle = detectLanguageStyle(userText);
   const systemInstruction = createSystemPrompt({ contextData, user, languageStyle });
 
-  const chatHistory = messages
-    .filter((m) => m.text !== "[TRANSFER_TO_AGENT]" && m.sender !== "admin" && m.type !== "system")
+  const chatHistory = (Array.isArray(messages) ? messages : [])
+    .filter((m) => m && !String(m.text || "").includes("[TRANSFER_TO_AGENT]") && m.sender !== "admin" && m.type !== "system")
     .map((m) => ({
-      role: m.sender === "bot" ? "assistant" : "user",
-      content: m.text || ""
+      // 🔥 CRITICAL FIX: Changed 'assistant' to 'model' to match strict Gemini API requirements
+      role: (m.sender === "bot" || m.sender === "model") ? "model" : "user",
+      content: m.text || m.content || ""
     }));
 
   const fallbackMessage = languageStyle === 'hinglish'
@@ -110,8 +120,8 @@ export const fetchAIResponse = async ({
     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
     const data = await response.json();
     
-    // 🔥 THE FIX: Yahan data.message.content add kiya gaya hai taaki naya backend format read ho sake
-    return data?.message?.content || data.reply || data.text || fallbackMessage;
+    // 🔥 ROBUST PAYLOAD EXTRACTION: Handles all backend response variations safely
+    return data?.message?.content || data?.reply || data?.text || data?.message || fallbackMessage;
     
   } catch (error) {
     if (error.name === 'AbortError') return null; // Silently handle cancellations
@@ -120,21 +130,20 @@ export const fetchAIResponse = async ({
   }
 };
 
-// ✅ BOT RESPONSE PARSER (UPGRADED FOR RICH CARDS)
+// ✅ BOT RESPONSE PARSER (UPGRADED & SYNTAX FIXED)
 export const processBotResponse = (rawBotResponse = "") => {
   let finalBotText = typeof rawBotResponse === 'string' ? rawBotResponse.trim() : "";
   let triggerEscalation = false;
   let structuredData = null;
 
-  // 1. Check for strict escalation tag
+  // 1. 🔥 CRITICAL FIX: Use global regex to wipe hallucinated tags, but DON'T return early so JSON can still parse
   if (finalBotText.includes("[TRANSFER_TO_AGENT]")) {
-    finalBotText = "I have created a support ticket for you ✅ A live agent will connect with you shortly.";
+    finalBotText = finalBotText.replace(/\[TRANSFER_TO_AGENT\]/g, "").trim() || "I have created a support ticket for you ✅ A live agent will connect with you shortly.";
     triggerEscalation = true;
-    return { finalBotText, triggerEscalation, structuredData };
   }
 
-  // 2. Parse AI structured JSON blocks (```json ... ```)
-  const jsonRegex = /```json\n([\s\S]*?)\n```/;
+  // 2. Robust markdown JSON block regex supporting any spacing or formatting variations
+  const jsonRegex = /```(?:json)?\s*([\s\S]*?)\s*```/;
   const match = finalBotText.match(jsonRegex);
   
   if (match && match[1]) {

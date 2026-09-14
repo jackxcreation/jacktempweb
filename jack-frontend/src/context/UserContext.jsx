@@ -1,3 +1,4 @@
+// jack-frontend/src/context/UserContext.jsx
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import { API_URL } from '../config';
 import { io } from 'socket.io-client';
@@ -6,17 +7,25 @@ const UserContext = createContext();
 export const useUser = () => useContext(UserContext);
 
 // Initialize socket without auto-connecting so we can inject cookies/auth later
-const socket = io(API_URL.replace('/api', ''), { autoConnect: false, withCredentials: true });
+const socket = io(API_URL ? API_URL.replace('/api', '') : 'http://localhost:5000', { autoConnect: false, withCredentials: true });
 
 export const UserProvider = ({ children }) => {
   const [user, setUser] = useState(() => {
-    const storedUser = localStorage.getItem('jack_user');
-    return storedUser ? JSON.parse(storedUser) : null;
+    try {
+      const storedUser = localStorage.getItem('jack_user');
+      return storedUser ? JSON.parse(storedUser) : null;
+    } catch (e) {
+      return null;
+    }
   });
 
   const [recentlyViewed, setRecentlyViewed] = useState(() => {
-    const storedUser = localStorage.getItem('jack_user');
-    return storedUser ? JSON.parse(storedUser).recentlyViewed || [] : [];
+    try {
+      const storedUser = JSON.parse(localStorage.getItem('jack_user'));
+      return storedUser ? storedUser.recentlyViewed || [] : [];
+    } catch (e) {
+      return [];
+    }
   });
 
   const [orders, setOrders] = useState([]);
@@ -26,7 +35,14 @@ export const UserProvider = ({ children }) => {
   // 🔥 PHASE 4 FIX: Consolidated Admin State into single Auth Context
   const [isAdmin, setIsAdmin] = useState(false);
 
-  const getToken = () => localStorage.getItem('token');
+  // 🔥 UPGRADE: Multi-key token retrieval matching rest of the enterprise app
+  const getToken = () => {
+    if (typeof window === 'undefined') return null;
+    return localStorage.getItem('token') || 
+           localStorage.getItem('adminToken') || 
+           localStorage.getItem('jack_token') || 
+           localStorage.getItem('admin_token');
+  };
 
   // 🔥 CLEAN SESSION VALIDATION VIA /auth/me AT STARTUP
   useEffect(() => {
@@ -61,6 +77,7 @@ export const UserProvider = ({ children }) => {
           localStorage.removeItem('jack_user');
           localStorage.removeItem('token');
           localStorage.removeItem('adminToken'); // Clear legacy token if exists
+          localStorage.removeItem('jack_token');
           setUser(null);
           setIsAdmin(false);
         }
@@ -97,7 +114,7 @@ export const UserProvider = ({ children }) => {
       });
       const data = await res.json();
       if (data.success) {
-        setWishlist(data.wishlist);
+        setWishlist(data.wishlist || []);
       }
     } catch (err) {
       console.error("Failed to load wishlist", err);
@@ -117,7 +134,7 @@ export const UserProvider = ({ children }) => {
       });
       const data = await res.json();
       if (data.success) {
-        setWishlist(data.wishlist);
+        setWishlist(data.wishlist || []);
         return data.isAdded;
       }
     } catch (err) {
@@ -148,7 +165,9 @@ export const UserProvider = ({ children }) => {
     const token = getToken();
     if (token) {
       socket.auth = { token }; 
-      socket.connect();
+      if (!socket.connected) {
+        socket.connect();
+      }
     }
   };
 
@@ -162,12 +181,14 @@ export const UserProvider = ({ children }) => {
       });
       const data = await res.json();
       if (res.ok) {
-        localStorage.setItem('token', data.token);
+        const authToken = data.token || data.accessToken;
+        localStorage.setItem('token', authToken);
+        localStorage.setItem('jack_token', authToken);
 
         // 🔥 PHASE 4 FIX: Centralized Admin Auth Handshake
         const userIsAdmin = data.user.role === 'admin' || data.user.role === 'manager';
         if (userIsAdmin) {
-          localStorage.setItem('adminToken', data.token); // Maintained for backward compatibility in Admin panel
+          localStorage.setItem('adminToken', authToken); // Maintained for backward compatibility in Admin panel
         }
         setIsAdmin(userIsAdmin);
 
@@ -179,7 +200,7 @@ export const UserProvider = ({ children }) => {
         return { success: true };
       }
       return { success: false, message: data.error || data.message || "Login failed" }; 
-    } catch (error) { return { success: false, message: "Server error" }; }
+    } catch (error) { return { success: false, message: "Server connection error" }; }
   };
 
   const socialLoginUser = async (name, email, firebaseId) => {
@@ -192,16 +213,18 @@ export const UserProvider = ({ children }) => {
       });
       const data = await res.json();
       if (res.ok) {
-        localStorage.setItem('token', data.token);
+        const authToken = data.token || data.accessToken;
+        localStorage.setItem('token', authToken);
+        localStorage.setItem('jack_token', authToken);
         setUser(data.user);
-        setIsAdmin(data.user.role === 'admin');
+        setIsAdmin(data.user.role === 'admin' || data.user.role === 'manager');
         setRecentlyViewed(data.user.recentlyViewed || []);
         localStorage.setItem('jack_user', JSON.stringify(data.user));
         connectSecureSocket();
         return { success: true, isNewUser: data.isNewUser }; 
       }
-      return { success: false };
-    } catch (error) { return { success: false }; }
+      return { success: false, message: data.message || "Social login failed" };
+    } catch (error) { return { success: false, message: "Server connection error" }; }
   };
 
   const logoutUser = async () => {
@@ -221,8 +244,11 @@ export const UserProvider = ({ children }) => {
     setRecentlyViewed([]);
     localStorage.removeItem('jack_user');
     localStorage.removeItem('token'); 
-    localStorage.removeItem('adminToken'); // Clean admin token as well
-    socket.disconnect(); 
+    localStorage.removeItem('adminToken');
+    localStorage.removeItem('jack_token');
+    if (socket.connected) {
+      socket.disconnect(); 
+    }
   };
 
   const fetchUserOrders = async (userId) => {
@@ -237,17 +263,17 @@ export const UserProvider = ({ children }) => {
       });
       if (!res.ok) throw new Error("Fetch failed");
       const data = await res.json();
-      setOrders(data);
+      setOrders(Array.isArray(data) ? data : (data.orders || []));
     } catch (error) { console.error("Error fetching orders:", error); }
   };
 
-  // 🔥 FIXED: placeOrder now handles both raw cart items and pre-mapped items gracefully
+  // 🔥 placeOrder handles both raw cart items and pre-mapped items gracefully
   const placeOrder = async (items, totalAmount, address, paymentMethod, trafficSource) => {
     if (!user) return { success: false, error: "Please login first" };
 
     const orderItems = items.map((item) => ({
-      productId: item.productId || item.id || item._id, // 🔥 Bulletproof mapping
-      quantity: Number(item.quantity),
+      productId: item.productId || item.id || item._id, // Bulletproof mapping
+      quantity: Number(item.quantity || 1),
     }));
 
     const orderData = { 
@@ -290,8 +316,9 @@ export const UserProvider = ({ children }) => {
   };
 
   const addRecentlyViewed = async (product) => {
-    if (!user) return; 
-    const exists = recentlyViewed.find(p => p.id === product.id);
+    if (!user || !product) return; 
+    const pId = product.id || product._id;
+    const exists = recentlyViewed.find(p => String(p.id || p._id) === String(pId));
     if (exists) return;
 
     const { image, images, ...safeProduct } = product;
@@ -340,7 +367,7 @@ export const UserProvider = ({ children }) => {
 
   const cancelOrder = (orderId) => {
     setOrders(prevOrders => 
-      prevOrders.map(order => order.id === orderId ? { ...order, status: 'Cancelled' } : order)
+      prevOrders.map(order => (order.id === orderId || order._id === orderId) ? { ...order, status: 'Cancelled' } : order)
     );
   };
 
@@ -352,13 +379,18 @@ export const UserProvider = ({ children }) => {
       connectSecureSocket(); 
       socket.emit('join_user_room', userId);
       
-      socket.on('force_logout', () => {
+      const handleForceLogout = () => {
         logoutUser();
         alert("Your session was terminated for security.");
         window.location.href = '/login'; 
-      });
+      };
+
+      socket.on('force_logout', handleForceLogout);
+      
+      return () => {
+        socket.off('force_logout', handleForceLogout);
+      };
     }
-    return () => socket.off('force_logout');
   }, [user?.id, user?._id, isLoadingSession]); 
 
   return (
@@ -371,3 +403,5 @@ export const UserProvider = ({ children }) => {
     </UserContext.Provider>
   );
 };
+
+export default UserProvider;

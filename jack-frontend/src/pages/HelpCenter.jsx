@@ -27,18 +27,30 @@ const HelpCenter = () => {
     window.scrollTo(0, 0);
     
     const fetchOrders = async () => {
-      const storedUser = JSON.parse(localStorage.getItem('jack_user'));
-      if (storedUser && storedUser.id) {
-        setCurrentUser(storedUser);
-        try {
-          // 🔥 PHASE 1 FIX: Removed localhost and used axiosInstance
-          const res = await axiosInstance.get(`/orders/user/${storedUser.id}`);
-          setUserOrders(res.data);
-        } catch (error) {
-          console.error("Orders fetch failed", error);
+      try {
+        // 🔥 UPGRADE: Robust multi-key localStorage fallback for user profile
+        let storedUser = null;
+        if (typeof window !== 'undefined') {
+          const rawUser = localStorage.getItem('jack_user') || localStorage.getItem('user') || localStorage.getItem('admin_user');
+          if (rawUser) {
+            storedUser = JSON.parse(rawUser);
+          }
         }
+
+        if (storedUser && (storedUser.id || storedUser._id)) {
+          setCurrentUser(storedUser);
+          const userId = storedUser.id || storedUser._id;
+          
+          // 🔥 PHASE 1 FIX: Removed localhost and used axiosInstance
+          const res = await axiosInstance.get(`/orders/user/${userId}`);
+          const ordersData = Array.isArray(res.data) ? res.data : (res.data?.orders || res.data?.data || []);
+          setUserOrders(ordersData);
+        }
+      } catch (error) {
+        console.error("Orders fetch failed", error);
+      } finally {
+        setIsLoading(false);
       }
-      setIsLoading(false);
     };
     fetchOrders();
   }, []);
@@ -49,6 +61,12 @@ const HelpCenter = () => {
     { id: 3, question: "How long does delivery take?", answer: "Standard delivery takes 3-5 business days. Express delivery (where available) takes 1-2 days." },
     { id: 4, question: "My payment failed but money was deducted.", answer: "Don't worry! Failed payments are automatically reversed by your bank within 48-72 hours. If it takes longer, please chat with our support team." }
   ];
+
+  // 🔥 UPGRADE: Filter FAQs dynamically based on user search input
+  const filteredFaqs = faqs.filter(faq => 
+    faq.question.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    faq.answer.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   const fadeUp = { hidden: { opacity: 0, y: 30 }, visible: { opacity: 1, y: 0, transition: { duration: 0.5 } } };
   const staggerContainer = { hidden: { opacity: 0 }, visible: { opacity: 1, transition: { staggerChildren: 0.1 } } };
@@ -144,7 +162,7 @@ const HelpCenter = () => {
                   </button>
                 </div>
                 <Link to="/contact" className="block text-center mt-4 text-sm font-bold text-slate-500 hover:text-[#FF4500] transition-colors">
-                 View Other Contact Options →
+                   View Other Contact Options →
                 </Link>
               </div>
             </div>
@@ -193,34 +211,41 @@ const HelpCenter = () => {
                     <Link to="/shop" className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl font-bold hover:bg-indigo-700 transition-colors">Start Shopping</Link>
                   </div>
                 ) : (
-                  userOrders.map((order, idx) => (
-                    <div key={idx} className="flex flex-col sm:flex-row gap-4 sm:gap-6 p-6 hover:bg-slate-50 transition-colors group cursor-default">
-                      <Link to={`/order/${order.id}`} className="w-20 h-20 bg-slate-100 rounded-xl overflow-hidden flex-shrink-0 border border-slate-200 block">
-                        <img src={order.items[0]?.image} alt="product" className="w-full h-full object-cover" />
-                      </Link>
-                      
-                      <div className="flex-1">
-                        <Link to={`/order/${order.id}`} className="block">
-                          <h3 className="font-bold text-slate-800 text-base line-clamp-1 hover:text-[#FF4500] transition-colors">{order.items[0]?.title}</h3>
+                  userOrders.map((order, idx) => {
+                    const orderId = order.id || order._id;
+                    const firstItem = order.items?.[0] || {};
+                    const orderStatus = order.status || 'Processing';
+                    const orderDate = order.date || order.createdAt ? new Date(order.createdAt).toLocaleDateString() : 'Recent';
+
+                    return (
+                      <div key={orderId || idx} className="flex flex-col sm:flex-row gap-4 sm:gap-6 p-6 hover:bg-slate-50 transition-colors group cursor-default">
+                        <Link to={`/order/${orderId}`} className="w-20 h-20 bg-slate-100 rounded-xl overflow-hidden flex-shrink-0 border border-slate-200 block">
+                          <img src={firstItem.image || '/logo.png'} alt="product" className="w-full h-full object-cover" onError={(e) => { e.target.src = '/logo.png'; }} />
                         </Link>
-                        <div className="flex items-center gap-2 mt-2">
-                          <span className={`w-2 h-2 rounded-full ${['Delivered'].includes(order.status) ? 'bg-green-500' : 'bg-orange-500'}`}></span>
-                          <span className="text-sm font-bold text-slate-600">{order.status} on {order.date}</span>
+                        
+                        <div className="flex-1">
+                          <Link to={`/order/${orderId}`} className="block">
+                            <h3 className="font-bold text-slate-800 text-base line-clamp-1 hover:text-[#FF4500] transition-colors">{firstItem.title || 'Jack Essentials Product'}</h3>
+                          </Link>
+                          <div className="flex items-center gap-2 mt-2">
+                            <span className={`w-2 h-2 rounded-full ${['Delivered', 'DELIVERED'].includes(orderStatus) ? 'bg-green-500' : 'bg-orange-500'}`}></span>
+                            <span className="text-sm font-bold text-slate-600">{orderStatus} on {orderDate}</span>
+                          </div>
+                          <p className="text-xs text-slate-400 mt-1 font-mono">Order ID: #{orderId}</p>
                         </div>
-                        <p className="text-xs text-slate-400 mt-1 font-mono">Order ID: {order.id}</p>
+                        
+                        <div className="sm:self-center flex gap-3">
+                           <Link to={`/order/${orderId}`} className="text-slate-600 font-bold text-sm bg-white border border-slate-200 px-4 py-2 rounded-lg hover:bg-slate-100 transition-all whitespace-nowrap text-center">
+                             View Details
+                           </Link>
+                           {/* THIS BUTTON PASSES CONTEXT TO OUR NEW CHAT */}
+                           <button onClick={() => openCustomChat(order)} className="text-[#FF4500] font-bold text-sm bg-orange-50 border border-orange-100 px-4 py-2 rounded-lg hover:bg-[#FF4500] hover:text-white transition-all whitespace-nowrap flex items-center gap-2">
+                             <FiMessageSquare size={16}/> Need Help
+                           </button>
+                        </div>
                       </div>
-                      
-                      <div className="sm:self-center flex gap-3">
-                         <Link to={`/order/${order.id}`} className="text-slate-600 font-bold text-sm bg-white border border-slate-200 px-4 py-2 rounded-lg hover:bg-slate-100 transition-all whitespace-nowrap text-center">
-                           View Details
-                         </Link>
-                         {/* THIS BUTTON PASSES CONTEXT TO OUR NEW CHAT */}
-                         <button onClick={() => openCustomChat(order)} className="text-[#FF4500] font-bold text-sm bg-orange-50 border border-orange-100 px-4 py-2 rounded-lg hover:bg-[#FF4500] hover:text-white transition-all whitespace-nowrap flex items-center gap-2">
-                           <FiMessageSquare size={16}/> Need Help
-                         </button>
-                      </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </motion.div>
@@ -229,31 +254,35 @@ const HelpCenter = () => {
             <motion.div variants={fadeUp} initial="hidden" animate="visible" className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 md:p-8">
               <h2 className="text-xl font-black text-slate-900 mb-6">Frequently Asked Questions</h2>
               <div className="space-y-4">
-                {faqs.map((faq, index) => (
-                  <div key={faq.id} className="border border-slate-200 rounded-2xl overflow-hidden transition-all">
-                    <button 
-                      onClick={() => setActiveFaq(activeFaq === index ? null : index)}
-                      className="w-full flex justify-between items-center p-5 bg-white hover:bg-slate-50 transition-colors text-left"
-                    >
-                      <span className="font-bold text-slate-800 pr-4">{faq.question}</span>
-                      {activeFaq === index ? <FiChevronUp className="text-[#FF4500] flex-shrink-0" size={20} /> : <FiChevronDown className="text-slate-400 flex-shrink-0" size={20} />}
-                    </button>
-                    <AnimatePresence>
-                      {activeFaq === index && (
-                        <motion.div 
-                          initial={{ height: 0, opacity: 0 }} 
-                          animate={{ height: "auto", opacity: 1 }} 
-                          exit={{ height: 0, opacity: 0 }}
-                          className="bg-slate-50 border-t border-slate-100"
-                        >
-                          <div className="p-5 text-sm text-slate-600 leading-relaxed">
-                            {faq.answer}
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
-                ))}
+                {filteredFaqs.length === 0 ? (
+                  <p className="text-sm text-slate-500 text-center py-6">No matching FAQs found. Try searching something else or chat with us!</p>
+                ) : (
+                  filteredFaqs.map((faq) => (
+                    <div key={faq.id} className="border border-slate-200 rounded-2xl overflow-hidden transition-all">
+                      <button 
+                        onClick={() => setActiveFaq(activeFaq === faq.id ? null : faq.id)}
+                        className="w-full flex justify-between items-center p-5 bg-white hover:bg-slate-50 transition-colors text-left"
+                      >
+                        <span className="font-bold text-slate-800 pr-4">{faq.question}</span>
+                        {activeFaq === faq.id ? <FiChevronUp className="text-[#FF4500] flex-shrink-0" size={20} /> : <FiChevronDown className="text-slate-400 flex-shrink-0" size={20} />}
+                      </button>
+                      <AnimatePresence>
+                        {activeFaq === faq.id && (
+                          <motion.div 
+                            initial={{ height: 0, opacity: 0 }} 
+                            animate={{ height: "auto", opacity: 1 }} 
+                            exit={{ height: 0, opacity: 0 }}
+                            className="bg-slate-50 border-t border-slate-100"
+                          >
+                            <div className="p-5 text-sm text-slate-600 leading-relaxed">
+                              {faq.answer}
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  ))
+                )}
               </div>
             </motion.div>
 

@@ -1,3 +1,4 @@
+// routes/apiRouter.js
 const express = require('express');
 const router = express.Router();
 const nodemailer = require('nodemailer'); 
@@ -32,31 +33,35 @@ router.post('/api/admin/save-push-subscription', protect, checkPermission('setti
     if (!exists) {
       pushSubscriptions.push(subscription);
     }
-    res.json({ success: true, message: "Push subscription saved successfully!" });
+    return res.json({ success: true, message: "Push subscription saved successfully!" });
   } catch (error) {
     console.error("Save Push Subscription Error:", error);
-    res.status(500).json({ success: false, message: "Failed to save subscription" });
+    return res.status(500).json({ success: false, message: "Failed to save subscription" });
   }
 });
 
 // Helper function to trigger push notification to all subscribed admin devices
 async function sendAdminPushAlert(title, body, url = '/') {
   if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
-    webpush.setVapidDetails(
-      'mailto:support@thejackessentials.com',
-      process.env.VAPID_PUBLIC_KEY,
-      process.env.VAPID_PRIVATE_KEY
-    );
+    try {
+      webpush.setVapidDetails(
+        'mailto:support@thejackessentials.com',
+        process.env.VAPID_PUBLIC_KEY,
+        process.env.VAPID_PRIVATE_KEY
+      );
 
-    const payload = JSON.stringify({ title, body, url });
-    
-    // Broadcast to all active subscriptions
-    for (const sub of pushSubscriptions) {
-      try {
-        await webpush.sendNotification(sub, payload);
-      } catch (err) {
-        console.error("Error sending push notification to client:", err);
+      const payload = JSON.stringify({ title, body, url });
+      
+      // Broadcast to all active subscriptions
+      for (const sub of pushSubscriptions) {
+        try {
+          await webpush.sendNotification(sub, payload);
+        } catch (err) {
+          console.error("Error sending push notification to client:", err);
+        }
       }
+    } catch (vapidError) {
+      console.error("VAPID Setup Error:", vapidError);
     }
   }
 }
@@ -66,9 +71,10 @@ router.post('/api/admin/send-test-notification', protect, checkPermission('setti
   try {
     const { title, body } = req.body;
     await sendAdminPushAlert(title || '🚨 Jack Essentials Alert', body || 'Operational alert triggered.');
-    res.json({ success: true, message: "Push notification dispatched successfully!" });
+    return res.json({ success: true, message: "Push notification dispatched successfully!" });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Failed to send notification" });
+    console.error("Test Notification Error:", error);
+    return res.status(500).json({ success: false, message: "Failed to send notification" });
   }
 });
 
@@ -98,7 +104,7 @@ router.get('/api/admin/command-center', protect, checkPermission('settings:all')
     // 7. Products Needing Approval (Listing status Draft)
     const pendingApprovalCount = await Product.countDocuments({ listingStatus: "Draft" });
 
-    res.json({
+    return res.json({
       success: true,
       alerts: {
         failedPayments: failedPaymentsCount,
@@ -112,7 +118,7 @@ router.get('/api/admin/command-center', protect, checkPermission('settings:all')
     });
   } catch (error) {
     console.error("Command Center Stats Error:", error);
-    res.status(500).json({ success: false, message: "Failed to load command center alerts" });
+    return res.status(500).json({ success: false, message: "Failed to load command center alerts" });
   }
 });
 
@@ -186,7 +192,7 @@ router.get('/api/dashboard-stats', protect, checkPermission('settings:all'), asy
       updatedAt: { $gte: new Date(new Date().setHours(new Date().getHours() - 24)) }
     });
 
-    res.json({
+    return res.json({
       success: true,
       finance,
       pipeline: {
@@ -205,7 +211,7 @@ router.get('/api/dashboard-stats', protect, checkPermission('settings:all'), asy
     });
   } catch (error) {
     console.error("Dashboard Stats Error:", error);
-    res.status(500).json({ success: false, message: "Failed to load dashboard metrics" });
+    return res.status(500).json({ success: false, message: "Failed to load dashboard metrics" });
   }
 });
 
@@ -214,7 +220,9 @@ router.get('/api/dashboard-stats', protect, checkPermission('settings:all'), asy
 // ==========================================
 router.get('/api/business-insights', protect, checkPermission('settings:all'), async (req, res) => {
   try {
-    if (!process.env.GEMINI_API_KEY) return res.json({ insights: "AI API Key missing. Please configure Gemini." });
+    if (!process.env.GEMINI_API_KEY) {
+      return res.json({ success: false, insights: "AI API Key missing. Please configure Gemini." });
+    }
 
     // 1. Snapshot for AI
     const totalOrders = await Order.countDocuments();
@@ -233,10 +241,10 @@ router.get('/api/business-insights', protect, checkPermission('settings:all'), a
     const result = await model.generateContent(prompt);
     const text = result.response.text();
 
-    res.json({ success: true, insights: text });
+    return res.json({ success: true, insights: text });
   } catch (error) {
     console.error("AI Insight Error:", error);
-    res.status(500).json({ success: false, message: "AI Insights failed to load." });
+    return res.status(500).json({ success: false, message: "AI Insights failed to load." });
   }
 });
 
@@ -251,8 +259,11 @@ router.get('/api/settings', async (req, res) => {
       await newSettings.save();
       settings = newSettings.toObject(); 
     }
-    res.json(settings);
-  } catch (error) { res.status(500).json({ message: "Failed to fetch settings" }); }
+    return res.json(settings);
+  } catch (error) { 
+    console.error("Fetch Settings Error:", error);
+    return res.status(500).json({ message: "Failed to fetch settings" }); 
+  }
 });
 
 router.put('/api/settings', protect, checkPermission('settings:all'), async (req, res) => {
@@ -269,8 +280,11 @@ router.put('/api/settings', protect, checkPermission('settings:all'), async (req
       settings = new Setting(req.body);
       await settings.save();
     }
-    res.json({ message: "Store configuration updated successfully!", settings });
-  } catch (error) { res.status(500).json({ message: "Failed to update settings" }); }
+    return res.json({ message: "Store configuration updated successfully!", settings });
+  } catch (error) { 
+    console.error("Update Settings Error:", error);
+    return res.status(500).json({ message: "Failed to update settings" }); 
+  }
 });
 
 // ==========================================
@@ -287,8 +301,11 @@ router.post('/api/send-report', protect, checkPermission('finance:all'), async (
       to: [to], subject: subject, html: htmlContent
     });
     if (error) return res.status(400).json({ error: error.message });
-    res.status(200).json({ success: true, message: "Report sent successfully!" });
-  } catch (error) { res.status(500).json({ error: "Failed to send report email" }); }
+    return res.status(200).json({ success: true, message: "Report sent successfully!" });
+  } catch (error) { 
+    console.error("Send Report Email Error:", error);
+    return res.status(500).json({ error: "Failed to send report email" }); 
+  }
 });
 
 // ==========================================
@@ -297,23 +314,32 @@ router.post('/api/send-report', protect, checkPermission('finance:all'), async (
 router.get('/api/email-templates', protect, checkPermission('settings:all'), async (req, res) => {
   try {
     const templates = await EmailTemplate.find().sort({ createdAt: -1 }).lean();
-    res.json(templates);
-  } catch (error) { res.status(500).json({ message: "Error fetching templates" }); }
+    return res.json(templates);
+  } catch (error) { 
+    console.error("Get Email Templates Error:", error);
+    return res.status(500).json({ message: "Error fetching templates" }); 
+  }
 });
 
 router.post('/api/email-templates', protect, checkPermission('settings:all'), async (req, res) => {
   try {
     const newTemplate = new EmailTemplate(req.body);
     await newTemplate.save();
-    res.status(201).json(newTemplate);
-  } catch (error) { res.status(500).json({ message: "Error saving template" }); }
+    return res.status(201).json(newTemplate);
+  } catch (error) { 
+    console.error("Save Email Template Error:", error);
+    return res.status(500).json({ message: "Error saving template" }); 
+  }
 });
 
 router.delete('/api/email-templates/:id', protect, checkPermission('settings:all'), async (req, res) => {
   try {
     await EmailTemplate.findByIdAndDelete(req.params.id);
-    res.json({ message: "Template deleted" });
-  } catch (error) { res.status(500).json({ message: "Error deleting template" }); }
+    return res.json({ message: "Template deleted" });
+  } catch (error) { 
+    console.error("Delete Email Template Error:", error);
+    return res.status(500).json({ message: "Error deleting template" }); 
+  }
 });
 
 // ==========================================
@@ -348,7 +374,7 @@ router.post('/api/gemini-chat', aiPublicLimiter, async (req, res) => {
 
     let formattedHistory = chatHistory ? chatHistory.map(msg => ({
       role: (msg.role === 'model' || msg.role === 'bot') ? 'model' : 'user',
-      parts: [{ text: msg.parts[0].text }],
+      parts: [{ text: msg.parts && msg.parts[0] ? msg.parts[0].text : (msg.text || '') }],
     })) : [];
 
     while (formattedHistory.length > 0 && formattedHistory[0].role === 'model') {
@@ -357,10 +383,10 @@ router.post('/api/gemini-chat', aiPublicLimiter, async (req, res) => {
 
     const chat = model.startChat({ history: formattedHistory, generationConfig: { temperature: 0.3 } });
     const result = await chat.sendMessage(userMessage);
-    res.json({ text: result.response.text() });
+    return res.json({ text: result.response.text() });
   } catch (error) { 
     console.error("Public Gemini Error:", error);
-    res.status(500).json({ text: "[TRANSFER_TO_AGENT]" }); 
+    return res.status(500).json({ text: "[TRANSFER_TO_AGENT]" }); 
   }
 });
 
@@ -370,8 +396,11 @@ router.post('/api/gemini-chat', aiPublicLimiter, async (req, res) => {
 router.get('/api/tickets', protect, checkPermission('tickets:all'), async (req, res) => {
   try {
     const tickets = await Ticket.find().sort({ createdAt: -1 }).lean();
-    res.json(tickets);
-  } catch (error) { res.status(500).json({ message: "Failed to load tickets" }); }
+    return res.json(tickets);
+  } catch (error) { 
+    console.error("Fetch Tickets Error:", error);
+    return res.status(500).json({ message: "Failed to load tickets" }); 
+  }
 });
 
 router.get('/api/support-analytics', protect, checkPermission('tickets:all'), async (req, res) => {
@@ -420,7 +449,7 @@ router.get('/api/support-analytics', protect, checkPermission('tickets:all'), as
     const avgRT = rtCount > 0 ? Math.round(totalRTMinutes / rtCount) : 120;
     const avgCSAT = csatCount > 0 ? (csatSum / csatCount).toFixed(1) : 4.8;
 
-    res.json({
+    return res.json({
       success: true,
       analytics: {
         averageFirstResponseTime: `${avgFRT} mins`,
@@ -431,7 +460,7 @@ router.get('/api/support-analytics', protect, checkPermission('tickets:all'), as
     });
   } catch (error) {
     console.error("Support Analytics Error:", error);
-    res.status(500).json({ success: false, message: "Failed to load support analytics" });
+    return res.status(500).json({ success: false, message: "Failed to load support analytics" });
   }
 });
 
@@ -441,10 +470,10 @@ router.get('/api/support-analytics', protect, checkPermission('tickets:all'), as
 router.post('/api/sync-cart', protect, async (req, res) => {
   try {
     const { items, totalValue } = req.body;
-    
     const secureUserId = req.user._id; 
+    const cartItems = Array.isArray(items) ? items : [];
     
-    if (items.length === 0) {
+    if (cartItems.length === 0) {
       await AbandonedCart.findOneAndDelete({ "user.userId": secureUserId });
       return res.json({ message: "Cart cleared" });
     }
@@ -456,15 +485,15 @@ router.post('/api/sync-cart', protect, async (req, res) => {
         email: req.user.email, 
         phone: req.user.phone || "No Number" 
       },
-      items, 
-      totalValue, 
+      items: cartItems, 
+      totalValue: Number(totalValue) || 0, 
       updatedAt: new Date()
     };
 
     const updatedCart = await AbandonedCart.findOneAndUpdate(
       { "user.userId": secureUserId }, 
       { $set: cartData }, 
-      { upsert: true, returnDocument: 'after' }
+      { upsert: true, new: true } // 🔥 Universal Mongoose new: true compatibility
     );
 
     const io = req.app.get("io");
@@ -472,15 +501,21 @@ router.post('/api/sync-cart', protect, async (req, res) => {
       try { io.to('support').emit('ticket.created', updatedCart); } catch (e) {}
     }
 
-    res.json({ message: "Cart synced successfully" });
-  } catch (error) { res.status(500).json({ message: "Error syncing cart" }); }
+    return res.json({ message: "Cart synced successfully" });
+  } catch (error) { 
+    console.error("Sync Cart Error:", error);
+    return res.status(500).json({ message: "Error syncing cart" }); 
+  }
 });
 
 router.get('/api/abandoned-carts', protect, checkPermission('orders:all'), async (req, res) => {
   try {
     const carts = await AbandonedCart.find().sort({ updatedAt: -1 }).lean();
-    res.json(carts);
-  } catch (error) { res.status(500).json({ message: "Error fetching abandoned carts" }); }
+    return res.json(carts);
+  } catch (error) { 
+    console.error("Fetch Abandoned Carts Error:", error);
+    return res.status(500).json({ message: "Error fetching abandoned carts" }); 
+  }
 });
 
 router.put('/api/abandoned-carts/:id/note', protect, checkPermission('orders:all'), async (req, res) => {
@@ -508,13 +543,13 @@ router.put('/api/abandoned-carts/:id/note', protect, checkPermission('orders:all
     const updatedCart = await AbandonedCart.findByIdAndUpdate(
       req.params.id, 
       { $set: updateData }, 
-      { returnDocument: 'after' }
+      { new: true }
     );
     
-    res.json(updatedCart);
+    return res.json(updatedCart);
   } catch (error) { 
     console.error("Error updating abandoned cart status:", error);
-    res.status(500).json({ message: "Error updating note" }); 
+    return res.status(500).json({ message: "Error updating note" }); 
   }
 });
 

@@ -1,3 +1,4 @@
+// models/PriceAlert.js
 const mongoose = require('mongoose');
 
 const priceAlertSchema = new mongoose.Schema({
@@ -23,13 +24,30 @@ const priceAlertSchema = new mongoose.Schema({
   },
   isNotified: {
     type: Boolean,
-    default: false
+    default: false,
+    index: true
+  },
+  triggeredAt: {
+    type: Date
   }
 }, { timestamps: true });
 
 // Prevent duplicate alert subscription for same user & product
 priceAlertSchema.index({ user: 1, product: 1 }, { unique: true });
 
-const PriceAlert = mongoose.model('PriceAlert', priceAlertSchema);
+// ==========================================
+// 🔥 PRO FEATURE: WORKER OPTIMIZATION INDEX
+// ==========================================
+priceAlertSchema.index({ product: 1, isNotified: 1 });
+
+// ==========================================
+// 🔥 PRO FEATURE: HELPER STATIC METHODS
+// ==========================================
+priceAlertSchema.statics.findPendingAlertsForProduct = function(productId) {
+  return this.find({ product: productId, isNotified: false }).populate('user', 'email name');
+};
+
+// 🔥 SAFE MODEL COMPILATION PATTERN TO PREVENT OVERWRITE ERROR
+const PriceAlert = mongoose.models.PriceAlert || mongoose.model('PriceAlert', priceAlertSchema);
 
 module.exports = PriceAlert;

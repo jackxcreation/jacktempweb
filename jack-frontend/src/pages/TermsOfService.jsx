@@ -1,8 +1,15 @@
-import React from "react";
+// src/pages/TermsOfService.jsx
+import React, { useEffect } from "react";
 import { motion } from "framer-motion";
 import { FiAlertTriangle, FiDollarSign, FiFileText, FiGlobe, FiShield } from "react-icons/fi";
 
 export default function TermsOfService() {
+  // 🔥 Scroll to top on mount & set professional SEO title
+  useEffect(() => {
+    window.scrollTo(0, 0);
+    document.title = "Terms of Service | Jack Essentials — User Agreement";
+  }, []);
+
   // Animation Variants
   const fadeUp = {
     hidden: { opacity: 0, y: 30 },
@@ -15,7 +22,7 @@ export default function TermsOfService() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0B0F19] text-slate-200 font-sans pb-20 overflow-hidden">
+    <div className="min-h-screen bg-[#0B0F19] text-slate-200 font-sans pb-20 overflow-hidden selection:bg-[#FF4500] selection:text-white">
       
       {/* HEADER SECTION */}
       <div className="relative pt-32 pb-16 px-6 text-center border-b border-slate-800">
@@ -43,7 +50,7 @@ export default function TermsOfService() {
           {/* Rule 1 */}
           <motion.section variants={fadeUp} className="bg-slate-800/30 p-8 rounded-3xl border border-slate-700/50 hover:border-slate-600 transition-colors">
             <div className="flex items-center mb-4">
-              <FiAlertTriangle className="text-yellow-500 w-6 h-6 mr-3" />
+              <FiAlertTriangle className="text-yellow-500 w-6 h-6 mr-3 shrink-0" />
               <h2 className="text-2xl font-bold text-white">1. Order Acceptance & Cancellations</h2>
             </div>
             <p className="text-slate-400 leading-relaxed text-sm md:text-base">
@@ -54,7 +61,7 @@ export default function TermsOfService() {
           {/* Rule 2 */}
           <motion.section variants={fadeUp} className="bg-slate-800/30 p-8 rounded-3xl border border-slate-700/50 hover:border-slate-600 transition-colors">
             <div className="flex items-center mb-4">
-              <FiDollarSign className="text-green-400 w-6 h-6 mr-3" />
+              <FiDollarSign className="text-green-400 w-6 h-6 mr-3 shrink-0" />
               <h2 className="text-2xl font-bold text-white">2. Payments & Cash on Delivery (COD)</h2>
             </div>
             <p className="text-slate-400 leading-relaxed text-sm md:text-base">
@@ -70,7 +77,7 @@ export default function TermsOfService() {
           <motion.section variants={fadeUp} className="bg-slate-800/30 p-8 rounded-3xl border border-slate-700/50 hover:border-red-900/30 transition-colors relative overflow-hidden">
             <div className="absolute top-0 right-0 w-32 h-32 bg-red-500/5 rounded-bl-full pointer-events-none"></div>
             <div className="flex items-center mb-4 relative z-10">
-              <FiShield className="text-red-400 w-6 h-6 mr-3" />
+              <FiShield className="text-red-400 w-6 h-6 mr-3 shrink-0" />
               <h2 className="text-2xl font-bold text-white">3. Account Suspension & Fraud</h2>
             </div>
             <p className="text-slate-400 leading-relaxed text-sm md:text-base relative z-10">
@@ -81,7 +88,7 @@ export default function TermsOfService() {
           {/* Rule 4 */}
           <motion.section variants={fadeUp} className="bg-slate-800/30 p-8 rounded-3xl border border-slate-700/50 hover:border-slate-600 transition-colors">
             <div className="flex items-center mb-4">
-              <FiFileText className="text-blue-400 w-6 h-6 mr-3" />
+              <FiFileText className="text-blue-400 w-6 h-6 mr-3 shrink-0" />
               <h2 className="text-2xl font-bold text-white">4. Intellectual Property Rights</h2>
             </div>
             <p className="text-slate-400 leading-relaxed text-sm md:text-base">
@@ -92,7 +99,7 @@ export default function TermsOfService() {
           {/* Rule 5 */}
           <motion.section variants={fadeUp} className="bg-slate-800/30 p-8 rounded-3xl border border-slate-700/50 hover:border-[#FF4500]/50 transition-colors">
             <div className="flex items-center mb-4">
-              <FiGlobe className="text-[#FF4500] w-6 h-6 mr-3" />
+              <FiGlobe className="text-[#FF4500] w-6 h-6 mr-3 shrink-0" />
               <h2 className="text-2xl font-bold text-white">5. Governing Law & Jurisdiction</h2>
             </div>
             <p className="text-slate-400 leading-relaxed text-sm md:text-base">
@@ -110,7 +117,7 @@ export default function TermsOfService() {
           className="mt-16 text-center border-t border-slate-800 pt-8"
         >
           <p className="text-slate-500 text-sm">
-            Last Updated: {new Date().toLocaleDateString()} <br />
+            Last Updated: {new Date().toLocaleDateString('en-IN', { month: 'long', day: 'numeric', year: 'numeric' })} <br />
             If you have any questions regarding these terms, please contact our support team.
           </p>
         </motion.div>

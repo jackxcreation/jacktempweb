@@ -1,3 +1,4 @@
+// routes/ssrProductRouter.js
 const express = require('express');
 const router = express.Router();
 // 🔥 FIX: Imported Review model to fetch actual real reviews from the database
@@ -22,7 +23,7 @@ const escapeHTML = (str) => {
 router.get(['/api/ssr-product/:id', '/product/:id'], async (req, res) => {
   try {
     const productId = req.params.id;
-    if (!productId.match(/^[0-9a-fA-F]{24}$/)) {
+    if (!productId || !productId.match(/^[0-9a-fA-F]{24}$/)) {
       return res.status(404).send("Invalid Product ID");
     }
 
@@ -43,7 +44,8 @@ router.get(['/api/ssr-product/:id', '/product/:id'], async (req, res) => {
     // 🤖 BOT DETECTION (Redirect normal users to React SPA)
     // ==========================================
     const userAgent = req.headers['user-agent'] || '';
-    const isBot = /bot|googlebot|crawler|spider|robot|crawling|bingbot|yandexbot|slurp|duckduckbot|baiduspider|twitterbot|facebookexternalhit|linkedinbot|whatsapp/i.test(userAgent);
+    // 🔥 Enhanced bot regex including modern social & search scrapers
+    const isBot = /bot|googlebot|crawler|spider|robot|crawling|bingbot|yandexbot|slurp|duckduckbot|baiduspider|twitterbot|facebookexternalhit|linkedinbot|whatsapp|telegrambot|slackbot|applebot|discordbot/i.test(userAgent);
 
     // Agar normal user direct backend ke /product/:id par aaye, toh use Frontend par bhej do
     if (!isBot && req.path.startsWith('/product/')) {
@@ -260,10 +262,10 @@ router.get(['/api/ssr-product/:id', '/product/:id'], async (req, res) => {
       </html>
     `;
 
-    res.send(prerenderedHtml);
+    return res.send(prerenderedHtml);
   } catch (error) {
     console.error("SSR Error:", error);
-    res.status(500).send("Server Error");
+    return res.status(500).send("Server Error");
   }
 });
 

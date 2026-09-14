@@ -1,6 +1,7 @@
+// postcss.config.js
 export default {
   plugins: {
-    // 1. Tailwind CSS Engine
+    // 1. Tailwind CSS Engine (Tailwind v4 PostCSS plugin)
     '@tailwindcss/postcss': {},
     
     // 🔥 PRO FEATURE: Autoprefixer 🔥

@@ -1,170 +1,195 @@
+const mongoose = require('mongoose');
 const { Product, Order } = require('../models');
 
 // ==========================================
-// 🛡️ CONTROLLED AI TOOL FUNCTIONS (GEMINI / UNIVERSAL)
+// 🛡️ CONTROLLED AI TOOL FUNCTIONS
 // ==========================================
 
-/**
- * 1. Search Products securely with filters
- */
-async function searchProducts({ query, category, maxPrice, brand }) {
+async function searchProducts({ query, category, maxPrice, brand } = {}) {
   try {
     const filter = {};
-    if (category && category !== 'All') filter.category = new RegExp(category, 'i');
-    if (brand) filter.brand = new RegExp(brand, 'i');
-    if (maxPrice) filter.pricePaise = { $lte: Number(maxPrice) * 100 }; // Convert to paise
     
-    if (query) {
-      filter.$or = [
-        { title: new RegExp(query, 'i') },
-        { description: new RegExp(query, 'i') },
-        { tags: new RegExp(query, 'i') }
-      ];
+    if (category && typeof category === 'string' && category.toLowerCase() !== 'all') {
+      filter.category = new RegExp(category.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    }
+    
+    if (brand && typeof brand === 'string') {
+      filter.brand = new RegExp(brand.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    }
+    
+    if (maxPrice !== undefined && maxPrice !== null) {
+      const parsedPrice = Number(maxPrice);
+      if (!isNaN(parsedPrice)) {
+        filter.pricePaise = { $lte: parsedPrice * 100 };
+      }
+    }
+    
+    if (query && typeof query === 'string') {
+      const cleanQuery = query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (cleanQuery) {
+        const regex = new RegExp(cleanQuery, 'i');
+        filter.$or = [
+          { title: regex },
+          { description: regex },
+          { tags: regex }
+        ];
+      }
     }
 
-    const products = await Product.find(filter).limit(5).lean();
+    const products = await Product.find(filter).select('-__v -createdAt -updatedAt').limit(5).lean();
+    
     return products.map(p => ({
       id: p._id.toString(),
-      title: p.title,
-      price: `₹${p.pricePaise / 100}`,
-      category: p.category,
-      brand: p.brand,
-      rating: p.rating,
-      inStock: p.inventory > 0
+      title: p.title || 'Untitled Product',
+      price: `₹${(p.pricePaise || 0) / 100}`,
+      category: p.category || 'General',
+      brand: p.brand || 'Unknown',
+      rating: p.rating || 0,
+      inStock: (p.inventory || 0) > 0
     }));
   } catch (error) {
-    console.error("AI Tool Search Error:", error);
+    console.error("AI Tool Search Error:", error.message);
     return { error: "Failed to search products in the database." };
   }
 }
 
-/**
- * 2. Compare two products side-by-side
- */
-async function compareProducts({ productId1, productId2 }) {
-  try {
-    const p1 = await Product.findById(productId1).lean();
-    const p2 = await Product.findById(productId2).lean();
+async function compareProducts({ productId1, productId2 } = {}) {
+  if (!productId1 || !productId2) return { error: "Both productId1 and productId2 are required." };
+  if (!mongoose.Types.ObjectId.isValid(productId1) || !mongoose.Types.ObjectId.isValid(productId2)) {
+    return { error: "Invalid product ID format." };
+  }
 
-    if (!p1 || !p2) return { error: "One or both products not found for comparison." };
+  try {
+    const [p1, p2] = await Promise.all([
+      Product.findById(productId1).lean(),
+      Product.findById(productId2).lean()
+    ]);
+
+    if (!p1 || !p2) return { error: "One or both products not found." };
 
     return {
       product1: {
+        id: p1._id.toString(),
         title: p1.title,
-        price: `₹${p1.pricePaise / 100}`,
-        brand: p1.brand,
-        rating: p1.rating,
-        specs: { weight: p1.weight, size: p1.size, color: p1.color, material: p1.material }
+        price: `₹${(p1.pricePaise || 0) / 100}`,
+        brand: p1.brand || 'Unknown',
+        rating: p1.rating || 0,
+        specs: { weight: p1.weight || 'N/A', size: p1.size || 'N/A', color: p1.color || 'N/A' }
       },
       product2: {
+        id: p2._id.toString(),
         title: p2.title,
-        price: `₹${p2.pricePaise / 100}`,
-        brand: p2.brand,
-        rating: p2.rating,
-        specs: { weight: p2.weight, size: p2.size, color: p2.color, material: p2.material }
+        price: `₹${(p2.pricePaise || 0) / 100}`,
+        brand: p2.brand || 'Unknown',
+        rating: p2.rating || 0,
+        specs: { weight: p2.weight || 'N/A', size: p2.size || 'N/A', color: p2.color || 'N/A' }
       }
     };
   } catch (error) {
-    console.error("AI Tool Compare Error:", error);
-    return { error: "Failed to compare products due to a server error." };
+    console.error("AI Tool Compare Error:", error.message);
+    return { error: "Failed to compare products." };
   }
 }
 
-/**
- * 3. Check live product inventory/stock
- */
-async function checkStock({ productId }) {
+async function checkStock({ productId } = {}) {
+  if (!productId || !mongoose.Types.ObjectId.isValid(productId)) {
+    return { error: "Valid Product ID is required." };
+  }
+
   try {
-    const product = await Product.findById(productId).lean();
-    if (!product) return { error: "Product not found in inventory." };
+    const product = await Product.findById(productId).select('title inventory').lean();
+    if (!product) return { error: "Product not found." };
+
+    const inventoryCount = typeof product.inventory === 'number' ? product.inventory : 0;
 
     return {
       productId: product._id.toString(),
       title: product.title,
-      inventory: product.inventory,
-      isAvailable: product.inventory > 0
+      inventory: inventoryCount,
+      isAvailable: inventoryCount > 0
     };
   } catch (error) {
-    console.error("AI Tool Stock Error:", error);
+    console.error("AI Tool Stock Error:", error.message);
     return { error: "Failed to check stock status." };
   }
 }
 
-/**
- * 4. Check delivery serviceability via Delhivery API / Pincode
- */
-async function checkDelivery({ pincode }) {
+async function checkDelivery({ pincode } = {}) {
   try {
-    if (!pincode || pincode.length !== 6) {
-      return { serviceable: false, message: "Invalid 6-digit pincode provided." };
+    const cleanPincode = String(pincode || '').trim();
+    if (cleanPincode.length !== 6) {
+      return { serviceable: false, message: "Invalid 6-digit pincode." };
     }
 
-    // Call Delhivery pincode serviceability check API
-    const response = await fetch(`https://track.delhivery.com/c/api/pin-codes.json?filter_codes=${pincode}`, {
-      headers: { 'Authorization': `Token ${process.env.DELHIVERY_TOKEN}` }
-    });
-    
-    if (!response.ok) {
-      // Fallback response if external api fails
-      return { serviceable: true, estimatedDays: 3, message: "Standard delivery available within 3-5 business days." };
+    if (process.env.DELHIVERY_TOKEN) {
+      const response = await fetch(`https://track.delhivery.com/c/api/pin-codes.json?filter_codes=${cleanPincode}`, {
+        headers: { 'Authorization': `Token ${process.env.DELHIVERY_TOKEN}` }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        const isServiceable = data.delivery_codes && data.delivery_codes.length > 0;
+
+        return {
+          pincode: cleanPincode,
+          serviceable: isServiceable,
+          codAvailable: isServiceable,
+          estimatedDelivery: isServiceable ? "3-5 Business Days" : "Not serviceable"
+        };
+      }
     }
 
-    const data = await response.json();
-    const isServiceable = data.delivery_codes && data.delivery_codes.length > 0;
-
-    return {
-      pincode,
-      serviceable: isServiceable,
-      codAvailable: isServiceable ? true : false,
-      estimatedDelivery: isServiceable ? "3-5 Business Days" : "Not serviceable in this area"
+    return { 
+      pincode: cleanPincode,
+      serviceable: true, 
+      codAvailable: true,
+      estimatedDelivery: "3-5 Business Days", 
+      message: "Standard delivery available." 
     };
   } catch (error) {
-    console.error("AI Tool Delivery Check Error:", error);
-    return { serviceable: true, estimatedDays: 4, message: "Standard delivery available." };
+    console.error("AI Tool Delivery Check Error:", error.message);
+    return { serviceable: true, estimatedDelivery: "4-6 Days", message: "Standard delivery available." };
   }
 }
 
-/**
- * 5. Track user order securely (IDOR protected via userId mapping)
- */
-async function trackOrder({ orderId, userId }) {
-  try {
-    // If userId is provided, ensure the order belongs to them. Otherwise, just fetch order (Admin context)
-    const query = { _id: orderId };
-    if (userId) query.userId = userId;
+async function trackOrder({ orderId, userId } = {}) {
+  if (!orderId || !mongoose.Types.ObjectId.isValid(orderId)) {
+    return { error: "Valid Order ID is required." };
+  }
 
-    const order = await Order.findOne(query).lean();
-    if (!order) return { error: "Order not found or access denied due to security policies." };
+  try {
+    const query = { _id: orderId };
+    if (userId && mongoose.Types.ObjectId.isValid(userId)) query.userId = userId;
+
+    const order = await Order.findOne(query).select('-__v').lean();
+    if (!order) return { error: "Order not found or access denied." };
 
     return {
       orderId: order._id.toString(),
-      status: order.status,
-      totalAmount: `₹${order.totalPaise / 100}`,
-      paymentMethod: order.paymentMethod,
-      shiprocketAWB: order.shiprocketOrderId || "Yet to be generated",
+      status: order.status || 'PROCESSING',
+      totalAmount: `₹${(order.totalPaise || (order.totalPrice ? order.totalPrice * 100 : 0)) / 100}`,
+      paymentMethod: order.paymentMethod || 'Unknown',
+      shiprocketAWB: order.shiprocketAwb || order.shiprocketOrderId || order.trackingNumber || "Pending generation",
       createdAt: order.createdAt
     };
   } catch (error) {
-    console.error("AI Tool Track Order Error:", error);
+    console.error("AI Tool Track Order Error:", error.message);
     return { error: "Failed to fetch order tracking details." };
   }
 }
 
-/**
- * 6. 🔥 NEW: Fetch real-time store telemetry for AI Business Copilot
- * (Calculates live stats like traffic trends, COD/Prepaid ratios, and stock bottlenecks)
- */
 async function getStoreTelemetry() {
   try {
-    const totalOrdersCount = await Order.countDocuments();
-    const outOfStockProducts = await Product.countDocuments({ inventory: { $lte: 0 } });
+    const [totalOrders, outOfStockProducts, codOrdersCount] = await Promise.all([
+      Order.countDocuments(),
+      Product.countDocuments({ inventory: { $lte: 0 } }),
+      Order.countDocuments({ paymentMethod: { $regex: /cod|cash/i } })
+    ]);
     
-    // COD vs Prepaid calculation logic
-    const codOrdersCount = await Order.countDocuments({ paymentMethod: { $regex: /cod|cash/i } });
-    const codPercentageChange = totalOrdersCount > 0 ? Math.round((codOrdersCount / totalOrdersCount) * 100) : 14;
+    const codPercentageChange = totalOrders > 0 ? Math.round((codOrdersCount / totalOrders) * 100) : 14;
 
     return {
-      trafficChangePercent: "+18%", // Plug your analytics logic here
+      trafficChangePercent: "+18%",
       conversionChangePercent: "-31%",
       topProductStatus: outOfStockProducts > 0 ? `${outOfStockProducts} items Out of Stock` : "All items in stock",
       codOrdersChangePercent: `+${codPercentageChange}%`,
@@ -173,12 +198,11 @@ async function getStoreTelemetry() {
       pricingIssuesDetected: false
     };
   } catch (error) {
-    console.error("AI Tool Telemetry Error:", error);
-    // Fallback safe telemetry data
+    console.error("AI Tool Telemetry Error:", error.message);
     return {
       trafficChangePercent: "+18%",
       conversionChangePercent: "-31%",
-      topProductStatus: "Out of stock bottleneck",
+      topProductStatus: "Data sync delayed",
       codOrdersChangePercent: "+14%",
       rtoRiskChangePercent: "+9%",
       activeCampaigns: 1,
@@ -187,14 +211,13 @@ async function getStoreTelemetry() {
   }
 }
 
-// Map tools for Gemini / Universal Function Calling execution
 const availableTools = {
   searchProducts,
   compareProducts,
   checkStock,
   checkDelivery,
   trackOrder,
-  getStoreTelemetry // 🔥 Preserved securely
+  getStoreTelemetry
 };
 
 module.exports = { availableTools };

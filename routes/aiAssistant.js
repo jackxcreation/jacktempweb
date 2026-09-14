@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { GoogleGenerativeAI } = require('@google/generative-ai'); // 🔥 Switched entirely to Gemini SDK
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { availableTools } = require('../utils/aiTools');
 const { protect } = require('../middleware/authMiddleware');
 const { Ticket } = require('../models');
@@ -20,7 +20,7 @@ function getGeminiKeys() {
 }
 
 // ==========================================
-// 🤖 GEMINI AI CORE HANDLER
+// 🤖 GEMINI AI CORE HANDLER (FIXED FOR STRICT TOOL FORMAT)
 // ==========================================
 async function callGeminiAI({ messages, systemPrompt, temperature = 0.3, tools = null }) {
   const apiKeys = getGeminiKeys();
@@ -28,32 +28,42 @@ async function callGeminiAI({ messages, systemPrompt, temperature = 0.3, tools =
 
   let lastError = null;
 
-  // Transform standard OpenAI/Groq messages to Gemini format
+  // Transform standard messages to STRICT Gemini format
   const formattedContents = messages.map(m => {
-    if (m.role === 'assistant') {
-      if (m.tool_calls) {
+    // 1. Model / Assistant mapping
+    if (m.role === 'assistant' || m.role === 'model') {
+      if (m.tool_calls && m.tool_calls.length > 0) {
         return {
           role: 'model',
-          parts: m.tool_calls.map(tc => ({
-            functionCall: { name: tc.function.name, args: JSON.parse(tc.function.arguments) }
-          }))
+          parts: m.tool_calls.map(tc => {
+            let parsedArgs = tc.function.arguments;
+            if (typeof parsedArgs === 'string') {
+              try { parsedArgs = JSON.parse(parsedArgs); } catch (e) { parsedArgs = {}; }
+            }
+            return { functionCall: { name: tc.function.name, args: parsedArgs } };
+          })
         };
       }
       return { role: 'model', parts: [{ text: m.content || "" }] };
     }
     
+    // 2. Tool response mapping
     if (m.role === 'tool') {
+      let responseObj = { result: m.content };
+      try { responseObj = JSON.parse(m.content); } catch (e) {}
+
       return {
-        role: 'user', // Gemini processes tool outputs as user/function roles
+        role: 'user', // Gemini expects tool responses inside the 'user' role
         parts: [{
           functionResponse: {
             name: m.name,
-            response: { result: m.content }
+            response: responseObj
           }
         }]
       };
     }
     
+    // 3. Normal User mapping
     return { 
       role: 'user', 
       parts: [{ text: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }] 
@@ -64,7 +74,7 @@ async function callGeminiAI({ messages, systemPrompt, temperature = 0.3, tools =
     try {
       const genAI = new GoogleGenerativeAI(key);
       const modelConfig = {
-        model: "gemini-3.5-flash",
+        model: "gemini-3.5-flash", 
         systemInstruction: systemPrompt,
         generationConfig: { temperature }
       };
@@ -79,11 +89,12 @@ async function callGeminiAI({ messages, systemPrompt, temperature = 0.3, tools =
       
       const functionCalls = response.functionCalls();
       let textContent = "";
-      try { textContent = response.text(); } catch (e) { /* text might be empty if function is called */ }
+      try { textContent = response.text(); } catch (e) {}
 
       return {
         provider: "Gemini",
         message: {
+          role: "assistant", // 🔥 THE MAGIC FIX: Explicitly attach role
           content: textContent,
           tool_calls: functionCalls ? functionCalls.map(call => ({
             function: {
@@ -136,7 +147,6 @@ router.post('/api/ai/chat', protect, async (req, res) => {
       return res.status(400).json({ success: false, message: "Messages array is required" });
     }
 
-    // 1. Define tool schemas for Gemini (Native Format)
     const toolsDefinition = [
       {
         name: "searchProducts",
@@ -200,7 +210,7 @@ router.post('/api/ai/chat', protect, async (req, res) => {
 
     const systemPrompt = "You are an intelligent, helpful e-commerce shopping assistant for Jack Essentials. Use the provided tools to answer user queries accurately regarding products, stock, deliveries, and order tracking. Never fabricate product links or pricing—always use the tool data.";
 
-    // 2. First call to Gemini
+    // 1. First call to Gemini
     const aiCallResult = await callGeminiAI({
       messages,
       systemPrompt,
@@ -209,8 +219,9 @@ router.post('/api/ai/chat', protect, async (req, res) => {
     });
 
     const responseMessage = aiCallResult.message;
+    responseMessage.role = "assistant"; // 🔥 CRITICAL FIX: Ensure role is explicitly set
 
-    // 3. Check if AI invoked a tool function
+    // 2. Check if AI invoked a tool function
     if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
       const toolCall = responseMessage.tool_calls[0];
       const functionName = toolCall.function.name;
@@ -228,7 +239,7 @@ router.post('/api/ai/chat', protect, async (req, res) => {
         toolResult = { error: "Requested tool function not found." };
       }
 
-      // 4. Send tool output back to Gemini
+      // 3. Send tool output back to Gemini
       const followUpMessages = [
         ...messages,
         responseMessage,
@@ -252,7 +263,7 @@ router.post('/api/ai/chat', protect, async (req, res) => {
       });
     }
 
-    // 5. Normal text response
+    // 4. Normal text response
     return res.json({
       success: true,
       providerUsed: aiCallResult.provider,

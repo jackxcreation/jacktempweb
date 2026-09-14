@@ -1,3 +1,4 @@
+// routes/otpAuthRouter.js
 const express = require('express');
 const router = express.Router();
 const nodemailer = require('nodemailer');
@@ -19,6 +20,18 @@ const transporter = nodemailer.createTransport({
 
 const otpStore = new Map();
 
+// ==========================================
+// 🔥 PRO FEATURE: MEMORY LEAK CLEANUP INTERVAL
+// ==========================================
+setInterval(() => {
+  const now = Date.now();
+  for (const [email, record] of otpStore.entries()) {
+    if (now > record.expires) {
+      otpStore.delete(email);
+    }
+  }
+}, 15 * 60 * 1000); // Run every 15 minutes
+
 // 🔥 Brute-Force Rate Limiter for Verification Route
 const otpVerifyLimiter = rateLimit({
   windowMs: 5 * 60 * 1000, 
@@ -31,7 +44,9 @@ const otpVerifyLimiter = rateLimit({
 // ==========================================
 router.post('/send-otp', async (req, res) => {
   try {
-    if (!req.body.email) return res.status(400).json({ error: "Email address is required." });
+    if (!req.body.email) {
+      return res.status(400).json({ error: "Email address is required." });
+    }
 
     const email = req.body.email.toLowerCase().trim();
     const now = Date.now();
@@ -78,11 +93,11 @@ router.post('/send-otp', async (req, res) => {
     };
 
     await transporter.sendMail(mailOptions);
-    res.status(200).json({ message: "Secure OTP sent to your email." });
+    return res.status(200).json({ message: "Secure OTP sent to your email." });
 
   } catch (error) {
     console.error("OTP Send Error:", error);
-    res.status(500).json({ error: "Failed to send verification email. Please try again." });
+    return res.status(500).json({ error: "Failed to send verification email. Please try again." });
   }
 });
 
@@ -132,7 +147,7 @@ router.post('/verify-otp', otpVerifyLimiter, async (req, res) => {
       user = new User({ 
         name: "Valued Customer", 
         email, 
-        role: "user" // Changed to 'user' for consistency with users.js
+        role: "customer" // Aligned with standard user schema
       });
       await user.save();
     }
@@ -150,7 +165,7 @@ router.post('/verify-otp', otpVerifyLimiter, async (req, res) => {
       { expiresIn: '7d' }
     );
 
-    res.status(200).json({ 
+    return res.status(200).json({ 
       message: "Authentication successful.", 
       token, 
       user,
@@ -159,7 +174,7 @@ router.post('/verify-otp', otpVerifyLimiter, async (req, res) => {
 
   } catch (error) {
     console.error("OTP Verify Error:", error);
-    res.status(500).json({ error: "An unexpected error occurred during verification." });
+    return res.status(500).json({ error: "An unexpected error occurred during verification." });
   }
 });
 

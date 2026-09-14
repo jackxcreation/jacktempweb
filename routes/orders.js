@@ -1,3 +1,4 @@
+// routes/orderRouter.js
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose'); 
@@ -127,7 +128,9 @@ router.post('/api/orders/:id/generate-awb', protect, checkPermission('orders:shi
     
     const order = await Order.findById(id);
     
-    if (!order) return res.status(404).json({ success: false, message: "Order not found", requestId: req.requestId });
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found", requestId: req.requestId });
+    }
 
     // Idempotency check: Agar AWB pehle se hi assigned hai toh duplicate call par wahi return kar do
     if (order.shipment && order.shipment.awb) {
@@ -141,7 +144,6 @@ router.post('/api/orders/:id/generate-awb', protect, checkPermission('orders:shi
     }
 
     // 🔥 MASTER FIX: Convert Mongoose Document to Plain JS Object
-    // Isse Axios ya shipping engine deep cloning ke waqt '_defaultToObjectOptions' error nahi dega.
     const orderPayload = order.toObject();
 
     // Plain payload pass kiya jaa raha hai
@@ -176,7 +178,7 @@ router.post('/api/orders/:id/generate-awb', protect, checkPermission('orders:shi
       } catch (e) {}
     }
 
-    res.status(200).json({ 
+    return res.status(200).json({ 
         success: true, 
         message: "AWB Generated Successfully", 
         waybill: order.shipment.awb,
@@ -196,7 +198,7 @@ router.get('/api/orders/label/:awb', protect, checkPermission('orders:ship'), as
   try {
     const { awb } = req.params;
     const labelData = await shippingEngine.getLabel(awb);
-    res.status(200).json(labelData);
+    return res.status(200).json(labelData);
   } catch (error) {
     return sendErrorResponse(res, req, error, "Server error fetching label");
   }
@@ -209,7 +211,7 @@ router.post('/api/orders/pickup', protect, checkPermission('warehouse:all'), req
   try {
     const { package_count, location_name } = req.body;
     const responseData = await shippingEngine.schedulePickup(package_count, location_name);
-    res.status(200).json(responseData);
+    return res.status(200).json(responseData);
   } catch (error) {
     return sendErrorResponse(res, req, error, "Error scheduling pickup");
   }
@@ -231,7 +233,7 @@ router.post('/api/orders/:id/cancel-shipment', protect, checkPermission('orders:
       { waybill, status: 'Cancelled' }
     );
 
-    res.status(200).json(responseData);
+    return res.status(200).json(responseData);
   } catch (error) {
     return sendErrorResponse(res, req, error, "Error cancelling shipment");
   }
@@ -497,7 +499,7 @@ router.post('/api/orders', protect, requireIdempotency, async (req, res) => {
         } catch(e){}
     }
 
-    res.status(201).json(orderResponse);
+    return res.status(201).json(orderResponse);
   } catch (error) { 
     if (session.inTransaction()) await session.abortTransaction();
     session.endSession();
@@ -701,7 +703,7 @@ router.put('/api/orders/:id', protect, checkPermission('orders:edit'), async (re
     const updatedOrder = await Order.findByIdAndUpdate(
         req.params.id, 
         updateFields, 
-        { returnDocument: 'after', session }
+        { new: true, session } // 🔥 Universal Mongoose new: true compatibility
     );
 
     await session.commitTransaction();
@@ -738,7 +740,7 @@ router.put('/api/orders/:id', protect, checkPermission('orders:edit'), async (re
       } catch(e){} 
     }
 
-    res.json(orderResponse);
+    return res.json(orderResponse);
   } catch (error) { 
     if (session.inTransaction()) await session.abortTransaction();
     session.endSession();
@@ -765,7 +767,7 @@ router.get('/api/orders/user/:userId', protect, async (req, res) => {
       .limit(limit)
       .lean();
 
-    res.json(orders.map(o => ({ ...o, id: o._id.toString() })));
+    return res.json(orders.map(o => ({ ...o, id: o._id.toString() })));
   } catch (error) { 
     return sendErrorResponse(res, req, error, "Failed to fetch orders"); 
   }
@@ -835,7 +837,7 @@ router.get('/api/orders', protect, checkPermission('orders:view'), async (req, r
       Order.countDocuments(query)
     ]);
 
-    res.json({
+    return res.json({
       success: true,
       total: totalCount,
       page,

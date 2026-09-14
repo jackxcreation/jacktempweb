@@ -1,3 +1,4 @@
+// services/abandonedCartQueue.js
 const { Queue } = require('bullmq');
 const Redis = require('ioredis');
 const AbandonedCart = require('../models/AbandonedCart');
@@ -15,15 +16,29 @@ const connection = process.env.REDIS_URL
       tls: {
         rejectUnauthorized: false
       },
-      maxRetriesPerRequest: null
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false
     })
   : {
       host: 'localhost',
       port: 6379,
-      maxRetriesPerRequest: null
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false
     };
 
+// 🔥 Prevent unhandled Redis error crashes
+if (connection instanceof Redis) {
+  connection.on('error', (err) => {
+    console.error('Redis Abandoned Cart Queue Connection Error:', err.message);
+  });
+}
+
 const abandonedCartQueue = new Queue('abandoned-cart-queue', { connection });
+
+// Handle queue-level errors gracefully
+abandonedCartQueue.on('error', (err) => {
+  console.error('Abandoned Cart Queue Error:', err.message);
+});
 
 // Function to be called by your Cron job every 30 minutes
 const queueAbandonedCarts = async () => {
@@ -37,25 +52,34 @@ const queueAbandonedCarts = async () => {
       updatedAt: { $lte: thirtyMinutesAgo }
     }).lean();
 
+    if (!oldCarts || oldCarts.length === 0) return;
+
     console.info(`📦 Found ${oldCarts.length} abandoned carts to enqueue.`);
 
     for (const cart of oldCarts) {
-      // Add job to BullMQ queue with backoff/retry options
-      await abandonedCartQueue.add('send-abandoned-email', {
-        cartId: cart._id.toString(),
-        userEmail: cart.user.email,
-        userName: cart.user.name || 'Valued Customer',
-        items: cart.items,
-        totalValue: cart.totalValue
-      }, {
-        attempts: 3,
-        backoff: {
-          type: 'exponential',
-          delay: 5000 // Retry after 5s, then 10s, then 20s if failed
-        },
-        removeOnComplete: true,
-        removeOnFail: false
-      });
+      try {
+        if (!cart.user || !cart.user.email) continue;
+
+        // Add job to BullMQ queue with backoff/retry options
+        await abandonedCartQueue.add('send-abandoned-email', {
+          cartId: cart._id.toString(),
+          userEmail: cart.user.email,
+          userName: cart.user.name || 'Valued Customer',
+          items: cart.items,
+          totalValue: cart.totalValue
+        }, {
+          jobId: `abandoned_cart_${cart._id.toString()}`, // 🔥 Prevents duplicate duplicate queuing
+          attempts: 3,
+          backoff: {
+            type: 'exponential',
+            delay: 5000 // Retry after 5s, then 10s, then 20s if failed
+          },
+          removeOnComplete: true,
+          removeOnFail: false
+        });
+      } catch (jobErr) {
+        console.error(`Failed to enqueue cart ${cart._id}:`, jobErr.message);
+      }
     }
   } catch (error) {
     console.error("❌ Error queuing abandoned carts:", error);
