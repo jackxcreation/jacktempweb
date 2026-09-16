@@ -4,10 +4,10 @@ import { API_URL } from '../config';
 import { fetchAIResponse, processBotResponse } from '../utils/chatBrain'; 
 
 // 🔥 THE BULLETPROOF HOOKS WE BUILT EARLIER
-import { useSupportSocket } from '../hooks/support/useSupportSocket'; 
+import { useSupportChat } from "../hooks/useSupportChat";
+import { useConversation } from "../hooks/useConversation";
 import { useSupportChat } from '../hooks/support/useSupportChat';
 import { useSupportState } from '../hooks/support/useSupportState';
-import { useConversation } from '../hooks/support/useConversation';
 
 // 🔥 IMPORTED MODULAR UI COMPONENTS (From image_8b4eac.png)
 import ChatHeader from '../components/support/ChatHeader';
