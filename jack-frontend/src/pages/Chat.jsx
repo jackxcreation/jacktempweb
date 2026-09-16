@@ -3,13 +3,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL } from '../config'; 
 import { fetchAIResponse, processBotResponse } from '../utils/chatBrain'; 
 
-// 🔥 THE BULLETPROOF HOOKS WE BUILT EARLIER
+// 🔥 BULLETPROOF HOOKS IMPORTS (Fixed Paths & Duplicates based on your Folder Structure)
 import { useSupportChat } from "../hooks/useSupportChat";
 import { useConversation } from "../hooks/useConversation";
-import { useSupportChat } from '../hooks/support/useSupportChat';
-import { useSupportState } from '../hooks/support/useSupportState';
+import { useSupportSocket } from "../hooks/useSupportSocket"; // Added missing import!
+import { useSupportState } from '../hooks/support/useSupportState'; // This one is inside 'support' folder
 
-// 🔥 IMPORTED MODULAR UI COMPONENTS (From image_8b4eac.png)
+// 🔥 IMPORTED MODULAR UI COMPONENTS
 import ChatHeader from '../components/support/ChatHeader';
 import ChatInput from '../components/support/ChatInput';
 import MessageList from '../components/support/MessageList';
