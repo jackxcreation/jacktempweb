@@ -7,13 +7,13 @@ import { FaFacebook } from 'react-icons/fa';
 import { IoLogoApple } from 'react-icons/io5';
 import { 
   FiMail, FiLock, FiEye, FiEyeOff, FiArrowRight, 
-  FiShield, FiX, FiCheck, FiCheckCircle, FiAlertCircle, FiWifi, FiInfo, FiSmartphone, FiArrowLeft
+  FiShield, FiX, FiCheck, FiCheckCircle, FiAlertCircle, FiWifi, FiInfo, FiArrowLeft
 } from 'react-icons/fi';
 import { auth, googleProvider } from '../firebase'; 
-import { signInWithPopup, FacebookAuthProvider, OAuthProvider } from 'firebase/auth';
+import { signInWithPopup } from 'firebase/auth';
 
 import { useUser } from '../context/UserContext';
-import axiosInstance from '../api/axiosInstance'; // 🔥 Integrated for WhatsApp OTP backend calls
+import axiosInstance from '../api/axiosInstance'; 
 
 // --- Static Framer Motion Variants ---
 const containerVariants = { 
@@ -24,7 +24,11 @@ const itemVariants = {
   hidden: { opacity: 0, y: 15 }, 
   show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 400, damping: 30 } } 
 };
-
+const formVariants = {
+  hidden: { opacity: 0, x: 20 },
+  visible: { opacity: 1, x: 0, transition: { duration: 0.4, ease: "easeOut" } },
+  exit: { opacity: 0, x: -20, transition: { duration: 0.2, ease: "easeIn" } }
+};
 const toastVariants = {
   hidden: { opacity: 0, y: 40, scale: 0.95, x: "-50%" },
   show: { opacity: 1, y: 0, scale: 1, x: "-50%", transition: { type: "spring", stiffness: 450, damping: 25 } },
@@ -36,29 +40,21 @@ const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 const PHONE_REGEX = /^[0-9]{10}$/;
 
 const Login = ({ setIsLoggedIn }) => {
-  // 🔥 UNIFIED INPUT STATE (Can be Email or 10-digit Phone)
   const [identifier, setIdentifier] = useState(() => {
-    try {
-      return localStorage.getItem('jack_remembered_identifier') || '';
-    } catch {
-      return '';
-    }
+    try { return localStorage.getItem('jack_remembered_identifier') || ''; } catch { return ''; }
   });
 
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  
-  // 🔥 AUTH FLOW STATE MACHINE ('IDENTIFIER' -> 'PASSWORD' or 'WHATSAPP_OTP')
-  const [authMode, setAuthMode] = useState('IDENTIFIER'); // 'IDENTIFIER' | 'PASSWORD' | 'WHATSAPP_OTP'
+  const [authMode, setAuthMode] = useState('IDENTIFIER'); 
   const [otp, setOtp] = useState('');
+  
+  // 🔥 New Premium Feature: Resend Timer State
+  const [resendTimer, setResendTimer] = useState(0);
 
   const [status, setStatus] = useState({ type: '', msg: '' });
   const [rememberMe, setRememberMe] = useState(() => {
-    try {
-      return !!localStorage.getItem('jack_remembered_identifier');
-    } catch {
-      return false;
-    }
+    try { return !!localStorage.getItem('jack_remembered_identifier'); } catch { return false; }
   });
   const [isCapsLockOn, setIsCapsLockOn] = useState(false);
   const [isOnline, setIsOnline] = useState(() => typeof navigator !== 'undefined' ? navigator.onLine : true);
@@ -84,15 +80,21 @@ const Login = ({ setIsLoggedIn }) => {
       setIsOnline(false);
       setStatus({ type: 'error', msg: 'You are currently offline. Please check your network connection.' });
     };
-
     window.addEventListener('online', goOnline);
     window.addEventListener('offline', goOffline);
-
     return () => {
       window.removeEventListener('online', goOnline);
       window.removeEventListener('offline', goOffline);
     };
   }, []);
+
+  // Countdown timer effect
+  useEffect(() => {
+    if (resendTimer > 0) {
+      const timerId = setTimeout(() => setResendTimer(resendTimer - 1), 1000);
+      return () => clearTimeout(timerId);
+    }
+  }, [resendTimer]);
 
   const checkCapsLock = useCallback((e) => {
     if (typeof e.getModifierState === 'function') {
@@ -102,12 +104,8 @@ const Login = ({ setIsLoggedIn }) => {
 
   useEffect(() => {
     isMounted.current = true;
-    if (inputRef.current && !identifier) {
-      inputRef.current.focus();
-    }
-    return () => {
-      isMounted.current = false;
-    };
+    if (inputRef.current && !identifier) inputRef.current.focus();
+    return () => { isMounted.current = false; };
   }, [identifier]);
 
   // 4-SECOND AUTO-HIDE ERROR LOGIC
@@ -121,32 +119,24 @@ const Login = ({ setIsLoggedIn }) => {
     return () => clearTimeout(timer); 
   }, [status.msg, status.type]); 
 
-  // Detect whether user entered an email or phone number
-  const isEmailInput = useMemo(() => EMAIL_REGEX.test(identifier.trim()), [identifier]);
-  const isPhoneInput = useMemo(() => PHONE_REGEX.test(identifier.trim().replace(/\D/g, '')), [identifier]);
-
-  // Step 1: Continue button handler (Decides whether to ask for Password or trigger WhatsApp OTP)
   const handleContinue = (e) => {
     e.preventDefault();
     if (!isOnline) {
       setStatus({ type: 'error', msg: 'Connection failed. You are currently offline.' });
       return;
     }
-
     const cleanInput = identifier.trim();
     if (!cleanInput) return;
 
     if (EMAIL_REGEX.test(cleanInput)) {
       setAuthMode('PASSWORD');
     } else if (PHONE_REGEX.test(cleanInput.replace(/\D/g, ''))) {
-      // Trigger WhatsApp OTP request
       handleSendWhatsAppOtp(cleanInput.replace(/\D/g, ''));
     } else {
       setStatus({ type: 'error', msg: 'Please enter a valid email address or 10-digit mobile number.' });
     }
   };
 
-  // Step 2A: Email & Password Login Handler (Preserved same backend logic)
   const handlePasswordLogin = useCallback(async (e) => {
     e.preventDefault();
     if (!isOnline) return;
@@ -170,21 +160,13 @@ const Login = ({ setIsLoggedIn }) => {
 
       if (res?.success || res?.token) {
         try {
-          if (rememberMe) {
-            localStorage.setItem('jack_remembered_identifier', trimmedEmail);
-          } else {
-            localStorage.removeItem('jack_remembered_identifier');
-          }
-        } catch (storageError) {
-          console.warn('[Storage Error] Failed to persist configuration matrix.', storageError);
-        }
+          if (rememberMe) localStorage.setItem('jack_remembered_identifier', trimmedEmail);
+          else localStorage.removeItem('jack_remembered_identifier');
+        } catch (storageError) {}
 
         setStatus({ type: 'success', msg: 'Login successful! Redirecting...' });
         if (setIsLoggedIn) setIsLoggedIn(true);
-        
-        setTimeout(() => { 
-          if (isMounted.current) navigate(from, { replace: true }); 
-        }, 1000);
+        setTimeout(() => { if (isMounted.current) navigate(from, { replace: true }); }, 1000);
       } else {
         setStatus({ type: 'error', msg: res?.error || res?.message || 'Invalid email or password.' });
       }
@@ -196,13 +178,13 @@ const Login = ({ setIsLoggedIn }) => {
     }
   }, [identifier, password, loginUser, navigate, setIsLoggedIn, rememberMe, isOnline, from]);
 
-  // Step 2B: Send WhatsApp OTP
   const handleSendWhatsAppOtp = async (cleanPhone) => {
     setStatus({ type: 'loading', msg: 'Sending WhatsApp verification code...' });
     try {
       await axiosInstance.post('/whatsapp/send-otp', { phone: `+91${cleanPhone}` });
       if (!isMounted.current) return;
       setAuthMode('WHATSAPP_OTP');
+      setResendTimer(30); // Start 30s countdown
       setStatus({ type: 'success', msg: 'OTP sent to your WhatsApp!' });
     } catch (err) {
       if (isMounted.current) {
@@ -211,7 +193,6 @@ const Login = ({ setIsLoggedIn }) => {
     }
   };
 
-  // Step 2C: Verify WhatsApp OTP & Login
   const handleVerifyWhatsAppOtp = async (e) => {
     e.preventDefault();
     if (!otp || otp.length !== 6) {
@@ -227,15 +208,10 @@ const Login = ({ setIsLoggedIn }) => {
       if (!isMounted.current) return;
 
       if (res.data?.success) {
-        if (res.data?.token) {
-          localStorage.setItem('token', res.data.token);
-        }
+        if (res.data?.token) localStorage.setItem('token', res.data.token);
         setStatus({ type: 'success', msg: 'Phone verified successfully! Redirecting...' });
         if (setIsLoggedIn) setIsLoggedIn(true);
-
-        setTimeout(() => {
-          if (isMounted.current) navigate(from, { replace: true });
-        }, 1000);
+        setTimeout(() => { if (isMounted.current) navigate(from, { replace: true }); }, 1000);
       } else {
         setStatus({ type: 'error', msg: res.data?.message || 'Invalid OTP code.' });
       }
@@ -251,7 +227,6 @@ const Login = ({ setIsLoggedIn }) => {
       setStatus({ type: 'error', msg: `Cannot connect to ${providerName}. You are offline.` });
       return;
     }
-
     setStatus({ type: 'loading', msg: `Connecting to ${providerName}...` });
     try {
       const result = await signInWithPopup(auth, provider);
@@ -261,19 +236,14 @@ const Login = ({ setIsLoggedIn }) => {
 
       if (dbRes?.isLocked || (dbRes?.message && dbRes.message.includes('LOCKED')) || (dbRes?.error && dbRes.error.includes('LOCKED'))) {
         setStatus({ type: 'error', msg: 'Account Locked! Redirecting to unlock page...' });
-        setTimeout(() => {
-          if (isMounted.current) navigate(`/unlock-account?email=${encodeURIComponent(result?.user?.email)}`);
-        }, 1500);
+        setTimeout(() => { if (isMounted.current) navigate(`/unlock-account?email=${encodeURIComponent(result?.user?.email)}`); }, 1500);
         return;
       }
       
       if (dbRes?.success || dbRes?.token) {
         setStatus({ type: 'success', msg: `Welcome back, ${result?.user?.displayName?.split(' ')[0] || 'User'}!` });
         if (setIsLoggedIn) setIsLoggedIn(true);
-        
-        setTimeout(() => { 
-          if (isMounted.current) navigate(from, { replace: true }); 
-        }, 1000);
+        setTimeout(() => { if (isMounted.current) navigate(from, { replace: true }); }, 1000);
       } else {
         setStatus({ type: 'error', msg: dbRes?.error || dbRes?.message || `Account sync failed.` });
       }
@@ -335,7 +305,7 @@ const Login = ({ setIsLoggedIn }) => {
       </div>
 
       {/* RIGHT PANEL */}
-      <div className="w-full lg:w-[55%] flex flex-col items-center justify-center p-4 sm:p-6 md:p-12 bg-white/80 backdrop-blur-xl relative z-20">
+      <div className="w-full lg:w-[55%] flex flex-col items-center justify-center p-4 sm:p-6 md:p-12 bg-white/80 backdrop-blur-xl relative z-20 overflow-hidden">
         
         {/* Offline HUD Banner */}
         <AnimatePresence>
@@ -353,7 +323,6 @@ const Login = ({ setIsLoggedIn }) => {
 
         <motion.div variants={containerVariants} initial="hidden" animate="show" className="w-full max-w-md relative py-6">
           
-          {/* Mobile Logo */}
           <motion.div variants={itemVariants} className="lg:hidden flex flex-col items-center mb-8 select-none">
             <Link to="/" className="w-16 h-16 bg-slate-900 rounded-2xl flex items-center justify-center mb-3 shadow-xl shadow-slate-900/20 hover:scale-105 transition-transform">
               <span className="text-3xl font-black text-white tracking-tight">J<span className="text-[#FF4500]">S</span></span>
@@ -371,198 +340,215 @@ const Login = ({ setIsLoggedIn }) => {
             </p>
           </motion.div>
 
-          {/* ================= FLOW 1: ENTER EMAIL OR PHONE ================= */}
-          {authMode === 'IDENTIFIER' && (
-            <form onSubmit={handleContinue} className="space-y-4" noValidate>
-              <motion.div variants={itemVariants} className="relative group">
-                <label htmlFor="identifier-input" className="sr-only">Email or Phone Number</label>
-                <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-indigo-600 transition-colors">
-                  <FiMail size={18} />
-                </div>
-                <input 
-                  id="identifier-input"
-                  ref={inputRef}
-                  type="text" 
-                  value={identifier} 
-                  onChange={(e) => setIdentifier(e.target.value)} 
-                  disabled={isLoading} 
-                  autoComplete="username"
-                  className="w-full pl-12 pr-11 py-4 bg-slate-50/70 border border-slate-200 rounded-2xl focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/10 outline-none transition-all font-semibold text-slate-800 placeholder:text-slate-400/90 placeholder:font-medium shadow-sm" 
-                  placeholder="Email or 10-digit Phone Number" 
-                  required 
-                />
-              </motion.div>
-
-              <motion.div variants={itemVariants} className="pt-2">
-                <button 
-                  type="submit" 
-                  disabled={!identifier.trim() || isLoading} 
-                  className="w-full bg-slate-900 text-white font-black py-4 rounded-2xl hover:bg-indigo-600 focus:bg-indigo-600 outline-none transition-all shadow-sm active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed flex justify-center items-center h-[56px]"
+          {/* 🔥 ANIMATED FORMS CONTAINER 🔥 */}
+          <div className="relative">
+            <AnimatePresence mode="wait">
+              
+              {/* ================= FLOW 1: ENTER EMAIL OR PHONE ================= */}
+              {authMode === 'IDENTIFIER' && (
+                <motion.form 
+                  key="identifier" 
+                  variants={formVariants} initial="hidden" animate="visible" exit="exit"
+                  onSubmit={handleContinue} className="space-y-4" noValidate
                 >
-                  <div className="flex items-center gap-2">
-                    <span className="tracking-wide">Continue</span>
-                    <FiArrowRight size={18} />
+                  <div className="relative group">
+                    <label htmlFor="identifier-input" className="sr-only">Email or Phone Number</label>
+                    <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-indigo-600 transition-colors">
+                      <FiMail size={18} />
+                    </div>
+                    <input 
+                      id="identifier-input"
+                      ref={inputRef}
+                      type="text" 
+                      value={identifier} 
+                      onChange={(e) => setIdentifier(e.target.value)} 
+                      disabled={isLoading} 
+                      autoComplete="username"
+                      className="w-full pl-12 pr-11 py-4 bg-slate-50/70 border border-slate-200 rounded-2xl focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/10 outline-none transition-all font-semibold text-slate-800 placeholder:text-slate-400/90 placeholder:font-medium shadow-sm" 
+                      placeholder="Email or 10-digit Phone Number" 
+                      required 
+                    />
                   </div>
-                </button>
-              </motion.div>
-            </form>
-          )}
 
-          {/* ================= FLOW 2A: PASSWORD ENTRY (IF EMAIL) ================= */}
-          {authMode === 'PASSWORD' && (
-            <form onSubmit={handlePasswordLogin} className="space-y-4" noValidate>
-              {/* Back button to change email */}
-              <div className="flex items-center justify-between bg-slate-100 px-4 py-2.5 rounded-xl mb-2">
-                <span className="text-xs font-bold text-slate-600 truncate max-w-[240px]">{identifier}</span>
-                <button 
-                  type="button" 
-                  onClick={() => { setAuthMode('IDENTIFIER'); setPassword(''); }}
-                  className="text-xs font-bold text-[#FF4500] hover:underline flex items-center gap-1"
-                >
-                  <FiArrowLeft size={12} /> Change
-                </button>
-              </div>
-
-              <motion.div variants={itemVariants} className="relative group">
-                <label htmlFor="password-input" className="sr-only">Password</label>
-                <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-indigo-600">
-                  <FiLock size={18} />
-                </div>
-                <input 
-                  id="password-input"
-                  type={showPassword ? "text" : "password"} 
-                  value={password} 
-                  onChange={(e) => setPassword(e.target.value)} 
-                  onKeyDown={checkCapsLock}
-                  onKeyUp={checkCapsLock}
-                  disabled={isLoading} 
-                  autoComplete="current-password"
-                  className="w-full pl-12 pr-24 bg-slate-50/70 border border-slate-200 rounded-2xl focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/10 outline-none transition-all font-semibold text-slate-800 placeholder:text-slate-400/90 placeholder:font-medium shadow-sm" 
-                  placeholder="Enter your password" 
-                  required 
-                  autoFocus
-                />
-                <div className="absolute inset-y-0 right-0 pr-4 flex items-center gap-2">
-                  {isCapsLockOn && (
-                    <span className="text-[10px] bg-amber-500/10 text-amber-600 px-1.5 py-0.5 rounded font-black border border-amber-500/20 mr-1 flex items-center gap-1">
-                      <FiInfo size={10}/> CAPS
-                    </span>
-                  )}
-                  <button 
-                    type="button" 
-                    onClick={() => setShowPassword(!showPassword)} 
-                    disabled={isLoading}
-                    className="p-1 rounded-md text-slate-400 hover:text-indigo-600 transition-colors"
-                  >
-                    {showPassword ? <FiEyeOff size={18} /> : <FiEye size={18} />}
-                  </button>
-                </div>
-              </motion.div>
-
-              <div className="flex items-center justify-between pt-1 px-1">
-                <label className="flex items-center group cursor-pointer select-none">
-                  <input 
-                    type="checkbox" 
-                    checked={rememberMe} 
-                    onChange={(e) => setRememberMe(e.target.checked)}
-                    disabled={isLoading}
-                    className="sr-only peer"
-                  />
-                  <div className="w-4.5 h-4.5 bg-slate-50 rounded-md border border-slate-200 peer-checked:bg-slate-900 peer-checked:border-slate-900 flex items-center justify-center transition-all">
-                    {rememberMe && <FiCheck className="text-white" size={12} strokeWidth={3} />}
+                  <div className="pt-2">
+                    <button 
+                      type="submit" 
+                      disabled={!identifier.trim() || isLoading} 
+                      className="w-full bg-slate-900 text-white font-black py-4 rounded-2xl hover:bg-indigo-600 focus:bg-indigo-600 outline-none transition-all shadow-sm active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed flex justify-center items-center h-[56px]"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="tracking-wide">Continue</span>
+                        <FiArrowRight size={18} />
+                      </div>
+                    </button>
                   </div>
-                  <span className="text-xs font-bold text-slate-500 ml-2">Remember Me</span>
-                </label>
+                </motion.form>
+              )}
 
-                <Link to="/forgot-password" className="text-xs font-bold text-[#FF4500] hover:text-orange-600 transition-colors flex items-center gap-1">
-                  <FiShield size={13} /> Forgot password?
-                </Link>
-              </div>
-
-              <motion.div variants={itemVariants} className="pt-2">
-                <button 
-                  type="submit" 
-                  disabled={!password || isLoading} 
-                  className="w-full bg-slate-900 text-white font-black py-4 rounded-2xl hover:bg-indigo-600 focus:bg-indigo-600 outline-none transition-all shadow-sm active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed flex justify-center items-center h-[56px]"
+              {/* ================= FLOW 2A: PASSWORD ENTRY ================= */}
+              {authMode === 'PASSWORD' && (
+                <motion.form 
+                  key="password" 
+                  variants={formVariants} initial="hidden" animate="visible" exit="exit"
+                  onSubmit={handlePasswordLogin} className="space-y-4" noValidate
                 >
-                  {isLoading ? (
-                    <div className="flex items-center gap-3">
-                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                      <span className="tracking-wide text-sm font-black">AUTHENTICATING...</span>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <span className="tracking-wide">Sign In Securely</span>
-                      <FiArrowRight size={18} />
-                    </div>
-                  )}
-                </button>
-              </motion.div>
-            </form>
-          )}
+                  <div className="flex items-center justify-between bg-slate-100 px-4 py-2.5 rounded-xl mb-2">
+                    <span className="text-xs font-bold text-slate-600 truncate max-w-[240px]">{identifier}</span>
+                    <button 
+                      type="button" 
+                      onClick={() => { setAuthMode('IDENTIFIER'); setPassword(''); }}
+                      className="text-xs font-bold text-[#FF4500] hover:underline flex items-center gap-1 transition-colors"
+                    >
+                      <FiArrowLeft size={12} /> Change
+                    </button>
+                  </div>
 
-          {/* ================= FLOW 2B: WHATSAPP OTP ENTRY (IF PHONE) ================= */}
-          {authMode === 'WHATSAPP_OTP' && (
-            <form onSubmit={handleVerifyWhatsAppOtp} className="space-y-4" noValidate>
-              <div className="flex items-center justify-between bg-emerald-50 px-4 py-2.5 rounded-xl mb-2 border border-emerald-100">
-                <span className="text-xs font-bold text-emerald-800">+91 {identifier}</span>
-                <button 
-                  type="button" 
-                  onClick={() => { setAuthMode('IDENTIFIER'); setOtp(''); }}
-                  className="text-xs font-bold text-emerald-700 hover:underline flex items-center gap-1"
+                  <div className="relative group">
+                    <label htmlFor="password-input" className="sr-only">Password</label>
+                    <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-indigo-600">
+                      <FiLock size={18} />
+                    </div>
+                    <input 
+                      id="password-input"
+                      type={showPassword ? "text" : "password"} 
+                      value={password} 
+                      onChange={(e) => setPassword(e.target.value)} 
+                      onKeyDown={checkCapsLock}
+                      onKeyUp={checkCapsLock}
+                      disabled={isLoading} 
+                      autoComplete="current-password"
+                      className="w-full pl-12 pr-24 bg-slate-50/70 border border-slate-200 rounded-2xl focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/10 outline-none transition-all font-semibold text-slate-800 placeholder:text-slate-400/90 placeholder:font-medium shadow-sm" 
+                      placeholder="Enter your password" 
+                      required 
+                      autoFocus
+                    />
+                    <div className="absolute inset-y-0 right-0 pr-4 flex items-center gap-2">
+                      {isCapsLockOn && (
+                        <span className="text-[10px] bg-amber-500/10 text-amber-600 px-1.5 py-0.5 rounded font-black border border-amber-500/20 mr-1 flex items-center gap-1">
+                          <FiInfo size={10}/> CAPS
+                        </span>
+                      )}
+                      <button 
+                        type="button" 
+                        onClick={() => setShowPassword(!showPassword)} 
+                        disabled={isLoading}
+                        className="p-1 rounded-md text-slate-400 hover:text-indigo-600 transition-colors"
+                      >
+                        {showPassword ? <FiEyeOff size={18} /> : <FiEye size={18} />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1 px-1">
+                    <label className="flex items-center group cursor-pointer select-none">
+                      <input 
+                        type="checkbox" 
+                        checked={rememberMe} 
+                        onChange={(e) => setRememberMe(e.target.checked)}
+                        disabled={isLoading}
+                        className="sr-only peer"
+                      />
+                      <div className="w-4.5 h-4.5 bg-slate-50 rounded-md border border-slate-200 peer-checked:bg-slate-900 peer-checked:border-slate-900 flex items-center justify-center transition-all">
+                        {rememberMe && <FiCheck className="text-white" size={12} strokeWidth={3} />}
+                      </div>
+                      <span className="text-xs font-bold text-slate-500 ml-2">Remember Me</span>
+                    </label>
+
+                    <Link to="/forgot-password" className="text-xs font-bold text-[#FF4500] hover:text-orange-600 transition-colors flex items-center gap-1">
+                      <FiShield size={13} /> Forgot password?
+                    </Link>
+                  </div>
+
+                  <div className="pt-2">
+                    <button 
+                      type="submit" 
+                      disabled={!password || isLoading} 
+                      className="w-full bg-slate-900 text-white font-black py-4 rounded-2xl hover:bg-indigo-600 focus:bg-indigo-600 outline-none transition-all shadow-sm active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed flex justify-center items-center h-[56px]"
+                    >
+                      {isLoading ? (
+                        <div className="flex items-center gap-3">
+                          <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                          <span className="tracking-wide text-sm font-black">AUTHENTICATING...</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <span className="tracking-wide">Sign In Securely</span>
+                          <FiArrowRight size={18} />
+                        </div>
+                      )}
+                    </button>
+                  </div>
+                </motion.form>
+              )}
+
+              {/* ================= FLOW 2B: WHATSAPP OTP ENTRY ================= */}
+              {authMode === 'WHATSAPP_OTP' && (
+                <motion.form 
+                  key="otp" 
+                  variants={formVariants} initial="hidden" animate="visible" exit="exit"
+                  onSubmit={handleVerifyWhatsAppOtp} className="space-y-4" noValidate
                 >
-                  <FiArrowLeft size={12} /> Change Number
-                </button>
-              </div>
+                  <div className="flex items-center justify-between bg-emerald-50 px-4 py-2.5 rounded-xl mb-2 border border-emerald-100">
+                    <span className="text-xs font-bold text-emerald-800">+91 {identifier}</span>
+                    <button 
+                      type="button" 
+                      onClick={() => { setAuthMode('IDENTIFIER'); setOtp(''); }}
+                      className="text-xs font-bold text-emerald-700 hover:underline flex items-center gap-1 transition-colors"
+                    >
+                      <FiArrowLeft size={12} /> Change Number
+                    </button>
+                  </div>
 
-              <motion.div variants={itemVariants} className="relative group">
-                <label htmlFor="otp-input" className="sr-only">WhatsApp OTP Code</label>
-                <input 
-                  id="otp-input"
-                  type="text" 
-                  maxLength="6"
-                  value={otp} 
-                  onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} 
-                  disabled={isLoading} 
-                  className="w-full py-4 bg-slate-50/70 border border-slate-200 rounded-2xl focus:bg-white focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10 outline-none transition-all text-center tracking-[0.5em] text-xl font-black text-slate-900 shadow-sm placeholder:tracking-normal placeholder:font-medium placeholder:text-slate-400" 
-                  placeholder="• • • • • •" 
-                  required 
-                  autoFocus
-                />
-              </motion.div>
+                  <div className="relative group">
+                    <label htmlFor="otp-input" className="sr-only">WhatsApp OTP Code</label>
+                    <input 
+                      id="otp-input"
+                      type="text" 
+                      maxLength="6"
+                      value={otp} 
+                      onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} 
+                      disabled={isLoading} 
+                      className="w-full py-4 bg-slate-50/70 border border-slate-200 rounded-2xl focus:bg-white focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10 outline-none transition-all text-center tracking-[0.5em] text-xl font-black text-slate-900 shadow-sm placeholder:tracking-normal placeholder:font-medium placeholder:text-slate-400" 
+                      placeholder="• • • • • •" 
+                      required 
+                      autoFocus
+                    />
+                  </div>
 
-              <div className="text-center">
-                <button 
-                  type="button"
-                  onClick={() => handleSendWhatsAppOtp(identifier.trim().replace(/\D/g, ''))}
-                  disabled={isLoading}
-                  className="text-xs font-bold text-indigo-600 hover:text-indigo-800 transition-colors"
-                >
-                  Resend WhatsApp OTP
-                </button>
-              </div>
+                  <div className="text-center">
+                    <button 
+                      type="button"
+                      onClick={() => handleSendWhatsAppOtp(identifier.trim().replace(/\D/g, ''))}
+                      disabled={isLoading || resendTimer > 0}
+                      className={`text-xs font-bold transition-colors ${resendTimer > 0 ? 'text-slate-400 cursor-not-allowed' : 'text-indigo-600 hover:text-indigo-800'}`}
+                    >
+                      {resendTimer > 0 ? `Resend OTP in ${resendTimer}s` : 'Resend WhatsApp OTP'}
+                    </button>
+                  </div>
 
-              <motion.div variants={itemVariants} className="pt-2">
-                <button 
-                  type="submit" 
-                  disabled={otp.length !== 6 || isLoading} 
-                  className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl hover:bg-emerald-700 focus:bg-emerald-700 outline-none transition-all shadow-sm active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed flex justify-center items-center h-[56px]"
-                >
-                  {isLoading ? (
-                    <div className="flex items-center gap-3">
-                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                      <span className="tracking-wide text-sm font-black">VERIFYING CODE...</span>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <span className="tracking-wide">Verify & Sign In</span>
-                      <FiCheckCircle size={18} />
-                    </div>
-                  )}
-                </button>
-              </motion.div>
-            </form>
-          )}
+                  <div className="pt-2">
+                    <button 
+                      type="submit" 
+                      disabled={otp.length !== 6 || isLoading} 
+                      className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl hover:bg-emerald-700 focus:bg-emerald-700 outline-none transition-all shadow-sm active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed flex justify-center items-center h-[56px]"
+                    >
+                      {isLoading ? (
+                        <div className="flex items-center gap-3">
+                          <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                          <span className="tracking-wide text-sm font-black">VERIFYING CODE...</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <span className="tracking-wide">Verify & Sign In</span>
+                          <FiCheckCircle size={18} />
+                        </div>
+                      )}
+                    </button>
+                  </div>
+                </motion.form>
+              )}
+            </AnimatePresence>
+          </div>
 
           {/* Divider */}
           <motion.div variants={itemVariants} className="relative flex items-center my-7 select-none">

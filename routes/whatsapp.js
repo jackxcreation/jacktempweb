@@ -93,11 +93,18 @@ router.post('/send-otp', async (req, res) => {
           to: phone,
           type: 'template',
           template: {
-            name: 'jack_essentials_otp', // Make sure this template is approved in your Meta Business Manager
+            name: 'jack_essentials_otp', // Approved in your Meta Business Manager
             language: { code: 'en' },
             components: [
               {
                 type: 'body',
+                parameters: [{ type: 'text', text: otp }]
+              },
+              // 🔥 YEH BUTTON PARAMETER FIX HAI JO META MAANG RAHA THA 🔥
+              {
+                type: 'button',
+                sub_type: 'url',
+                index: '0', 
                 parameters: [{ type: 'text', text: otp }]
               }
             ]

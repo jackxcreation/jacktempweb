@@ -2,24 +2,44 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FiUser, FiMail, FiLock, FiEye, FiEyeOff, FiCheck, FiArrowRight, FiPhone, FiCheckCircle } from 'react-icons/fi';
+import { FiUser, FiMail, FiLock, FiEye, FiEyeOff, FiCheck, FiArrowRight, FiPhone, FiCheckCircle, FiShield, FiX, FiAlertCircle, FiWifi } from 'react-icons/fi';
 import { FcGoogle } from 'react-icons/fc';
 import { auth, googleProvider } from '../firebase'; 
 import { signInWithPopup } from 'firebase/auth';
 import { API_URL } from '../config';
-import axiosInstance from '../api/axiosInstance'; // 🔥 Integrated for WhatsApp OTP backend calls
+import axiosInstance from '../api/axiosInstance'; 
 
 import { useUser } from '../context/UserContext';
 
+// --- Static Framer Motion Variants ---
+const containerVariants = { 
+  hidden: { opacity: 0 }, 
+  show: { opacity: 1, transition: { staggerChildren: 0.08, delayChildren: 0.1 } } 
+};
+const itemVariants = { 
+  hidden: { opacity: 0, y: 15 }, 
+  show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 400, damping: 30 } } 
+};
+const formVariants = {
+  hidden: { opacity: 0, x: 20 },
+  visible: { opacity: 1, x: 0, transition: { duration: 0.4, ease: "easeOut" } },
+  exit: { opacity: 0, x: -20, transition: { duration: 0.2, ease: "easeIn" } }
+};
+const toastVariants = {
+  hidden: { opacity: 0, y: 40, scale: 0.95, x: "-50%" },
+  show: { opacity: 1, y: 0, scale: 1, x: "-50%", transition: { type: "spring", stiffness: 450, damping: 25 } },
+  exit: { opacity: 0, y: 20, scale: 0.95, x: "-50%", transition: { duration: 0.2, ease: "easeOut" } }
+};
+
 const SuccessIcon = React.memo(() => (
-  <motion.div className="w-24 h-24 bg-green-50 text-green-500 rounded-full flex justify-center items-center mx-auto mb-6 shadow-inner relative" initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: "spring", stiffness: 200, damping: 10 }}>
-    <div className="absolute inset-0 rounded-full border-4 border-green-200 animate-ping opacity-50"></div>
+  <motion.div className="w-24 h-24 bg-emerald-50 text-emerald-600 rounded-full flex justify-center items-center mx-auto mb-6 shadow-inner relative" initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: "spring", stiffness: 200, damping: 10 }}>
+    <div className="absolute inset-0 rounded-full border-4 border-emerald-200 animate-ping opacity-50"></div>
     <FiCheck size={40} aria-hidden="true" />
   </motion.div>
 ));
 
 const Register = ({ setIsLoggedIn }) => {
-  const [step, setStep] = useState(1); // Step 1: Form details, Step 2: WhatsApp OTP verification, Step 3: Success
+  const [step, setStep] = useState(1); // Step 1: Form details & WhatsApp OTP, Step 3: Success
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   
@@ -43,7 +63,6 @@ const Register = ({ setIsLoggedIn }) => {
   const navigate = useNavigate();
   const location = useLocation(); 
   
-  // Destination tracker after successful registration
   const from = location.state?.from || '/';
 
   const isMounted = useRef(true);
@@ -51,18 +70,14 @@ const Register = ({ setIsLoggedIn }) => {
   
   const { loginUser, socialLoginUser } = useUser();
 
-  // Scroll to top on mount & set professional SEO title
   useEffect(() => {
     window.scrollTo(0, 0);
     document.title = "Sign Up | Jack Essentials — Create Your Account";
   }, []);
 
-  // Component unmount cleanup
   useEffect(() => {
     isMounted.current = true;
-    return () => {
-      isMounted.current = false;
-    };
+    return () => { isMounted.current = false; };
   }, []);
 
   // Persistent Cooldown Setup
@@ -70,11 +85,8 @@ const Register = ({ setIsLoggedIn }) => {
     const savedEndTime = sessionStorage.getItem('whatsappOtpCooldownEnd');
     if (savedEndTime) {
       const remaining = Math.floor((parseInt(savedEndTime, 10) - Date.now()) / 1000);
-      if (remaining > 0) {
-        setCooldown(remaining);
-      } else {
-        sessionStorage.removeItem('whatsappOtpCooldownEnd');
-      }
+      if (remaining > 0) setCooldown(remaining);
+      else sessionStorage.removeItem('whatsappOtpCooldownEnd');
     }
   }, []);
 
@@ -98,7 +110,7 @@ const Register = ({ setIsLoggedIn }) => {
     if (status.msg && status.type === 'error') {
       timer = setTimeout(() => {
         if (isMounted.current) setStatus({ type: '', msg: '' });
-      }, 5000);
+      }, 4000);
     }
     return () => clearTimeout(timer); 
   }, [status.msg, status.type]); 
@@ -141,7 +153,6 @@ const Register = ({ setIsLoggedIn }) => {
            }
            return { ok: false, status: res.status, data, message: msg };
         }
-        
         return { ok: true, status: res.status, data };
       } catch (err) {
         clearTimeout(id);
@@ -180,7 +191,6 @@ const Register = ({ setIsLoggedIn }) => {
     let val = e.target.value.replace(/\D/g, ''); 
     if (val.length > 10 && val.startsWith('91')) val = val.slice(2); 
     setMobile(val.slice(0, 10)); 
-    // If mobile number changes after verification, reset verification status
     if (isMobileVerified) {
       setIsMobileVerified(false);
       setIsOtpSent(false);
@@ -213,7 +223,7 @@ const Register = ({ setIsLoggedIn }) => {
   const passStrength = useMemo(() => getPasswordStrength(), [getPasswordStrength]);
   const isValidEmail = useMemo(() => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), [email]);
 
-  // 🔥 Send WhatsApp OTP Handler
+  // Send WhatsApp OTP Handler
   const handleSendWhatsappOtp = useCallback(async () => {
     if (isSendingOtp) return;
     if (!navigator.onLine) return setStatus({ type: 'error', msg: 'No internet connection available.' });
@@ -228,9 +238,7 @@ const Register = ({ setIsLoggedIn }) => {
     setStatus({ type: 'loading', msg: 'Sending WhatsApp verification code...' });
 
     try {
-      // Calls the backend WhatsApp OTP route we configured earlier
       const res = await axiosInstance.post('/whatsapp/send-otp', { phone: `+91${mobile}` });
-      
       if (!isMounted.current) return;
 
       if (res.data?.success) {
@@ -250,7 +258,7 @@ const Register = ({ setIsLoggedIn }) => {
     }
   }, [mobile, otpAttempts, isSendingOtp]);
 
-  // 🔥 Verify WhatsApp OTP Handler
+  // Verify WhatsApp OTP Handler
   const handleVerifyWhatsappOtp = useCallback(async () => {
     if (isVerifyingOtp) return;
     if (!navigator.onLine) return setStatus({ type: 'error', msg: 'No internet connection available.' });
@@ -261,7 +269,6 @@ const Register = ({ setIsLoggedIn }) => {
 
     try {
       const res = await axiosInstance.post('/whatsapp/verify-otp', { phone: `+91${mobile}`, otp: whatsappOtp });
-
       if (!isMounted.current) return;
 
       if (res.data?.success) {
@@ -301,7 +308,7 @@ const Register = ({ setIsLoggedIn }) => {
         body: JSON.stringify({ 
           name: name.trim(), 
           email, 
-          mobile, // Securely verified mobile number saved to database
+          mobile, 
           password 
         })
       });
@@ -312,9 +319,8 @@ const Register = ({ setIsLoggedIn }) => {
         await loginUser(email, password);
         if (setIsLoggedIn) setIsLoggedIn(true);
         
-        setStep(3); // Success step
+        setStep(3); 
         resetForm();
-        
         setTimeout(() => { if (isMounted.current) navigate(from, { replace: true }); }, 2500); 
       } else {
         setStatus({ type: 'error', msg: regRes.message || 'Registration failed' });
@@ -377,72 +383,98 @@ const Register = ({ setIsLoggedIn }) => {
   const isLoading = status.type === 'loading' || isSendingOtp || isVerifyingOtp;
 
   return (
-    <div className="flex min-h-screen bg-white font-sans relative overflow-hidden selection:bg-[#FF4500] selection:text-white">
+    <div className="flex min-h-screen bg-slate-50 font-sans relative overflow-hidden selection:bg-[#FF4500] selection:text-white">
       
       {/* ================= LEFT PANEL ================= */}
       <div className="hidden lg:flex lg:w-[45%] bg-[#0B0F19] text-white flex-col justify-between p-12 relative overflow-hidden shadow-2xl z-10 select-none" role="complementary">
-        <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-indigo-600 rounded-full mix-blend-screen filter blur-[150px] opacity-20 pointer-events-none"></div>
-        <div className="absolute bottom-[-10%] left-[-10%] w-[400px] h-[400px] bg-[#FF4500] rounded-full mix-blend-screen filter blur-[120px] opacity-20 pointer-events-none"></div>
+        <motion.div 
+          animate={{ scale: [1, 1.1, 1], opacity: [0.15, 0.25, 0.15] }} 
+          transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }} 
+          className="absolute top-[-10%] right-[-10%] w-[600px] h-[600px] bg-[#FF4500] rounded-full mix-blend-screen filter blur-[150px] pointer-events-none"
+        />
+        <motion.div 
+          animate={{ scale: [1, 1.2, 1], opacity: [0.1, 0.2, 0.1] }} 
+          transition={{ duration: 10, repeat: Infinity, ease: "easeInOut", delay: 1 }} 
+          className="absolute bottom-[-20%] left-[-10%] w-[500px] h-[500px] bg-indigo-600 rounded-full mix-blend-screen filter blur-[150px] pointer-events-none"
+        />
 
         <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.8 }} className="text-sm text-slate-400 font-bold tracking-widest uppercase z-10 mt-6 flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-indigo-500" aria-hidden="true"></span> Exclusive Membership
+          <span className="w-2 h-2 rounded-full bg-[#FF4500] animate-pulse" aria-hidden="true"></span> Exclusive Membership
         </motion.div>
 
         <motion.div initial={{ opacity: 0, x: -30 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 1, delay: 0.2 }} className="z-10 mt-10 relative">
-          <h1 className="text-6xl font-black tracking-tight leading-[1.1]">Join the <br /> Elite Club.</h1>
-          <p className="text-slate-400 mt-6 max-w-sm text-lg font-medium leading-relaxed">Create an account with WhatsApp verification to unlock VIP pricing and instant order tracking.</p>
+          <h1 className="text-6xl font-black tracking-tight leading-[1.1] mb-6">Join the <br /> Elite Club.</h1>
+          <div className="w-16 h-1.5 bg-gradient-to-r from-[#FF4500] to-orange-400 rounded-full mb-6"></div>
+          <p className="text-slate-400 max-w-sm text-lg font-medium leading-relaxed">Create an account with WhatsApp verification to unlock VIP pricing and instant order tracking.</p>
         </motion.div>
 
         <div className="z-10 mt-auto">
-          <Link to="/" className="flex items-center space-x-2 w-max group focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-[#0B0F19] rounded-lg p-1" aria-label="Return to Store">
-            <span className="text-3xl font-black tracking-tight" aria-hidden="true">J<span className="text-[#FF4500] group-hover:text-white transition-colors">S</span></span>
-            <span className="text-sm font-bold tracking-widest text-slate-500 uppercase">Return to Store</span>
+          <Link to="/" className="flex items-center space-x-2 w-max group focus:outline-none focus:ring-2 focus:ring-white/50 rounded-lg p-1 -ml-1" aria-label="Return to Store">
+            <span className="text-3xl font-black tracking-tight" aria-hidden="true">J<span className="text-[#FF4500] group-hover:text-white transition-colors duration-300">S</span></span>
+            <span className="text-sm font-bold tracking-widest text-slate-500 uppercase group-hover:text-slate-300 transition-colors duration-300">Return to Store</span>
           </Link>
         </div>
       </div>
 
       {/* ================= RIGHT PANEL ================= */}
-      <div className="w-full lg:w-[55%] flex flex-col items-center justify-center p-6 sm:p-12 bg-white relative z-20" role="main">
-        <div className="w-full max-w-md relative">
+      <div className="w-full lg:w-[55%] flex flex-col items-center justify-center p-4 sm:p-6 md:p-12 bg-white/80 backdrop-blur-xl relative z-20 overflow-hidden" role="main">
+        
+        {/* Offline HUD Banner */}
+        <AnimatePresence>
+          {!navigator.onLine && (
+            <motion.div 
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="absolute top-4 left-4 right-4 bg-amber-500 text-white font-bold text-xs py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 shadow-md z-30 select-none"
+            >
+              <FiWifi className="animate-pulse" size={16} /> NO NETWORK CONNECTION DETECTED.
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <motion.div variants={containerVariants} initial="hidden" animate="show" className="w-full max-w-md relative py-6">
           
           <div className="lg:hidden flex flex-col items-center mb-8" aria-hidden="true">
-            <div className="w-16 h-16 bg-slate-900 rounded-2xl flex items-center justify-center mb-3 shadow-lg">
+            <Link to="/" className="w-16 h-16 bg-slate-900 rounded-2xl flex items-center justify-center mb-3 shadow-xl shadow-slate-900/20 hover:scale-105 transition-transform">
               <span className="text-3xl font-black text-white tracking-tight">J<span className="text-[#FF4500]">S</span></span>
-            </div>
+            </Link>
           </div>
 
           <AnimatePresence mode="wait">
             
             {/* ---------------- STEP 1: REGISTRATION FORM WITH WHATSAPP OTP ---------------- */}
             {step === 1 && (
-              <motion.div key="step1" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -50 }} transition={{ duration: 0.3 }}>
+              <motion.div key="step1" variants={formVariants} initial="hidden" animate="visible" exit="exit">
                 <div className="mb-8 text-center lg:text-left">
-                  <h2 className="text-3xl sm:text-4xl font-black text-slate-900 tracking-tight">Create Account</h2>
-                  <p className="text-slate-500 mt-2 font-medium">Verify your mobile via WhatsApp to register securely.</p>
+                  <h2 className="text-3xl sm:text-4xl font-black text-slate-900 tracking-tight flex items-center justify-center lg:justify-start gap-3">
+                    Create Account <span className="text-[#FF4500] select-none">✦</span>
+                  </h2>
+                  <p className="text-slate-500 mt-2 font-medium text-sm sm:text-base">Verify your mobile via WhatsApp to register securely.</p>
                 </div>
 
                 <form onSubmit={handleFinalRegister} className="space-y-4" noValidate>
-                  <div className="relative">
-                    <FiUser className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
-                    <input type="text" value={name} onChange={(e) => setName(e.target.value)} disabled={isLoading} className="w-full pl-12 pr-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl focus:bg-white focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600 focus:ring-opacity-50 outline-none transition-all font-medium text-slate-800 disabled:opacity-50" placeholder="Full Name" aria-label="Full Name" autoComplete="name" required />
+                  <div className="relative group">
+                    <FiUser className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-600 transition-colors" aria-hidden="true" />
+                    <input type="text" value={name} onChange={(e) => setName(e.target.value)} disabled={isLoading} className="w-full pl-12 pr-5 py-4 bg-slate-50/70 border border-slate-200 rounded-2xl focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/10 outline-none transition-all font-semibold text-slate-800 placeholder:text-slate-400/90 placeholder:font-medium shadow-sm disabled:opacity-50" placeholder="Full Name" aria-label="Full Name" autoComplete="name" required />
                   </div>
                   
-                  <div className="relative">
-                    <FiMail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
-                    <input type="email" value={email} onChange={handleEmailChange} disabled={isLoading} className="w-full pl-12 pr-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl focus:bg-white focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600 focus:ring-opacity-50 outline-none transition-all font-medium text-slate-800 disabled:opacity-50" placeholder="Email Address" aria-label="Email Address" autoComplete="email" required />
+                  <div className="relative group">
+                    <FiMail className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-600 transition-colors" aria-hidden="true" />
+                    <input type="email" value={email} onChange={handleEmailChange} disabled={isLoading} className="w-full pl-12 pr-5 py-4 bg-slate-50/70 border border-slate-200 rounded-2xl focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/10 outline-none transition-all font-semibold text-slate-800 placeholder:text-slate-400/90 placeholder:font-medium shadow-sm disabled:opacity-50" placeholder="Email Address" aria-label="Email Address" autoComplete="email" required />
                   </div>
 
                   {/* Mobile Number & WhatsApp OTP Inline Section */}
                   <div className="space-y-2">
-                    <div className="relative flex items-center">
-                      <FiPhone className="absolute left-4 text-slate-400" aria-hidden="true" />
+                    <div className="relative flex items-center group">
+                      <FiPhone className="absolute left-5 text-slate-400 group-focus-within:text-indigo-600 transition-colors" aria-hidden="true" />
                       <input 
                         type="tel" 
                         value={mobile} 
                         onChange={handleMobileChange} 
                         maxLength="10" 
                         disabled={isLoading || isMobileVerified} 
-                        className={`w-full pl-12 pr-32 py-4 bg-slate-50 border rounded-2xl focus:bg-white focus:border-indigo-600 outline-none transition-all font-medium text-slate-800 disabled:opacity-70 ${isMobileVerified ? 'border-emerald-300 bg-emerald-50/30' : 'border-slate-200'}`} 
+                        className={`w-full pl-12 pr-32 py-4 bg-slate-50/70 border rounded-2xl focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/10 outline-none transition-all font-semibold text-slate-800 placeholder:text-slate-400/90 placeholder:font-medium shadow-sm disabled:opacity-70 ${isMobileVerified ? 'border-emerald-300 bg-emerald-50/30' : 'border-slate-200'}`} 
                         placeholder="Mobile Number (10 digits)" 
                         aria-label="Mobile Number" 
                         autoComplete="tel" 
@@ -467,7 +499,7 @@ const Register = ({ setIsLoggedIn }) => {
                       </div>
                     </div>
 
-                    {/* WhatsApp OTP Input Row (Appears after clicking Send OTP until verified) */}
+                    {/* WhatsApp OTP Input Row */}
                     {isOtpSent && !isMobileVerified && (
                       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center gap-2 pt-1">
                         <input
@@ -476,13 +508,13 @@ const Register = ({ setIsLoggedIn }) => {
                           value={whatsappOtp}
                           onChange={(e) => setWhatsappOtp(e.target.value.replace(/\D/g, ''))}
                           placeholder="Enter 6-digit WhatsApp OTP"
-                          className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 tracking-widest text-base font-black text-slate-900 outline-none focus:border-emerald-600"
+                          className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 tracking-widest text-base font-black text-slate-900 outline-none focus:border-emerald-600 shadow-sm"
                         />
                         <button
                           type="button"
                           onClick={handleVerifyWhatsappOtp}
                           disabled={whatsappOtp.length !== 6 || isVerifyingOtp}
-                          className="bg-slate-900 hover:bg-emerald-600 text-white font-bold text-xs px-5 py-3.5 rounded-xl transition-all disabled:opacity-40"
+                          className="bg-slate-900 hover:bg-emerald-600 text-white font-bold text-xs px-5 py-3.5 rounded-xl transition-all disabled:opacity-40 shadow-sm"
                         >
                           {isVerifyingOtp ? 'Verifying...' : 'Verify'}
                         </button>
@@ -490,10 +522,10 @@ const Register = ({ setIsLoggedIn }) => {
                     )}
                   </div>
                   
-                  <div className="relative">
-                    <FiLock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
-                    <input type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} disabled={isLoading} className="w-full pl-12 pr-12 py-4 bg-slate-50 border border-slate-200 rounded-2xl focus:bg-white focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600 focus:ring-opacity-50 outline-none transition-all font-medium text-slate-800 disabled:opacity-50" placeholder="Create Password" aria-label="Create Password" autoComplete="new-password" required />
-                    <button type="button" onClick={() => setShowPassword(!showPassword)} aria-label={showPassword ? "Hide password" : "Show password"} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-indigo-600 focus:outline-none focus:text-indigo-600 transition-colors p-1 rounded-md">
+                  <div className="relative group">
+                    <FiLock className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-600 transition-colors" aria-hidden="true" />
+                    <input type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} disabled={isLoading} className="w-full pl-12 pr-12 py-4 bg-slate-50/70 border border-slate-200 rounded-2xl focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/10 outline-none transition-all font-semibold text-slate-800 placeholder:text-slate-400/90 placeholder:font-medium shadow-sm disabled:opacity-50" placeholder="Create Password" aria-label="Create Password" autoComplete="new-password" required />
+                    <button type="button" onClick={() => setShowPassword(!showPassword)} aria-label={showPassword ? "Hide password" : "Show password"} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-indigo-600 focus:outline-none transition-colors p-1 rounded-md">
                       {showPassword ? <FiEyeOff size={18} aria-hidden="true" /> : <FiEye size={18} aria-hidden="true" />}
                     </button>
                   </div>
@@ -505,52 +537,54 @@ const Register = ({ setIsLoggedIn }) => {
                          <span>Password Strength</span>
                          <span className={`${
                           passStrength.score === 1 ? 'text-red-500' :
-                          passStrength.score === 2 ? 'text-yellow-500' :
+                          passStrength.score === 2 ? 'text-amber-500' :
                           passStrength.score === 3 ? 'text-blue-500' :
-                          'text-green-500'
+                          'text-emerald-500'
                          }`}>{passStrength.text}</span>
                       </div>
                       <div className="flex gap-1.5 mt-1" aria-label={`Password strength: ${passStrength.text}`}>
                         <div className={`h-1.5 flex-1 rounded-full transition-colors duration-300 ${passStrength.score >= 1 ? 'bg-red-400' : 'bg-slate-200'}`}></div>
-                        <div className={`h-1.5 flex-1 rounded-full transition-colors duration-300 ${passStrength.score >= 2 ? 'bg-yellow-400' : 'bg-slate-200'}`}></div>
+                        <div className={`h-1.5 flex-1 rounded-full transition-colors duration-300 ${passStrength.score >= 2 ? 'bg-amber-400' : 'bg-slate-200'}`}></div>
                         <div className={`h-1.5 flex-1 rounded-full transition-colors duration-300 ${passStrength.score >= 3 ? 'bg-blue-400' : 'bg-slate-200'}`}></div>
-                        <div className={`h-1.5 flex-1 rounded-full transition-colors duration-300 ${passStrength.score >= 4 ? 'bg-green-500' : 'bg-slate-200'}`}></div>
+                        <div className={`h-1.5 flex-1 rounded-full transition-colors duration-300 ${passStrength.score >= 4 ? 'bg-emerald-500' : 'bg-slate-200'}`}></div>
                       </div>
                     </div>
                   )}
 
-                  <div className="relative pt-2">
-                    <FiLock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 mt-1" aria-hidden="true" />
-                    <input type={showConfirmPassword ? 'text' : 'password'} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} disabled={isLoading} className="w-full pl-12 pr-12 py-4 bg-slate-50 border border-slate-200 rounded-2xl focus:bg-white focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600 focus:ring-opacity-50 outline-none transition-all font-medium text-slate-800 disabled:opacity-50" placeholder="Confirm Password" aria-label="Confirm Password" autoComplete="new-password" required />
-                    <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} aria-label={showConfirmPassword ? "Hide confirm password" : "Show confirm password"} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-indigo-600 focus:outline-none focus:text-indigo-600 transition-colors p-1 rounded-md mt-1">
+                  <div className="relative group pt-2">
+                    <FiLock className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-600 transition-colors mt-1" aria-hidden="true" />
+                    <input type={showConfirmPassword ? 'text' : 'password'} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} disabled={isLoading} className="w-full pl-12 pr-12 py-4 bg-slate-50/70 border border-slate-200 rounded-2xl focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/10 outline-none transition-all font-semibold text-slate-800 placeholder:text-slate-400/90 placeholder:font-medium shadow-sm disabled:opacity-50" placeholder="Confirm Password" aria-label="Confirm Password" autoComplete="new-password" required />
+                    <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} aria-label={showConfirmPassword ? "Hide confirm password" : "Show confirm password"} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-indigo-600 focus:outline-none transition-colors p-1 rounded-md mt-1">
                       {showConfirmPassword ? <FiEyeOff size={18} aria-hidden="true" /> : <FiEye size={18} aria-hidden="true" />}
                     </button>
                   </div>
 
-                  <button 
-                    type="submit" 
-                    disabled={!isFormValid || isLoading}
-                    className="w-full bg-slate-900 text-white font-black py-4 rounded-2xl hover:bg-indigo-600 focus:ring-4 focus:ring-indigo-600/50 transition-all shadow-lg hover:shadow-indigo-600/30 mt-6 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center h-[56px] outline-none"
-                    aria-live="polite"
-                  >
-                    {isLoading ? (
-                      <div className="flex items-center gap-2">
-                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" aria-hidden="true"></div>
-                        <span>SECURING REGISTRATION...</span>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-2">
-                        <span>Complete Registration</span>
-                        <FiArrowRight size={18} aria-hidden="true" />
-                      </div>
-                    )}
-                  </button>
+                  <div className="pt-2">
+                    <button 
+                      type="submit" 
+                      disabled={!isFormValid || isLoading}
+                      className="w-full bg-slate-900 text-white font-black py-4 rounded-2xl hover:bg-indigo-600 focus:bg-indigo-600 outline-none transition-all shadow-sm active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed flex justify-center items-center h-[56px]"
+                      aria-live="polite"
+                    >
+                      {isLoading ? (
+                        <div className="flex items-center gap-3">
+                          <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" aria-hidden="true"></div>
+                          <span className="tracking-wide text-sm font-black">SECURING REGISTRATION...</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <span className="tracking-wide">Complete Registration</span>
+                          <FiArrowRight size={18} aria-hidden="true" />
+                        </div>
+                      )}
+                    </button>
+                  </div>
                 </form>
 
-                <div className="relative flex items-center my-8" aria-hidden="true">
-                  <div className="flex-grow border-t border-slate-200"></div>
-                  <span className="flex-shrink-0 mx-4 text-slate-400 text-xs font-bold uppercase tracking-widest">Or register with</span>
-                  <div className="flex-grow border-t border-slate-200"></div>
+                <div className="relative flex items-center my-7 select-none" aria-hidden="true">
+                  <div className="flex-grow border-t border-slate-100"></div>
+                  <span className="flex-shrink-0 mx-4 text-slate-400 text-[10px] font-black uppercase tracking-widest">Or register with</span>
+                  <div className="flex-grow border-t border-slate-100"></div>
                 </div>
 
                 <div className="flex justify-center mb-8">
@@ -558,17 +592,17 @@ const Register = ({ setIsLoggedIn }) => {
                     type="button"
                     onClick={() => handleSocialRegister(googleProvider, 'Google')} 
                     disabled={isLoading}
-                    className="w-full flex justify-center items-center gap-3 py-4 border-2 border-slate-200 rounded-xl hover:bg-slate-50 focus:bg-slate-50 focus:border-slate-400 hover:border-slate-300 transition-all shadow-sm active:scale-95 disabled:opacity-50 outline-none"
+                    className="w-full flex justify-center items-center gap-3 py-3.5 border border-slate-200 rounded-2xl hover:bg-slate-50 transition-all shadow-sm active:scale-[0.96] bg-white"
                     aria-label="Sign up with Google"
                   >
-                    <FcGoogle size={24} aria-hidden="true" />
-                    <span className="font-bold text-slate-700">Sign up with Google</span>
+                    <FcGoogle size={20} aria-hidden="true" />
+                    <span className="font-bold text-slate-700 text-xs sm:text-sm">Sign up with Google</span>
                   </button>
                 </div>
 
                 <div className="text-center">
-                  <p className="text-sm text-slate-500 font-medium">
-                    Already have an account? <Link to="/login" state={{ from: from }} className="text-slate-900 font-bold hover:text-indigo-600 focus:outline-none focus:underline transition-colors ml-1">Sign in here</Link>
+                  <p className="text-sm text-slate-400 font-medium">
+                    Already have an account? <Link to="/login" state={{ from: from }} className="text-slate-900 font-black hover:text-[#FF4500] transition-colors ml-1">Sign in here</Link>
                   </p>
                 </div>
               </motion.div>
@@ -576,37 +610,54 @@ const Register = ({ setIsLoggedIn }) => {
 
             {/* ---------------- STEP 3: SUCCESS ---------------- */}
             {step === 3 && (
-              <motion.div key="step3" initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.5, type: 'spring' }} className="py-10 text-center" aria-live="assertive">
+              <motion.div key="step3" variants={formVariants} initial="hidden" animate="visible" exit="exit" className="py-10 text-center" aria-live="assertive">
                 <SuccessIcon />
                 <h2 className="text-3xl font-black text-slate-900 mt-6 tracking-tight">Account Created!</h2>
                 <p className="text-slate-500 mt-2 font-medium text-lg">Welcome to the Jack Essentials family.</p>
-                <motion.div className="mt-10 bg-slate-50 px-6 py-4 rounded-full border border-slate-100 flex items-center justify-center gap-3 w-max mx-auto" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }}>
+                <motion.div className="mt-10 bg-slate-50 px-6 py-4 rounded-full border border-slate-100 flex items-center justify-center gap-3 w-max mx-auto shadow-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }}>
                   <div className="w-5 h-5 border-2 border-slate-300 border-t-[#FF4500] rounded-full animate-spin" aria-hidden="true"></div>
-                  <p className="text-xs text-slate-600 uppercase tracking-widest font-bold">Entering Dashboard...</p>
+                  <p className="text-xs text-slate-600 uppercase tracking-widest font-black">Entering Dashboard...</p>
                 </motion.div>
               </motion.div>
             )}
 
           </AnimatePresence>
-        </div>
+        </motion.div>
 
-        {/* FLOATING STATUS TOAST */}
-        <AnimatePresence>
-          {status.msg && step !== 3 && (
-            <motion.div 
-              initial={{ opacity: 0, y: 50, scale: 0.9 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 20, scale: 0.9 }} 
-              className={`absolute bottom-8 left-1/2 -translate-x-1/2 w-[90%] max-w-sm flex items-center justify-center text-center font-bold text-sm px-6 py-4 rounded-2xl shadow-xl border z-50 ${
-                status.type === 'error' ? 'bg-red-50 border-red-200 text-red-600' : 
-                status.type === 'loading' ? 'bg-slate-900 border-slate-800 text-white' : 
-                'bg-green-50 border-green-200 text-green-700'
-              }`}
-              role="alert"
-              aria-live="assertive"
-            >
-              {status.msg}
-            </motion.div>
-          )}
-        </AnimatePresence>
+        {/* Global Toast HUD */}
+        <div className="absolute bottom-6 left-0 right-0 pointer-events-none flex justify-center z-50 px-4">
+          <AnimatePresence>
+            {status.msg && step !== 3 && (
+              <motion.div 
+                variants={toastVariants}
+                initial="hidden"
+                animate="show"
+                exit="exit"
+                role="alert"
+                aria-live="assertive"
+                className={`pointer-events-auto flex items-center justify-between gap-3 w-full max-w-sm font-bold text-xs sm:text-sm px-4.5 py-3.5 rounded-2xl shadow-xl border backdrop-blur-xl relative overflow-hidden ${
+                  status.type === 'error' 
+                    ? 'bg-red-50/95 border-red-200 text-red-700' 
+                    : status.type === 'loading' 
+                      ? 'bg-slate-950/95 border-slate-800 text-white' 
+                      : 'bg-emerald-50/95 border-emerald-200 text-emerald-700'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  {status.type === 'error' && <FiAlertCircle size={18} className="flex-shrink-0 text-red-500" />}
+                  {status.type === 'success' && <FiCheckCircle size={18} className="flex-shrink-0 text-emerald-600" />}
+                  {status.type === 'loading' && <FiShield size={18} className="flex-shrink-0 text-indigo-400 animate-pulse" />}
+                  <span className="leading-snug truncate pr-2">{status.msg}</span>
+                </div>
+                {status.type !== 'loading' && (
+                  <button type="button" onClick={() => setStatus({ type: '', msg: '' })} className="p-1 rounded-lg opacity-60 hover:opacity-100">
+                    <FiX size={14} />
+                  </button>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
 
       </div>
     </div>
