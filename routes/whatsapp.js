@@ -93,7 +93,7 @@ router.post('/send-otp', async (req, res) => {
           to: phone,
           type: 'template',
           template: {
-            name: 'otp_verification', // Make sure this template is approved in your Meta Business Manager
+            name: 'jack_essentials_otp', // Make sure this template is approved in your Meta Business Manager
             language: { code: 'en' },
             components: [
               {
