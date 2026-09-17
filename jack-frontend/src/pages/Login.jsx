@@ -49,7 +49,7 @@ const Login = ({ setIsLoggedIn }) => {
   const [authMode, setAuthMode] = useState('IDENTIFIER'); 
   const [otp, setOtp] = useState('');
   
-  // 🔥 New Premium Feature: Resend Timer State
+  // Resend Timer State
   const [resendTimer, setResendTimer] = useState(0);
 
   const [status, setStatus] = useState({ type: '', msg: '' });
@@ -208,10 +208,18 @@ const Login = ({ setIsLoggedIn }) => {
       if (!isMounted.current) return;
 
       if (res.data?.success) {
-        if (res.data?.token) localStorage.setItem('token', res.data.token);
+        if (res.data?.token) {
+          localStorage.setItem('token', res.data.token);
+        }
         setStatus({ type: 'success', msg: 'Phone verified successfully! Redirecting...' });
         if (setIsLoggedIn) setIsLoggedIn(true);
-        setTimeout(() => { if (isMounted.current) navigate(from, { replace: true }); }, 1000);
+        
+        // 🔥 FULL RELOAD NAVIGATION FIX TO SYNC USERCONTEXT STATE
+        setTimeout(() => {
+          if (isMounted.current) {
+            window.location.href = from;
+          }
+        }, 1000);
       } else {
         setStatus({ type: 'error', msg: res.data?.message || 'Invalid OTP code.' });
       }
