@@ -158,7 +158,7 @@ const Login = ({ setIsLoggedIn }) => {
         return;
       }
 
-      if (res?.success || res?.token) {
+      if (res?.success || res?.user) {
         try {
           if (rememberMe) localStorage.setItem('jack_remembered_identifier', trimmedEmail);
           else localStorage.removeItem('jack_remembered_identifier');
@@ -208,13 +208,7 @@ const Login = ({ setIsLoggedIn }) => {
       if (!isMounted.current) return;
 
       if (res.data?.success) {
-        // 🔥 FIXED: Store token and user details across all common keys so UserContext & AuthContext sync instantly
-        const authToken = res.data.token;
-        if (authToken) {
-          localStorage.setItem('token', authToken);
-          localStorage.setItem('jack_token', authToken);
-          localStorage.setItem('admin_token', authToken);
-        }
+        // 🔥 HttpOnly cookie session managed securely by backend; caching user metadata only.
         if (res.data?.user) {
           localStorage.setItem('jack_user', JSON.stringify(res.data.user));
         }
@@ -256,7 +250,7 @@ const Login = ({ setIsLoggedIn }) => {
         return;
       }
       
-      if (dbRes?.success || dbRes?.token) {
+      if (dbRes?.success || dbRes?.user) {
         setStatus({ type: 'success', msg: `Welcome back, ${result?.user?.displayName?.split(' ')[0] || 'User'}!` });
         if (setIsLoggedIn) setIsLoggedIn(true);
         setTimeout(() => { if (isMounted.current) navigate(from, { replace: true }); }, 1000);

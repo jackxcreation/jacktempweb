@@ -1,5 +1,8 @@
 const mongoose = require('mongoose');
 
+// Import the single canonical User model from models/User.js to eliminate schema duplication bug
+const User = require('./models/User');
+
 // ==========================================
 // 🔥 MULTI-STATE INVENTORY SUB-SCHEMA
 // ==========================================
@@ -252,48 +255,6 @@ productSchema.index({ title: 'text', description: 'text', searchKeywords: 'text'
 productSchema.index({ 'warehouseInventories.warehouse': 1, 'warehouseInventories.inventoryState.available': 1 });
 
 // ==========================================
-// 2. USER SCHEMA
-// ==========================================
-const addressSchema = new mongoose.Schema({
-  flat: { type: String, required: true },
-  street: { type: String, required: true },
-  landmark: { type: String },
-  city: { type: String, required: true },
-  state: { type: String, required: true },
-  pincode: { type: String, required: true },
-  primaryPhone: { type: String, required: true },
-  secondaryPhone: { type: String },
-  email: { type: String }, 
-  isDefault: { type: Boolean, default: false }
-});
-
-const userSchema = new mongoose.Schema({
-  name: { type: String, required: [true, "Full name is required"], trim: true },
-  email: { type: String, required: [true, "Email address is required"], unique: true, lowercase: true, trim: true },
-  phone: { type: String, trim: true },
-  password: { type: String, select: false }, 
-  googleId: { type: String },
-  role: { type: String, enum: ['admin', 'manager', 'catalog', 'support', 'customer'], default: 'customer' },
-  addresses: [addressSchema], 
-  wishlist: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Product' }],
-  recentlyViewed: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Product' }],
-  resetPasswordToken: String,
-  resetPasswordExpire: Date,
-  isActive: { type: Boolean, default: true },
-  isLocked: { type: Boolean, default: false },
-  securityCode: { type: String, default: "" },
-  auditLogs: [{
-    action: String,
-    details: String,
-    ip: String,
-    timestamp: { type: Date, default: Date.now }
-  }]
-}, { timestamps: true });
-
-userSchema.index({ phone: 1 });
-userSchema.index({ createdAt: -1 });
-
-// ==========================================
 // 3. ORDER SCHEMA
 // ==========================================
 const shipmentSchema = new mongoose.Schema({
@@ -492,7 +453,6 @@ const ticketSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now, index: true }
 });
 
-// 🔥 NEW: Support Conversation Schema
 const supportConversationSchema = new mongoose.Schema({
   conversationId: { type: String, required: true, unique: true, index: true },
   customerId: { type: String, default: null, index: true },
@@ -501,7 +461,6 @@ const supportConversationSchema = new mongoose.Schema({
   lastMessageAt: { type: Date, default: Date.now, index: true }
 }, { timestamps: true });
 
-// 🔥 NEW: Support Message Schema (FIXED: Added messageId with unique/sparse/default & AI/CUSTOMER/AGENT to enum)
 const supportMessageSchema = new mongoose.Schema({
   conversationId: { type: String, required: true, index: true },
   messageId: { 
@@ -522,7 +481,6 @@ const supportMessageSchema = new mongoose.Schema({
 }, { timestamps: true });
 supportMessageSchema.index({ conversationId: 1, createdAt: 1 });
 
-// 🔥 NEW: Support Knowledge Schema (FAQ)
 const supportKnowledgeSchema = new mongoose.Schema({
   title: { type: String, required: true, trim: true, index: true },
   content: { type: String, required: true, trim: true },
@@ -632,11 +590,11 @@ const trafficEventSchema = new mongoose.Schema({
 trafficEventSchema.index({ timestamp: -1 });
 
 // ==========================================
-// 🔥 EXPORT ALL MODELS (INCLUDING SUPPORT & ANALYTICS)
+// 🔥 EXPORT ALL MODELS (Canonical User re-exported cleanly)
 // ==========================================
 module.exports = {
   Product: mongoose.models.Product || mongoose.model('Product', productSchema),
-  User: mongoose.models.User || mongoose.model('User', userSchema),
+  User, // Re-exported from models/User.js to eliminate schema duplication bug
   Order: mongoose.models.Order || mongoose.model('Order', orderSchema),
   PaymentIntent: mongoose.models.PaymentIntent || mongoose.model('PaymentIntent', paymentIntentSchema),
   PaymentAttempt: mongoose.models.PaymentAttempt || mongoose.model('PaymentAttempt', paymentAttemptSchema),
@@ -646,7 +604,7 @@ module.exports = {
   Subscriber: mongoose.models.Subscriber || mongoose.model('Subscriber', subscriberSchema),
   EmailTemplate: mongoose.models.EmailTemplate || mongoose.model('EmailTemplate', emailTemplateSchema),
   Ticket: mongoose.models.Ticket || mongoose.model('Ticket', ticketSchema),
-  SupportTicket: mongoose.models.SupportTicket || mongoose.model('SupportTicket', ticketSchema), // Alias for unified support
+  SupportTicket: mongoose.models.SupportTicket || mongoose.model('SupportTicket', ticketSchema),
   SupportConversation: mongoose.models.SupportConversation || mongoose.model('SupportConversation', supportConversationSchema),
   SupportMessage: mongoose.models.SupportMessage || mongoose.model('SupportMessage', supportMessageSchema),
   SupportKnowledge: mongoose.models.SupportKnowledge || mongoose.model('SupportKnowledge', supportKnowledgeSchema),

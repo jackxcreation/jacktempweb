@@ -134,7 +134,7 @@ const Register = ({ setIsLoggedIn }) => {
               continue;
            }
            
-           let msg = data.message || data.error;
+           let msg = data.error || data.message;
            if (!msg) {
                const statusMap = {
                    400: "Invalid request data. Please check your inputs.",
@@ -286,7 +286,7 @@ const Register = ({ setIsLoggedIn }) => {
     }
   }, [mobile, whatsappOtp, isVerifyingOtp]);
 
-  // Complete Registration Handler
+  // Complete Registration Handler (Canonical Route Alignment: /api/auth/register)
   const handleFinalRegister = useCallback(async (e) => {
     if (e) e.preventDefault();
     if (isRequesting.current) return;
@@ -302,13 +302,15 @@ const Register = ({ setIsLoggedIn }) => {
     setStatus({ type: 'loading', msg: 'Setting up your secure profile...' });
 
     try {
-      const regRes = await safeFetch(`${API_URL}/users/register`, {
+      // 🔥 CANONICAL AUTH ROUTE ALIGNMENT: Updated from /api/users/register to /api/auth/register
+      const regRes = await safeFetch(`${API_URL}/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ 
           name: name.trim(), 
           email, 
-          mobile, 
+          phone: mobile, 
           password 
         })
       });
@@ -332,6 +334,7 @@ const Register = ({ setIsLoggedIn }) => {
     }
   }, [name, email, mobile, password, confirmPassword, isValidEmail, isMobileVerified, validatePassword, loginUser, setIsLoggedIn, navigate, resetForm, from]);
 
+  // Social Registration Handler (Canonical Route Alignment: /api/auth/social/google)
   const handleSocialRegister = useCallback(async (provider, providerName) => {
     if (isRequesting.current) return;
     if (!navigator.onLine) return setStatus({ type: 'error', msg: 'No internet connection available.' });
@@ -341,6 +344,7 @@ const Register = ({ setIsLoggedIn }) => {
     
     try {
       const result = await signInWithPopup(auth, provider);
+      // 🔥 CANONICAL AUTH ROUTE ALIGNMENT: socialLoginUser internally points to /api/auth/social/google
       const dbRes = await socialLoginUser(result.user.displayName, result.user.email, result.user.uid);
       
       if (!isMounted.current) return;
@@ -357,7 +361,7 @@ const Register = ({ setIsLoggedIn }) => {
           setTimeout(() => { if (isMounted.current) navigate(from, { replace: true }); }, 1500);
         }
       } else {
-        setStatus({ type: 'error', msg: `Database sync failed!` });
+        setStatus({ type: 'error', msg: dbRes.message || `Database sync failed!` });
       }
     } catch (error) {
       if (!isMounted.current) return;
@@ -536,10 +540,10 @@ const Register = ({ setIsLoggedIn }) => {
                       <div className="flex justify-between items-center text-xs font-bold uppercase tracking-widest text-slate-500">
                          <span>Password Strength</span>
                          <span className={`${
-                          passStrength.score === 1 ? 'text-red-500' :
-                          passStrength.score === 2 ? 'text-amber-500' :
-                          passStrength.score === 3 ? 'text-blue-500' :
-                          'text-emerald-500'
+                         passStrength.score === 1 ? 'text-red-500' :
+                         passStrength.score === 2 ? 'text-amber-500' :
+                         passStrength.score === 3 ? 'text-blue-500' :
+                         'text-emerald-500'
                          }`}>{passStrength.text}</span>
                       </div>
                       <div className="flex gap-1.5 mt-1" aria-label={`Password strength: ${passStrength.text}`}>

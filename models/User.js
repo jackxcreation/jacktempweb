@@ -40,6 +40,9 @@ const addressSchema = new mongoose.Schema({
 });
 
 const userSchema = new mongoose.Schema({
+  // ==========================================
+  // 👤 1. IDENTITY & CONTACT
+  // ==========================================
   name: { 
     type: String, 
     required: [true, "Full name is required"],
@@ -61,19 +64,32 @@ const userSchema = new mongoose.Schema({
     match: [/^\d{10}$/, "Invalid mobile number format"],
     index: true
   },
-  // 🔥 WHATSAPP & PHONE VERIFICATION FLAG
+
+  // ==========================================
+  // 🛡️ 2. VERIFICATION
+  // ==========================================
   isPhoneVerified: {
     type: Boolean,
     default: false
   },
-  password: { 
-    type: String, 
-    select: false // 🔥 Security: Database query karne par password default hide rahega
-  }, 
   googleId: {
     type: String, 
     index: true
   },
+
+  // ==========================================
+  // 🔑 3. PASSWORD & SECURITY
+  // ==========================================
+  password: { 
+    type: String, 
+    select: false // 🔥 Security: Database query karne par password default hide rahega
+  }, 
+  twoFactorEnabled: { type: Boolean, default: false },
+  twoFactorSecret: { type: String, select: false },
+
+  // ==========================================
+  // 🏷️ 4. ROLES
+  // ==========================================
   role: { 
     type: String, 
     enum: [
@@ -85,19 +101,27 @@ const userSchema = new mongoose.Schema({
     default: 'customer',
     index: true
   },
-  
-  // 🔥 ENTERPRISE SECURITY CENTER FIELDS 🔥
-  twoFactorEnabled: { type: Boolean, default: false },
-  twoFactorSecret: { type: String, select: false },
+
+  // ==========================================
+  // 🌐 5. SESSIONS
+  // ==========================================
   activeSessions: [sessionSchema],
   loginHistory: [loginHistorySchema],
+
+  // ==========================================
+  // 📊 6. AUDIT & TRACKING
+  // ==========================================
   auditLogs: [auditLogSchema],
   failedLoginAttempts: { type: Number, default: 0 },
 
-  // 🔥 PRO FEATURE 2: Store Customer's Addresses 🔥
+  // ==========================================
+  // 🏠 7. ADDRESSES
+  // ==========================================
   addresses: [addressSchema], 
 
-  // 🔥 PRO FEATURE 3: E-commerce Core Features 🔥
+  // ==========================================
+  // ⭐ 8. WISHLIST & RECENTLY VIEWED (E-COMMERCE)
+  // ==========================================
   wishlist: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Product' 
@@ -107,30 +131,48 @@ const userSchema = new mongoose.Schema({
     ref: 'Product'
   }],
 
-  // 🔥 PRO FEATURE 4: Security & Account Recovery 🔥
+  // ==========================================
+  // 🔓 9. RECOVERY & ACCOUNT LOCK
+  // ==========================================
   resetPasswordToken: { type: String, index: true },
   resetPasswordExpire: Date,
+  resetOTP: { type: String, select: false },
+  resetOTPExpires: Date,
   isLocked: { type: Boolean, default: false, index: true },
   securityCode: { type: String, default: "" },
-  
+
+  // ==========================================
+  // ⚡ 10. STATUS
+  // ==========================================
   isActive: {
     type: Boolean,
     default: true 
   }
   
 }, { 
-  // 🔥 PRO FEATURE 5: Auto Timestamps 🔥
+  // ==========================================
+  // 🕒 11. TIMESTAMPS
+  // ==========================================
   timestamps: true,
   strict: true 
 });
 
 // ==========================================
-// 🔥 PRO FEATURE: PRE-SAVE NORMALIZATION
+// 🔥 PRO FEATURE: PRE-SAVE NORMALIZATION & DATA MINIMIZATION
 // ==========================================
 userSchema.pre('save', function(next) {
   if (this.isModified('email') && this.email) {
     this.email = this.email.toLowerCase().trim();
   }
+
+  // Data Minimization: Prevent unbounded growth of login and audit history logs
+  if (this.loginHistory && this.loginHistory.length > 10) {
+    this.loginHistory = this.loginHistory.slice(-10);
+  }
+  if (this.auditLogs && this.auditLogs.length > 20) {
+    this.auditLogs = this.auditLogs.slice(-20);
+  }
+
   next();
 });
 

@@ -182,12 +182,14 @@ export const UserProvider = ({ children }) => {
       const data = await res.json();
       if (res.ok) {
         const authToken = data.token || data.accessToken;
-        localStorage.setItem('token', authToken);
-        localStorage.setItem('jack_token', authToken);
+        if (authToken) {
+          localStorage.setItem('token', authToken);
+          localStorage.setItem('jack_token', authToken);
+        }
 
         // 🔥 PHASE 4 FIX: Centralized Admin Auth Handshake
         const userIsAdmin = data.user.role === 'admin' || data.user.role === 'manager';
-        if (userIsAdmin) {
+        if (userIsAdmin && authToken) {
           localStorage.setItem('adminToken', authToken); // Maintained for backward compatibility in Admin panel
         }
         setIsAdmin(userIsAdmin);
@@ -205,7 +207,8 @@ export const UserProvider = ({ children }) => {
 
   const socialLoginUser = async (name, email, firebaseId) => {
     try {
-      const res = await fetch(`${API_URL}/auth/social-login`, {
+      // 🔥 CANONICAL AUTH ROUTE ALIGNMENT: Updated to /api/auth/social/google
+      const res = await fetch(`${API_URL}/auth/social/google`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, email, googleId: firebaseId }),
@@ -214,8 +217,10 @@ export const UserProvider = ({ children }) => {
       const data = await res.json();
       if (res.ok) {
         const authToken = data.token || data.accessToken;
-        localStorage.setItem('token', authToken);
-        localStorage.setItem('jack_token', authToken);
+        if (authToken) {
+          localStorage.setItem('token', authToken);
+          localStorage.setItem('jack_token', authToken);
+        }
         setUser(data.user);
         setIsAdmin(data.user.role === 'admin' || data.user.role === 'manager');
         setRecentlyViewed(data.user.recentlyViewed || []);

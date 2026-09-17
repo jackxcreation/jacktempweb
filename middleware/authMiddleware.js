@@ -14,11 +14,15 @@ if (!process.env.JWT_SECRET) {
 const protect = async (req, res, next) => {
   let token;
 
-  // 🔥 UPDATED: Check Admin Cookie first, then Customer Cookie, then Header fallback
-  if (req.cookies && req.cookies.admin_token) {
-    token = req.cookies.admin_token;
+  // 🔥 UPDATED: Check isolated HttpOnly cookie namespaces first, then legacy fallbacks, then Header
+  if (req.cookies && req.cookies.customer_session) {
+    token = req.cookies.customer_session;
   } else if (req.cookies && req.cookies.token) {
     token = req.cookies.token;
+  } else if (req.cookies && req.cookies.admin_session) {
+    token = req.cookies.admin_session;
+  } else if (req.cookies && req.cookies.admin_token) {
+    token = req.cookies.admin_token;
   } else if (req.headers && req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
     token = req.headers.authorization.split(' ')[1];
   }
@@ -74,9 +78,13 @@ const protect = async (req, res, next) => {
 const adminProtect = async (req, res, next) => {
   let token;
 
-  // 🔥 Priority check for Admin Token Cookie
-  if (req.cookies && req.cookies.admin_token) {
-    token = req.cookies.admin_token;
+  // 🔥 Priority check for Admin Cookie namespaces
+  if (req.cookies && req.cookies.admin_session) {
+    token = req.cookies.admin_session;
+  } else if (req.cookies && req.cookies.admin_token) {
+    token = req.cookies.admin_token; 
+  } else if (req.cookies && req.cookies.customer_session) {
+    token = req.cookies.customer_session; // Fallback for transition
   } else if (req.cookies && req.cookies.token) {
     token = req.cookies.token; // Fallback for transition
   } else if (req.headers && req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
@@ -105,7 +113,7 @@ const adminProtect = async (req, res, next) => {
         }
       }
 
-      // 🔥 Allow Admin, Super Admin, and all granular staff roles (Operations, Catalog, Warehouse, Support, Finance, etc.)
+      // 🔥 Allow Admin, Super Admin, and all granular staff roles
       const privilegedRoles = [
         'admin', 'super_admin', 'operations_manager', 'catalog_manager', 
         'warehouse_manager', 'customer_support', 'finance_manager', 
@@ -141,7 +149,6 @@ const admin = (req, res, next) => {
   // Strict Role Enforcement Check
   const privilegedRoles = ['admin', 'super_admin', 'operations_manager', 'catalog_manager', 'warehouse_manager', 'finance_manager'];
   if (req.user && privilegedRoles.includes(req.user.role)) {
-    // 🔥 Added account status check for standalone admin chain safety
     if (req.user.isLocked || req.user.isActive === false) {
       return res.status(403).json({ message: 'Access Denied: Account is locked, suspended, or inactive.' });
     }

@@ -4,24 +4,14 @@ import { useUser } from './UserContext';
 
 export const AuthContext = createContext();
 
-// 🔥 PHASE 4 FIX: AuthContext is a seamless proxy for UserContext with bulletproof token storage for subdomains.
+// 🔥 PHASE 4 FIX: AuthContext is a seamless proxy for UserContext adhering to secure HttpOnly cookie architecture.
 export const AuthProvider = ({ children }) => {
   const { user, isLoggedIn, isAdmin, loginUser, logoutUser, isLoadingSession } = useUser();
 
-  // 🔥 Wrapped login to catch token and store in localStorage for cross-domain subdomain persistence
+  // 🔥 Wrapped login for HttpOnly session architecture
   const handleLogin = async (email, password) => {
     try {
       const result = await loginUser(email, password);
-      
-      // If login succeeds, extract and cache token across all storage keys
-      if (result && (result.success === true || result.token || result.accessToken)) {
-        const rawToken = result.token || result.accessToken || result.data?.token || result.user?.token;
-        if (rawToken) {
-          localStorage.setItem('token', rawToken);
-          localStorage.setItem('admin_token', rawToken);
-          localStorage.setItem('jack_token', rawToken);
-        }
-      }
       return result;
     } catch (error) {
       return { 
@@ -31,12 +21,10 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // 🔥 Wrapped logout to clear all token variants securely
+  // 🔥 Wrapped logout to clear non-sensitive local storage data securely
   const handleLogout = async () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('admin_token');
-    localStorage.removeItem('jack_token');
     localStorage.removeItem('jack_user');
+    localStorage.removeItem('jack_remembered_identifier');
     
     if (logoutUser) {
       await logoutUser();

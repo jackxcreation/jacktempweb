@@ -10,8 +10,10 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit'); 
 const jwt = require('jsonwebtoken');
 const cron = require('node-cron'); 
-const winston = require('winston'); 
 const cookieParser = require('cookie-parser'); 
+
+// 🔥 DATA PROTECTION: Import Sanitized Structured Logger
+const { logger, requestLoggerMiddleware, logInfo, logError, logWarn } = require('./utils/logger');
 
 // 🔥 SINGLE SOURCE OF TRUTH: Import Models cleanly
 const { User, Ticket, Warehouse, Order, Product, Review, Question, PriceAlert, StockAlert } = require('./models');
@@ -47,57 +49,20 @@ const whatsappRoutes = require('./routes/whatsapp');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 dotenv.config();
-console.log("JWT configuration loaded");
+
+// 🔥 SECURE LOGGING FIX: Avoid printing raw secrets in production logs
+console.log("JWT configured:", Boolean(process.env.JWT_SECRET));
 
 // ==========================================
 // 🔥 ANTI-CRASH SYSTEM: PREVENT SERVER DEATH FROM REDIS SOCKET DROPS
 // ==========================================
 process.on('uncaughtException', (err) => {
-  console.error('🚨 [ANTI-CRASH] Uncaught Exception caught:', err.message);
+  logError('🚨 [ANTI-CRASH] Uncaught Exception caught:', err);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('🚨 [ANTI-CRASH] Unhandled Rejection caught:', reason);
+  logError('🚨 [ANTI-CRASH] Unhandled Rejection caught:', reason instanceof Error ? reason : new Error(String(reason)));
 });
-
-// ==========================================
-// 📊 WINSTON STRUCTURED LOGGER & CORRELATION SETUP
-// ==========================================
-const logger = winston.createLogger({
-  level: process.env.LOG_LEVEL || 'info',
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.errors({ stack: true }),
-    winston.format.json()
-  ),
-  transports: [
-    new winston.transports.Console()
-  ]
-});
-
-const requestLoggerMiddleware = (req, res, next) => {
-  const start = Date.now();
-  const requestId = req.headers['x-request-id'] || req.headers['X-Request-ID'] || Math.random().toString(36).substring(2, 15);
-  req.requestId = requestId;
-  res.setHeader('X-Request-ID', requestId); 
-
-  res.on('finish', () => {
-    const latency = Date.now() - start;
-    const userId = req.user?._id || req.user?.id || req.user?.userId || 'anonymous';
-    
-    logger.info({
-      message: 'HTTP Request Completed',
-      requestId,
-      userId,
-      method: req.method,
-      route: req.originalUrl || req.url,
-      status: res.statusCode,
-      latency: `${latency}ms`
-    });
-  });
-
-  next();
-};
 
 function getGeminiKeys() {
   const keys = [];
@@ -268,15 +233,14 @@ const io = new Server(server, {
 });
 
 // ==========================================
-// 🔥 CRITICAL FIX: REDIS CLIENT WITHOUT HARDCODED TLS 
-// (Render automatically connects without TLS, Upstash will use TLS via 'rediss://' URL)
+// 🔥 REDIS CLIENT 
 // ==========================================
 const pubClient = createClient({ 
   url: process.env.REDIS_URL
 });
 
 pubClient.on('error', (err) => {
-  console.warn('⚠️ Redis Client Warning / Offline:', err.message);
+  logWarn('⚠️ Redis Client Warning / Offline:', { error: err.message });
 });
 
 const subClient = pubClient.duplicate();
@@ -289,9 +253,9 @@ async function initRedis() {
     if (!pubClient.isOpen) await pubClient.connect();
     if (!subClient.isOpen) await subClient.connect();
     io.adapter(createAdapter(pubClient, subClient));
-    console.log("✅ Socket.IO Redis Adapter Connected Successfully!");
+    logInfo("✅ Socket.IO Redis Adapter Connected Successfully!");
   } catch (err) {
-    console.warn("⚠️ Redis connection failed (Running in standalone mode):", err.message);
+    logWarn("⚠️ Redis connection failed (Running in standalone mode):", { error: err.message });
   }
 }
 initRedis();
@@ -309,14 +273,13 @@ mongoose.connect(process.env.MONGO_URI, {
   maxIdleTimeMS: 30000
 })
   .then(() => {
-    console.log('✅ Jack Essentials Production Database Connected with Pool Tuning!');
+    logInfo('✅ Jack Essentials Production Database Connected with Pool Tuning!');
     
     const client = mongoose.connection.getClient();
     if (client && client.on) {
       client.on('commandSucceeded', (event) => {
         if (event.duration > 300) {
-          logger.warn({
-            message: 'SLOW QUERY DETECTED',
+          logWarn('SLOW QUERY DETECTED', {
             command: event.commandName,
             database: event.databaseName,
             durationMs: event.duration
@@ -326,7 +289,7 @@ mongoose.connect(process.env.MONGO_URI, {
     }
 
     cron.schedule('*/30 * * * *', () => {
-      console.info("⏰ Running scheduled abandoned cart queue job...");
+      logInfo("⏰ Running scheduled abandoned cart queue job...");
       queueAbandonedCarts();
     });
 
@@ -336,7 +299,7 @@ mongoose.connect(process.env.MONGO_URI, {
     });
   })
   .catch((err) => {
-    logger.error({ message: 'Database Connection Failed', error: err.message, stack: err.stack });
+    logError('Database Connection Failed', err);
     process.exit(1);
   });
 
@@ -395,7 +358,10 @@ app.post('/api/generate-catalog', protect, admin, async (req, res) => {
     for (const currentKey of apiKeys) {
       try {
         const genAI = new GoogleGenerativeAI(currentKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const model = genAI.getGenerativeModel({ 
+          model: "gemini-2.5-flash",
+          generationConfig: { maxOutputTokens: 2048 }
+        });
         result = await model.generateContent([ prompt, { inlineData: { data: cleanBase64, mimeType: mimeType } } ]);
         break;
       } catch (err) { lastError = err; }
@@ -404,30 +370,31 @@ app.post('/api/generate-catalog', protect, admin, async (req, res) => {
     if (!result) throw lastError || new Error("All Gemini API Keys Failed");
 
     const responseText = result.response.text().trim();
-    console.log("🤖 Raw Gemini Catalog Response:", responseText);
+    logInfo("🤖 Raw Gemini Catalog Response received");
 
     let finalJson;
     try {
       const cleanedText = responseText.replace(/```json/g, "").replace(/```/g, "").trim();
       finalJson = JSON.parse(cleanedText);
     } catch (parseError) { 
-      console.error("❌ JSON Parse Failed for AI Response:", parseError.message);
+      logError("❌ JSON Parse Failed for AI Response:", parseError);
       finalJson = { error: "Failed to parse AI response", raw: responseText }; 
     }
 
     return res.status(200).json(finalJson);
   } catch (error) { 
-    console.error("Catalog Generation Route Error:", error);
+    logError("Catalog Generation Route Error:", error);
     return res.status(500).json({ error: error.message || 'Internal Server Error' }); 
   }
 });
 
 // ==========================================
-// 🔥 SECURED: HARDENED AI CHAT ROUTE (UPGRADED TO GEMINI)
+// 🔥 SECURED: HARDENED AI CHAT ROUTE (WITH ABUSE & COST PROTECTIONS)
 // ==========================================
 app.post('/api/chat', aiChatLimiter, async (req, res) => {
   try {
-    const { message, chatHistory, systemInstruction, languageStyle } = req.body;
+    // 🔥 ABUSE PROTECTION: Ignore client-provided systemInstruction entirely
+    const { message, chatHistory, languageStyle } = req.body;
     const apiKeys = getGeminiKeys();
 
     if (apiKeys.length === 0) return res.status(500).json({ error: 'Gemini AI Service configuration missing' });
@@ -435,15 +402,20 @@ app.post('/api/chat', aiChatLimiter, async (req, res) => {
     if (!message || typeof message !== 'string' || message.trim().length === 0) {
       return res.status(400).json({ error: 'Message cannot be empty' });
     }
+    // 🔥 ABUSE PROTECTION: Enforce strict message length limit
     if (message.length > 1000) {
       return res.status(400).json({ error: 'Message exceeds maximum allowed length of 1000 characters' });
     }
 
-    const serverSystemInstruction = systemInstruction || "You are an official, helpful, and polite customer support assistant for Jack Essentials. Assist customers with store products, orders, and policies safely and accurately.";
+    // 🔥 API-COST PROTECTION: Enforce history length cap (max last 10 messages)
+    const safeHistory = Array.isArray(chatHistory) ? chatHistory.slice(-10) : [];
 
-    const formattedHistory = (Array.isArray(chatHistory) ? chatHistory.slice(-10) : []).map(msg => ({
+    // 🔥 TRUSTED SERVER-SIDE SYSTEM INSTRUCTION
+    const serverSystemInstruction = "You are an official, helpful, and polite customer support assistant for Jack Essentials. Assist customers with store products, orders, and policies safely and accurately.";
+
+    const formattedHistory = safeHistory.map(msg => ({
       role: msg.role === "assistant" ? "model" : "user",
-      parts: [{ text: msg.content || msg.text || "" }]
+      parts: [{ text: typeof msg.content === 'string' ? msg.content : (msg.text || "") }]
     }));
 
     let result = null;
@@ -454,15 +426,31 @@ app.post('/api/chat', aiChatLimiter, async (req, res) => {
         const genAI = new GoogleGenerativeAI(currentKey);
         const model = genAI.getGenerativeModel({ 
           model: "gemini-2.5-flash",
-          systemInstruction: serverSystemInstruction
+          systemInstruction: serverSystemInstruction, // 🔥 STRICTLY ENFORCED SERVER PROMPT
+          generationConfig: { 
+            temperature: 0.7,
+            maxOutputTokens: 1024 // 🔥 API-COST PROTECTION: Cap maximum output tokens
+          }
         });
 
         const chat = model.startChat({
           history: formattedHistory,
-          generationConfig: { temperature: 0.7 }
+          generationConfig: { 
+            temperature: 0.7,
+            maxOutputTokens: 1024
+          }
         });
 
-        result = await chat.sendMessage(message);
+        // 🔥 ABUSE PROTECTION: Timeout wrapper for chat generation
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('AI Request timed out')), 12000)
+        );
+        
+        result = await Promise.race([
+          chat.sendMessage(message),
+          timeoutPromise
+        ]);
+
         break;
       } catch (err) {
         lastError = err;
@@ -475,7 +463,7 @@ app.post('/api/chat', aiChatLimiter, async (req, res) => {
     res.json({ reply: replyText });
     
   } catch (error) { 
-    console.error("AI Chat Error (Gemini):", error);
+    logError("AI Chat Error (Gemini):", error);
     res.status(500).json({ 
       error: 'Server code crash',
       reply: req.body?.languageStyle === 'hinglish' 
@@ -486,16 +474,12 @@ app.post('/api/chat', aiChatLimiter, async (req, res) => {
 });
 
 // ==========================================
-// 🎟️ SECURED: SOCKET.IO AUTHENTICATION & SMART CHANNELS
+// 🎟️ SECURED: SOCKET.IO AUTHENTICATION (Distinct Session Namespaces)
 // ==========================================
 io.use(async (socket, next) => {
   try {
     let token = socket.handshake.auth.token;
 
-    if (!token && socket.handshake.query && socket.handshake.query.token) {
-      token = socket.handshake.query.token;
-    }
-    
     if (!token && socket.handshake.headers.cookie) {
       const cookies = socket.handshake.headers.cookie.split(';').reduce((acc, cookie) => {
         const eqIndex = cookie.indexOf('=');
@@ -507,7 +491,7 @@ io.use(async (socket, next) => {
         return acc;
       }, {});
       
-      token = cookies.admin_token || cookies.token || cookies.jwt || token;
+      token = cookies.admin_session || cookies.customer_session || cookies.admin_token || cookies.token || cookies.jwt || token;
     }
 
     if (!token) {
@@ -534,14 +518,21 @@ io.use(async (socket, next) => {
 
 io.on('connection', (socket) => {
   const identifier = socket.user.email || socket.user.name || socket.id;
-  console.log(`🔒 Secure Connection: ${identifier} (${socket.id})`);
+  logInfo(`🔒 Secure Connection established`);
 
-  if (socket.user.role === 'admin') {
+  const privilegedRoles = [
+    'admin', 'super_admin', 'operations_manager', 'catalog_manager', 
+    'warehouse_manager', 'customer_support', 'finance_manager', 
+    'marketing_manager', 'content_manager', 'analyst', 'read_only_auditor', 
+    'manager', 'catalog', 'support'
+  ];
+
+  if (privilegedRoles.includes(socket.user.role)) {
     socket.join('admin_room');
   }
 
   socket.on('subscribe_admin_channels', (data) => {
-    if (socket.user.role !== 'admin') return;
+    if (!privilegedRoles.includes(socket.user.role)) return;
     
     socket.join('orders');
     socket.join('inventory');
@@ -552,7 +543,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('lock_user_session', (userId) => {
-    if (socket.user.role !== 'admin') return; 
+    if (!privilegedRoles.includes(socket.user.role)) return; 
     io.to(userId).emit('force_logout');
   });
 
@@ -580,12 +571,12 @@ io.on('connection', (socket) => {
       io.to('admin_room').to('support').emit('ticket.created', legacyTicket);
       io.to('admin_room').emit('new_ticket_alert', legacyTicket);
       
-    } catch (err) { console.error("Ticket escalation error", err); }
+    } catch (err) { logError("Ticket escalation error", err); }
   });
 
   socket.on('admin_reply', async (data) => {
     try {
-      if (socket.user.role !== 'admin') return; 
+      if (!privilegedRoles.includes(socket.user.role)) return; 
 
       const supportTicket = data.ticketId ? await SupportTicket.findById(data.ticketId) : null;
       const conversationId = data.conversationId || supportTicket?.conversationId;
@@ -626,12 +617,12 @@ io.on('connection', (socket) => {
           });
         }
       }
-    } catch (err) { console.error("Admin Reply Error:", err); }
+    } catch (err) { logError("Admin Reply Error:", err); }
   });
 
   socket.on('support:agent_joined', async (data) => {
     try {
-      if (socket.user.role !== 'admin' || !data || !data.conversationId) return;
+      if (!privilegedRoles.includes(socket.user.role) || !data || !data.conversationId) return;
       io.to(data.conversationId).emit('agent_joined', {
         agent: {
           id: socket.user._id || socket.user.id,
@@ -639,7 +630,7 @@ io.on('connection', (socket) => {
           department: 'Support'
         }
       });
-    } catch (err) { console.error("Support Socket Agent Join Error:", err); }
+    } catch (err) { logError("Support Socket Agent Join Error:", err); }
   });
 
   socket.on('support:typing', (data) => {
@@ -653,14 +644,42 @@ io.on('connection', (socket) => {
 
   socket.on('join_user_room', (userId) => {
     const currentUserId = socket.user._id ? socket.user._id.toString() : socket.user.id;
-    if (currentUserId === userId || socket.user.role === 'admin' || socket.user.role === 'guest' || userId) {
-      socket.join(userId);
+    if (
+      currentUserId === String(userId) ||
+      privilegedRoles.includes(socket.user.role)
+    ) {
+      return socket.join(String(userId));
     }
+    return;
   });
 
-  socket.on('join_conversation', (conversationId) => {
-    if (conversationId) {
-      socket.join(conversationId);
+  socket.on('join_conversation', async (conversationId) => {
+    try {
+      if (!conversationId) return;
+
+      if (privilegedRoles.includes(socket.user.role) || ['admin', 'super_admin', 'support', 'customer_support'].includes(socket.user.role)) {
+        return socket.join(conversationId);
+      }
+
+      const currentUserId = socket.user._id ? socket.user._id.toString() : socket.user.id;
+
+      const conversation = await SupportConversation.findOne({ conversationId });
+      if (conversation) {
+        const isOwner = (conversation.customerId && conversation.customerId.toString() === currentUserId) ||
+                        (conversation.guestId && conversation.guestId.toString() === currentUserId);
+        if (isOwner) {
+          return socket.join(conversationId);
+        }
+      }
+
+      const legacyTicket = await Ticket.findOne({ conversationId, userId: currentUserId });
+      if (legacyTicket) {
+        return socket.join(conversationId);
+      }
+
+      logWarn(`⚠️ Unauthorized socket join attempt to conversation ${conversationId}`);
+    } catch (err) {
+      logError("Join conversation security check error:", err);
     }
   });
 
@@ -683,7 +702,7 @@ io.on('connection', (socket) => {
         io.to('admin_room').emit('customer.live', visitorsArray);
         io.to('admin_room').emit('live_traffic_update', visitorsArray);
       }
-    } catch (err) { console.error("Redis join page error:", err); }
+    } catch (err) { logError("Redis join page error:", err); }
   });
 
   socket.on('leave_product_page', async () => {
@@ -696,7 +715,7 @@ io.on('connection', (socket) => {
         io.to('admin_room').emit('customer.live', visitorsArray);
         io.to('admin_room').emit('live_traffic_update', visitorsArray);
       }
-    } catch (err) { console.error("Redis leave page error:", err); }
+    } catch (err) { logError("Redis leave page error:", err); }
   });
 
   socket.on('disconnect', async () => {
@@ -709,7 +728,7 @@ io.on('connection', (socket) => {
         io.to('admin_room').emit('customer.live', visitorsArray);
         io.to('admin_room').emit('live_traffic_update', visitorsArray);
       }
-    } catch (err) { console.error("Redis disconnect error:", err); }
+    } catch (err) { logError("Redis disconnect error:", err); }
   });
 });
 
@@ -724,9 +743,9 @@ const PORT = process.env.PORT || 5000;
 // 🔥 GRACEFUL SHUTDOWN HANDLER
 // ==========================================
 const shutdownHandler = async () => {
-  console.log('🔄 Received kill signal, shutting down gracefully...');
+  logInfo('🔄 Received kill signal, shutting down gracefully...');
   server.close(async () => {
-    console.log('🛑 HTTP server closed.');
+    logInfo('🛑 HTTP server closed.');
     try {
       if (pubClient && pubClient.isOpen) {
         await pubClient.quit();
@@ -734,19 +753,19 @@ const shutdownHandler = async () => {
       if (subClient && subClient.isOpen) {
         await subClient.quit();
       }
-      console.log('🛑 Redis connections closed safely.');
+      logInfo('🛑 Redis connections closed safely.');
 
       await mongoose.connection.close(false);
-      console.log('🛑 MongoDB connection closed safely.');
+      logInfo('🛑 MongoDB connection closed safely.');
       process.exit(0);
     } catch (err) {
-      console.error('Error during safe shutdown closure:', err);
+      logError('Error during safe shutdown closure:', err);
       process.exit(1);
     }
   });
 
   setTimeout(() => {
-    console.error('🚨 Could not close connections in time, forcefully shutting down');
+    logError('🚨 Could not close connections in time, forcefully shutting down');
     process.exit(1);
   }, 10000);
 };
@@ -755,7 +774,7 @@ process.on('SIGTERM', shutdownHandler);
 process.on('SIGINT', shutdownHandler);
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Jack Essentials Backend running smoothly on port ${PORT}`);
+  logInfo(`🚀 Jack Essentials Backend running smoothly on port ${PORT}`);
 });
 
 module.exports = app;

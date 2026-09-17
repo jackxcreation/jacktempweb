@@ -20,16 +20,40 @@ function getGeminiKeys() {
 }
 
 // ==========================================
-// 🤖 GEMINI AI CORE HANDLER (FIXED FOR STRICT TOOL FORMAT)
+// 🛡️ HELPER: TIMEOUT WRAPPER FOR AI ABUSE PROTECTION
+// ==========================================
+async function callGeminiWithTimeout(model, payload, timeoutMs = 12000) {
+  const timeoutPromise = new Promise((_, reject) => 
+    setTimeout(() => reject(new Error('AI Request timed out to prevent API hanging')), timeoutMs)
+  );
+  return Promise.race([
+    model.generateContent(payload),
+    timeoutPromise
+  ]);
+}
+
+// ==========================================
+// 🤖 CANONICAL GEMINI AI CORE HANDLER (WITH ABUSE & COST PROTECTIONS)
 // ==========================================
 async function callGeminiAI({ messages, systemPrompt, temperature = 0.3, tools = null }) {
   const apiKeys = getGeminiKeys();
   if (apiKeys.length === 0) throw new Error("Gemini API Keys are missing!");
 
+  // 🔥 API-COST PROTECTION: Enforce history length limit (max last 12 messages)
+  const safeMessages = Array.isArray(messages) ? messages.slice(-12) : [];
+
+  // 🔥 ABUSE PROTECTION: Enforce individual message length limit (max 1000 chars)
+  for (const m of safeMessages) {
+    const contentStr = typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '');
+    if (contentStr.length > 1000) {
+      throw new Error("Message content exceeds maximum allowed length of 1000 characters.");
+    }
+  }
+
   let lastError = null;
 
   // Transform standard messages to STRICT Gemini format
-  const formattedContents = messages.map(m => {
+  const formattedContents = safeMessages.map(m => {
     // 1. Model / Assistant mapping
     if (m.role === 'assistant' || m.role === 'model') {
       if (m.tool_calls && m.tool_calls.length > 0) {
@@ -74,9 +98,12 @@ async function callGeminiAI({ messages, systemPrompt, temperature = 0.3, tools =
     try {
       const genAI = new GoogleGenerativeAI(key);
       const modelConfig = {
-        model: "gemini-3.5-flash", 
-        systemInstruction: systemPrompt,
-        generationConfig: { temperature }
+        model: "gemini-2.5-flash", 
+        systemInstruction: systemPrompt, // 🔥 STRICTLY SERVER-CONTROLLED
+        generationConfig: { 
+          temperature,
+          maxOutputTokens: 1024 // 🔥 API-COST PROTECTION: Cap maximum output tokens
+        }
       };
 
       if (tools) {
@@ -84,7 +111,9 @@ async function callGeminiAI({ messages, systemPrompt, temperature = 0.3, tools =
       }
 
       const model = genAI.getGenerativeModel(modelConfig);
-      const result = await model.generateContent({ contents: formattedContents });
+      
+      // 🔥 ABUSE PROTECTION: Call Gemini with strict timeout
+      const result = await callGeminiWithTimeout(model, { contents: formattedContents }, 12000);
       const response = result.response;
       
       const functionCalls = response.functionCalls();
@@ -94,7 +123,7 @@ async function callGeminiAI({ messages, systemPrompt, temperature = 0.3, tools =
       return {
         provider: "Gemini",
         message: {
-          role: "assistant", // 🔥 THE MAGIC FIX: Explicitly attach role
+          role: "assistant", 
           content: textContent,
           tool_calls: functionCalls ? functionCalls.map(call => ({
             function: {
@@ -136,7 +165,7 @@ async function sendPushNotificationAlert(subscriptions, title, body, url = '/') 
 }
 
 // ==========================================
-// 🤖 GEMINI AI ASSISTANT ROUTE WITH FUNCTION CALLING
+// 🤖 CANONICAL GEMINI AI ASSISTANT ROUTE WITH FUNCTION CALLING
 // ==========================================
 router.post('/api/ai/chat', protect, async (req, res) => {
   try {
@@ -208,9 +237,10 @@ router.post('/api/ai/chat', protect, async (req, res) => {
       }
     ];
 
+    // 🔥 TRUSTED SERVER-SIDE SYSTEM INSTRUCTION
     const systemPrompt = "You are an intelligent, helpful e-commerce shopping assistant for Jack Essentials. Use the provided tools to answer user queries accurately regarding products, stock, deliveries, and order tracking. Never fabricate product links or pricing—always use the tool data.";
 
-    // 1. First call to Gemini
+    // 1. First call to Gemini with trusted server prompt
     const aiCallResult = await callGeminiAI({
       messages,
       systemPrompt,
@@ -219,7 +249,7 @@ router.post('/api/ai/chat', protect, async (req, res) => {
     });
 
     const responseMessage = aiCallResult.message;
-    responseMessage.role = "assistant"; // 🔥 CRITICAL FIX: Ensure role is explicitly set
+    responseMessage.role = "assistant"; 
 
     // 2. Check if AI invoked a tool function
     if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
@@ -252,7 +282,7 @@ router.post('/api/ai/chat', protect, async (req, res) => {
 
       const followUpResult = await callGeminiAI({
         messages: followUpMessages,
-        systemPrompt: "You are a helpful e-commerce shopping assistant.",
+        systemPrompt: "You are a helpful e-commerce shopping assistant for Jack Essentials.",
         temperature: 0.3
       });
 
@@ -361,7 +391,7 @@ router.post('/api/ai/copilot-analysis', protect, async (req, res) => {
 
     const aiResult = await callGeminiAI({
       messages: [{ role: "user", content: copilotPrompt }],
-      systemPrompt: "You are a sharp, data-driven e-commerce business analyst.",
+      systemPrompt: "You are a sharp, data-driven e-commerce business analyst for Jack Essentials.",
       temperature: 0.2
     });
 

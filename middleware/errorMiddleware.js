@@ -4,7 +4,7 @@ const winston = require('winston');
 const logger = winston.createLogger({
   level: 'error',
   format: winston.format.combine(
-    winston.format.timestamp(), // 🔥 Pro addition: Timestamp for log tracking
+    winston.format.timestamp(), // Timestamp for log tracking
     winston.format.json()
   ),
   transports: [new winston.transports.Console()]
@@ -16,13 +16,27 @@ const errorHandler = (err, req, res, next) => {
     return next(err);
   }
 
-  const statusCode = err.statusCode || err.status || (res.statusCode === 200 ? 500 : res.statusCode);
+  let statusCode = err.statusCode || err.status || (res.statusCode === 200 ? 500 : res.statusCode);
   
-  // 🔥 Pro Feature: Auto-detect common database and auth error codes if not explicitly set
+  // 🔥 Pro Feature: Auto-detect common database, Zod, and auth error codes if not explicitly set
   let errorCode = err.code || 'INTERNAL_SERVER_ERROR';
-  if (err.name === 'ValidationError') errorCode = 'VALIDATION_ERROR';
-  if (err.name === 'CastError') errorCode = 'RESOURCE_NOT_FOUND';
-  if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') errorCode = 'UNAUTHORIZED';
+  
+  if (err.name === 'ValidationError') {
+    errorCode = 'VALIDATION_ERROR';
+    statusCode = 400;
+  } else if (err.name === 'ZodError' || (err.issues && Array.isArray(err.issues))) {
+    errorCode = 'VALIDATION_ERROR';
+    statusCode = 400;
+  } else if (err.code === 11000) {
+    errorCode = 'DUPLICATE_KEY_ERROR';
+    statusCode = 409;
+  } else if (err.name === 'CastError') {
+    errorCode = 'RESOURCE_NOT_FOUND';
+    statusCode = 404;
+  } else if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
+    errorCode = 'UNAUTHORIZED';
+    statusCode = 401;
+  }
 
   const requestId = req.requestId || req.headers['x-request-id'] || 'unknown-req';
   const isProduction = process.env.NODE_ENV === 'production';
@@ -44,6 +58,7 @@ const errorHandler = (err, req, res, next) => {
     success: false,
     code: errorCode,
     message: isProduction && statusCode === 500 ? 'Internal Server Error' : (err.message || 'Something went wrong'),
+    errors: err.errors || err.issues || undefined,
     requestId,
     retryable: statusCode >= 500 || statusCode === 408
   });

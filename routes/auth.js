@@ -25,7 +25,14 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 const registerSchema = z.object({
   name: z.string().min(2, "Name is required").max(100, "Name is too long"),
   email: z.string().email("Invalid email address"),
-  password: z.string().min(6, "Password must be at least 6 characters long")
+  password: z.string().min(6, "Password must be at least 6 characters long"),
+  phone: z.string().regex(/^\d{10}$/, "Invalid mobile number format").optional(),
+  verificationToken: z.string().optional()
+});
+
+const registerStartSchema = z.object({
+  email: z.string().email("Invalid email address"),
+  phone: z.string().regex(/^\d{10}$/, "Invalid mobile number format").optional()
 });
 
 const loginSchema = z.object({
@@ -69,6 +76,26 @@ const rotatePasswordSchema = z.object({
   currentPassword: z.string().min(1, "Current password is required"),
   newPassword: z.string().min(6, "New password must be at least 6 characters long")
 });
+
+// ==================================================
+// 🔐 DATA PROTECTION: SAFE USER RESPONSE FORMATTER
+// ==================================================
+const formatSafeUser = (user) => {
+  if (!user) return null;
+  return {
+    id: user._id || user.id,
+    name: user.name,
+    email: user.email,
+    phone: user.phone,
+    role: user.role || 'customer',
+    isPhoneVerified: user.isPhoneVerified || false,
+    isActive: user.isActive,
+    twoFactorEnabled: user.twoFactorEnabled || false,
+    addresses: user.addresses || [],
+    wishlist: user.wishlist || [],
+    recentlyViewed: user.recentlyViewed || []
+  };
+};
 
 // ==================================================
 // 🛡️ ACCOUNT-LEVEL FAILED LOGIN TRACKER (Anti-Brute Force)
@@ -208,11 +235,18 @@ const generateSecureToken = (user, sessionId) => {
 };
 
 // ==================================================
-// 🛡️ HELPER: Set Separated Secure HttpOnly Cookies
+// 🔥 SEPARATED NAMESPACE COOKIE HELPER (CUSTOMER vs ADMIN)
 // ==================================================
 const setAuthCookie = (res, token, role) => {
-  const cookieName = role === 'admin' ? 'admin_token' : 'token';
-  const maxAgeValue = role === 'admin' ? 8 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000; 
+  const privilegedRoles = [
+    'admin', 'super_admin', 'operations_manager', 'catalog_manager', 
+    'warehouse_manager', 'customer_support', 'finance_manager', 
+    'marketing_manager', 'content_manager', 'analyst', 'read_only_auditor', 
+    'manager', 'catalog', 'support'
+  ];
+  const isAdminRole = privilegedRoles.includes(role);
+  const cookieName = isAdminRole ? 'admin_session' : 'customer_session';
+  const maxAgeValue = isAdminRole ? 8 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000; 
 
   res.cookie(cookieName, token, {
     httpOnly: true,
@@ -223,21 +257,87 @@ const setAuthCookie = (res, token, role) => {
 };
 
 // ==================================================
-// 1. PUBLIC REGISTRATION (Customers) - ZOD VALIDATED 🔥
+// 1. CANONICAL REGISTRATION: START 🔥
 // ==================================================
-router.post('/register', registerLimiter, async (req, res) => {
+router.post('/register/start', registerLimiter, async (req, res) => {
+  try {
+    const validationResult = registerStartSchema.safeParse(req.body);
+    if (!validationResult.success) {
+      return res.status(400).json({ success: false, error: "Validation failed", errors: validationResult.error.format() });
+    }
+
+    const { email } = validationResult.data;
+    const cleanEmail = email.toLowerCase().trim();
+
+    const existingUser = await User.findOne({ email: cleanEmail });
+    if (existingUser) {
+      return res.status(400).json({ success: false, error: "This email is already registered. Please login." });
+    }
+
+    const otp = crypto.randomInt(100000, 999999).toString();
+    const salt = await bcrypt.genSalt(10);
+    const hashedOTP = await bcrypt.hash(otp, salt);
+    const expiresAt = Date.now() + 600000; // 10 mins
+
+    await User.collection.updateOne(
+      { email: cleanEmail },
+      { $set: { resetOTP: hashedOTP, resetOTPExpires: expiresAt, emailTemp: cleanEmail } },
+      { upsert: true }
+    );
+
+    if (process.env.RESEND_API_KEY) {
+      const htmlContent = getResetOtpTemplate(otp);
+      await resend.emails.send({
+        from: 'Jack Essentials Security <updates@thejackessentials.com>',
+        to: [cleanEmail],
+        subject: 'Registration Verification Code - Jack Essentials',
+        html: htmlContent
+      });
+    }
+
+    return res.status(200).json({ success: true, message: "Verification code started and sent successfully." });
+  } catch (error) {
+    console.error("Register Start Error:", error);
+    return res.status(500).json({ success: false, error: "Failed to start registration process." });
+  }
+});
+
+// ==================================================
+// 1.1 CANONICAL REGISTRATION: VERIFY & FINISH 🔥
+// ==================================================
+router.post('/register/verify', registerLimiter, async (req, res) => {
   try {
     const validationResult = registerSchema.safeParse(req.body);
     if (!validationResult.success) {
       return res.status(400).json({ success: false, error: "Validation failed", errors: validationResult.error.format() });
     }
 
-    const { name, email, password } = validationResult.data;
+    const { name, email, password, phone, verificationToken } = validationResult.data;
     const cleanEmail = email.toLowerCase().trim();
 
     const existingUser = await User.findOne({ email: cleanEmail });
     if (existingUser) {
-      return res.status(400).json({ error: "This email is already registered. Please login." });
+      return res.status(400).json({ success: false, error: "This email is already registered. Please login." });
+    }
+
+    let isPhoneVerified = false;
+    let cleanPhone = phone ? phone.replace(/^\+91/, '').trim() : undefined;
+
+    if (verificationToken && cleanPhone) {
+      try {
+        const decoded = jwt.verify(verificationToken, process.env.JWT_SECRET);
+        if (decoded.verified && decoded.phone === cleanPhone) {
+          isPhoneVerified = true;
+          const phoneExists = await User.findOne({ phone: cleanPhone });
+          if (phoneExists) {
+            return res.status(400).json({ success: false, error: "This phone number is already linked to another account." });
+          }
+        } else {
+          return res.status(400).json({ success: false, error: "Invalid or expired phone verification token." });
+        }
+      } catch (err) {
+        return res.status(400).json({ success: false, error: "Phone verification session expired. Please verify again." });
+      }
     }
 
     const salt = await bcrypt.genSalt(10);
@@ -247,21 +347,44 @@ router.post('/register', registerLimiter, async (req, res) => {
       name, 
       email: cleanEmail, 
       password: hashedPassword, 
-      role: 'customer',
-      auditLogs: [{ action: 'REGISTER', details: 'User account created', ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress }]
+      phone: cleanPhone,
+      isPhoneVerified,
+      role: 'customer', 
+      auditLogs: [{ action: 'REGISTER', details: 'User account created securely via canonical route', ip: req.ip || 'Unknown' }]
     });
 
     await newUser.save();
-    return res.status(201).json({ message: "Welcome to Jack Essentials! Account created successfully." });
+
+    const sessionId = crypto.randomBytes(16).toString('hex');
+    const ip = req.ip || 'Unknown';
+    const userAgent = req.headers['user-agent'] || 'Unknown Device';
+
+    newUser.activeSessions = newUser.activeSessions || [];
+    newUser.activeSessions.push({ sessionId, ipAddress: ip, device: userAgent, loginAt: new Date() });
+    await newUser.save();
+
+    const token = generateSecureToken(newUser, sessionId);
+    setAuthCookie(res, token, newUser.role);
+
+    return res.status(201).json({ 
+      success: true, 
+      message: "Welcome to Jack Essentials! Account created successfully.",
+      user: formatSafeUser(newUser)
+    });
 
   } catch (error) {
-    console.error("Registration Error:", error);
-    return res.status(500).json({ error: "Internal Server Error. Please try again." });
+    console.error("Registration Verify Error:", error);
+    return res.status(500).json({ success: false, error: "Internal Server Error. Please try again." });
   }
 });
 
+// Backward-compatible alias for /register
+router.post('/register', registerLimiter, async (req, res) => {
+  return router.handle({ ...req, url: '/register/verify' }, res);
+});
+
 // ==================================================
-// 2. USER / ADMIN LOGIN (HARDENED WITH SESSIONS & 2FA) 🔥
+// 2. CANONICAL USER / ADMIN LOGIN 🔥
 // ==================================================
 router.post('/login', loginLimiter, async (req, res) => {
   try {
@@ -300,15 +423,13 @@ router.post('/login', loginLimiter, async (req, res) => {
       recordFailedAttempt(cleanEmail); 
       user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
       
-      // 🔥 SAFE ARRAY FALLBACK TO PREVENT UNDEFINED PUSH CRASH
       user.auditLogs = user.auditLogs || [];
-      user.auditLogs.push({ action: 'FAILED_LOGIN', details: 'Incorrect password entered', ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress });
+      user.auditLogs.push({ action: 'FAILED_LOGIN', details: 'Incorrect password entered', ip: req.ip || 'Unknown' });
       
       await user.save();
       return res.status(401).json({ error: "Invalid email or password." });
     }
 
-    // 🔥 Check 2FA if enabled
     if (user.twoFactorEnabled) {
       if (!twoFactorCode) {
         return res.status(200).json({ requiresTwoFactor: true, message: "2FA verification code required." });
@@ -321,13 +442,11 @@ router.post('/login', loginLimiter, async (req, res) => {
     clearFailedAttempts(cleanEmail);
     user.failedLoginAttempts = 0;
 
-    // 🔥 Generate Session ID & Track Active Session
     const sessionId = crypto.randomBytes(16).toString('hex');
-    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'Unknown Location';
+    const ip = req.ip || 'Unknown Location';
     const userAgent = req.headers['user-agent'] || 'Unknown Device';
     const time = new Date();
 
-    // 🔥 SAFE ARRAY INITIALIZATIONS
     user.activeSessions = user.activeSessions || [];
     user.loginHistory = user.loginHistory || [];
     user.auditLogs = user.auditLogs || [];
@@ -374,10 +493,7 @@ router.post('/login', loginLimiter, async (req, res) => {
       }).catch(err => console.error("DEBUG: Failed to send login alert:", err));
     }
 
-    user.password = undefined;
-    user.twoFactorSecret = undefined;
-
-    return res.json({ message: "Authentication successful.", token, user });
+    return res.json({ message: "Authentication successful.", user: formatSafeUser(user) });
   } catch (error) {
     console.error("Login Error:", error);
     return res.status(500).json({ error: "An unexpected error occurred during authentication." });
@@ -385,9 +501,9 @@ router.post('/login', loginLimiter, async (req, res) => {
 });
 
 // ==================================================
-// 3. SOCIAL LOGIN (HARDENED WITH SESSION TRACKING) 🔥
+// 3. CANONICAL SOCIAL LOGIN: GOOGLE 🔥
 // ==================================================
-router.post('/social-login', loginLimiter, async (req, res) => {
+router.post('/social/google', loginLimiter, async (req, res) => {
   try {
     const validationResult = socialLoginSchema.safeParse(req.body);
     if (!validationResult.success) {
@@ -405,7 +521,7 @@ router.post('/social-login', loginLimiter, async (req, res) => {
     }
 
     const sessionId = crypto.randomBytes(16).toString('hex');
-    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'Unknown Location';
+    const ip = req.ip || 'Unknown Location';
     const userAgent = req.headers['user-agent'] || 'Unknown Device';
 
     if (!user) {
@@ -413,7 +529,7 @@ router.post('/social-login', loginLimiter, async (req, res) => {
         name, 
         email: cleanEmail, 
         googleId, 
-        role: 'customer',
+        role: 'customer', 
         activeSessions: [{ sessionId, ipAddress: ip, device: userAgent, loginAt: new Date() }],
         auditLogs: [{ action: 'SOCIAL_REGISTER', details: 'Registered via Google OAuth', ip }]
       });
@@ -431,17 +547,48 @@ router.post('/social-login', loginLimiter, async (req, res) => {
 
     const token = generateSecureToken(user, sessionId);
     setAuthCookie(res, token, user.role);
-
-    user.password = undefined;
-    return res.json({ message: "Social Login Successful", token, user, isNewUser });
+    
+    return res.json({ message: "Social Login Successful", user: formatSafeUser(user), isNewUser });
   } catch (error) {
     console.error("Social Login Error:", error);
     return res.status(500).json({ error: "Google authentication failed on server." });
   }
 });
 
+// Backward-compatible alias for /social-login
+router.post('/social-login', loginLimiter, async (req, res) => {
+  return router.handle({ ...req, url: '/social/google' }, res);
+});
+
 // ==================================================
-// 4. PASSWORD RESET: SEND SECURE OTP
+// 4. CANONICAL SESSION REFRESH 🔥
+// ==================================================
+router.post('/refresh', async (req, res) => {
+  try {
+    const token = req.cookies.admin_session || req.cookies.customer_session || req.cookies.token || req.cookies.admin_token;
+    if (!token) {
+      return res.status(401).json({ success: false, error: 'No active session token found in cookies' });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.id);
+    if (!user || user.isActive === false || user.isLocked) {
+      return res.status(401).json({ success: false, error: 'Session invalid or user inactive/locked' });
+    }
+
+    const newSessionId = decoded.sid || crypto.randomBytes(16).toString('hex');
+    const newToken = generateSecureToken(user, newSessionId);
+    setAuthCookie(res, newToken, user.role);
+
+    return res.status(200).json({ success: true, message: 'Session refreshed successfully' });
+  } catch (error) {
+    console.error("Token Refresh Error:", error);
+    return res.status(401).json({ success: false, error: 'Invalid or expired session token' });
+  }
+});
+
+// ==================================================
+// 5. PASSWORD RESET: SEND SECURE OTP
 // ==================================================
 router.post('/send-otp', otpLimiter, async (req, res) => {
   try {
@@ -460,7 +607,7 @@ router.post('/send-otp', otpLimiter, async (req, res) => {
     const expiresAt = Date.now() + 600000; 
     
     userExists.auditLogs = userExists.auditLogs || [];
-    userExists.auditLogs.push({ action: 'OTP_REQUESTED', details: 'Password reset OTP requested', ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress });
+    userExists.auditLogs.push({ action: 'OTP_REQUESTED', details: 'Password reset OTP requested', ip: req.ip || 'Unknown' });
     await userExists.save();
 
     await User.collection.updateOne(
@@ -486,7 +633,7 @@ router.post('/send-otp', otpLimiter, async (req, res) => {
 });
 
 // ==================================================
-// 5. PASSWORD RESET: VERIFY OTP
+// 6. PASSWORD RESET: VERIFY OTP
 // ==================================================
 router.post('/verify-otp', resetLimiter, async (req, res) => {
   try {
@@ -521,7 +668,7 @@ router.post('/verify-otp', resetLimiter, async (req, res) => {
 });
 
 // ==================================================
-// 6. RESET PASSWORD
+// 7. RESET PASSWORD
 // ==================================================
 router.post('/reset-password', resetLimiter, async (req, res) => {
   try {
@@ -552,7 +699,7 @@ router.post('/reset-password', resetLimiter, async (req, res) => {
     user.resetOTPExpires = undefined;
     user.activeSessions = [];
     user.auditLogs = user.auditLogs || [];
-    user.auditLogs.push({ action: 'PASSWORD_RESET', details: 'Password reset successfully via OTP', ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress });
+    user.auditLogs.push({ action: 'PASSWORD_RESET', details: 'Password reset successfully via OTP', ip: req.ip || 'Unknown' });
     await user.save();
 
     if (process.env.RESEND_API_KEY) {
@@ -574,7 +721,7 @@ router.post('/reset-password', resetLimiter, async (req, res) => {
 });
 
 // ==================================================
-// 6.1 🔥 PASSWORD ROTATION (Logged-in User)
+// 7.1 🔥 PASSWORD ROTATION (Logged-in User)
 // ==================================================
 router.post('/rotate-password', protect, async (req, res) => {
   try {
@@ -594,7 +741,7 @@ router.post('/rotate-password', protect, async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     user.password = await bcrypt.hash(newPassword, salt);
     user.auditLogs = user.auditLogs || [];
-    user.auditLogs.push({ action: 'PASSWORD_ROTATE', details: 'Password rotated successfully from account settings', ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress });
+    user.auditLogs.push({ action: 'PASSWORD_ROTATE', details: 'Password rotated successfully from account settings', ip: req.ip || 'Unknown' });
     await user.save();
 
     return res.json({ success: true, message: "Password rotated successfully." });
@@ -605,7 +752,7 @@ router.post('/rotate-password', protect, async (req, res) => {
 });
 
 // ==================================================
-// 6.2 🔥 2FA TOGGLE & SETUP ENDPOINTS
+// 7.2 🔥 2FA TOGGLE & SETUP ENDPOINTS
 // ==================================================
 router.post('/2fa/toggle', protect, async (req, res) => {
   try {
@@ -617,7 +764,7 @@ router.post('/2fa/toggle', protect, async (req, res) => {
       user.twoFactorSecret = undefined;
     }
     user.auditLogs = user.auditLogs || [];
-    user.auditLogs.push({ action: '2FA_TOGGLE', details: `2FA set to ${user.twoFactorEnabled}`, ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress });
+    user.auditLogs.push({ action: '2FA_TOGGLE', details: `2FA set to ${user.twoFactorEnabled}`, ip: req.ip || 'Unknown' });
     await user.save();
 
     return res.json({ 
@@ -633,7 +780,7 @@ router.post('/2fa/toggle', protect, async (req, res) => {
 });
 
 // ==================================================
-// 6.3 🔥 ACTIVE SESSIONS & SECURITY CENTER ENDPOINTS
+// 7.3 🔥 ACTIVE SESSIONS & SECURITY CENTER ENDPOINTS
 // ==================================================
 router.get('/security/audit-center', protect, async (req, res) => {
   try {
@@ -662,7 +809,7 @@ router.post('/sessions/revoke', protect, async (req, res) => {
     user.activeSessions = user.activeSessions || [];
     user.activeSessions = user.activeSessions.filter(s => s.sessionId !== sessionId);
     user.auditLogs = user.auditLogs || [];
-    user.auditLogs.push({ action: 'SESSION_REVOKE', details: `Revoked session ID: ${sessionId}`, ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress });
+    user.auditLogs.push({ action: 'SESSION_REVOKE', details: `Revoked session ID: ${sessionId}`, ip: req.ip || 'Unknown' });
     await user.save();
 
     return res.json({ success: true, message: "Session revoked successfully." });
@@ -677,10 +824,12 @@ router.post('/sessions/logout-all', protect, async (req, res) => {
     const user = await User.findById(req.user._id);
     user.activeSessions = [];
     user.auditLogs = user.auditLogs || [];
-    user.auditLogs.push({ action: 'LOGOUT_ALL_SESSIONS', details: 'Terminated all active sessions across devices', ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress });
+    user.auditLogs.push({ action: 'LOGOUT_ALL_SESSIONS', details: 'Terminated all active sessions across devices', ip: req.ip || 'Unknown' });
     await user.save();
 
     const cookieOptions = { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax' };
+    res.clearCookie('customer_session', cookieOptions);
+    res.clearCookie('admin_session', cookieOptions);
     res.clearCookie('token', cookieOptions);
     res.clearCookie('admin_token', cookieOptions);
 
@@ -692,7 +841,7 @@ router.post('/sessions/logout-all', protect, async (req, res) => {
 });
 
 // ==================================================
-// 7. SECURE LOCK ACCOUNT
+// 8. SECURE LOCK ACCOUNT
 // ==================================================
 router.post('/lock-account', async (req, res) => {
   try {
@@ -716,7 +865,7 @@ router.post('/lock-account', async (req, res) => {
     user.resetPasswordExpire = undefined;
     user.activeSessions = []; 
     user.auditLogs = user.auditLogs || [];
-    user.auditLogs.push({ action: 'EMERGENCY_LOCK', details: 'Account manually locked via security alert link', ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress });
+    user.auditLogs.push({ action: 'EMERGENCY_LOCK', details: 'Account manually locked via security alert link', ip: req.ip || 'Unknown' });
     await user.save();
     
     return res.json({ success: true, message: "Account locked securely.", userId: user._id });
@@ -727,7 +876,7 @@ router.post('/lock-account', async (req, res) => {
 });
 
 // ==================================================
-// 8. HARDENED UNLOCK ACCOUNT API
+// 9. HARDENED UNLOCK ACCOUNT API
 // ==================================================
 router.post('/unlock-account', unlockLimiter, async (req, res) => {
   try {
@@ -761,7 +910,7 @@ router.post('/unlock-account', unlockLimiter, async (req, res) => {
     clearFailedUnlock(cleanEmail);
 
     const sessionId = crypto.randomBytes(16).toString('hex');
-    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const ip = req.ip || 'Unknown';
 
     user.isLocked = false;
     user.securityCode = undefined;
@@ -774,11 +923,8 @@ router.post('/unlock-account', unlockLimiter, async (req, res) => {
 
     const token = generateSecureToken(user, sessionId);
     setAuthCookie(res, token, user.role);
-    
-    user.password = undefined;
-    user.securityCode = undefined;
 
-    return res.json({ success: true, message: "Account Unlocked Successfully!", token, user });
+    return res.json({ success: true, message: "Account Unlocked Successfully!", user: formatSafeUser(user) });
   } catch (error) { 
     console.error("Unlock Account Critical Error:", error);
     return res.status(500).json({ error: "Failed to process account unlock." }); 
@@ -786,7 +932,7 @@ router.post('/unlock-account', unlockLimiter, async (req, res) => {
 });
 
 // ==================================================
-// 9. LOGOUT ENDPOINT (Enhanced with req.sessionId fallback)
+// 10. CANONICAL LOGOUT ENDPOINT 🔥
 // ==================================================
 router.post('/logout', protect, async (req, res) => {
   try {
@@ -806,6 +952,8 @@ router.post('/logout', protect, async (req, res) => {
     sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax'
   };
 
+  res.clearCookie('customer_session', cookieOptions);
+  res.clearCookie('admin_session', cookieOptions);
   res.clearCookie('token', cookieOptions);
   res.clearCookie('admin_token', cookieOptions);
 
@@ -813,7 +961,7 @@ router.post('/logout', protect, async (req, res) => {
 });
 
 // ==================================================
-// 10. SESSION VALIDATION ENDPOINT (/auth/me)
+// 11. CANONICAL SESSION VALIDATION ENDPOINT (/auth/me) 🔥
 // ==================================================
 router.get('/me', protect, async (req, res) => {
   try {

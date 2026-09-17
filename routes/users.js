@@ -42,18 +42,6 @@ const generateToken = (id) => {
 // ==========================================
 // 🛡️ ZOD VALIDATION SCHEMAS FOR USERS & AUTH
 // ==========================================
-const registerSchema = z.object({
-  name: z.string().min(2, "Name is required").max(100, "Name is too long"),
-  email: z.string().email("Invalid email address"),
-  mobile: z.string().regex(/^\d{10}$/, "Invalid mobile number. Must be 10 digits").optional(),
-  password: z.string().min(6, "Password must be at least 6 characters long")
-});
-
-const loginSchema = z.object({
-  email: z.string().email("Invalid email address"),
-  password: z.string().min(1, "Password is required")
-});
-
 const otpSchema = z.object({
   email: z.string().email("Invalid email address"),
   otp: z.string().regex(/^\d{6}$/, "Invalid OTP format. Must be 6 digits").optional()
@@ -87,7 +75,6 @@ const otpVerifyLimiter = rateLimit({
 
 router.post('/api/public/send-otp', otpSendLimiter, async (req, res) => {
   try {
-    // 🔥 Strict Zod Validation
     const validationResult = otpSchema.pick({ email: true }).safeParse(req.body);
     if (!validationResult.success) {
       return res.status(400).json({ success: false, message: "Invalid email format", errors: validationResult.error.format() });
@@ -101,7 +88,6 @@ router.post('/api/public/send-otp', otpSendLimiter, async (req, res) => {
       return res.status(400).json({ message: "User already available. Please login." });
     }
 
-    // Cryptographically secure OTP generation (Not just Math.random)
     const otp = crypto.randomInt(100000, 999999).toString();
 
     otpStore.set(cleanEmail, {
@@ -136,7 +122,6 @@ router.post('/api/public/send-otp', otpSendLimiter, async (req, res) => {
 
 router.post('/api/public/verify-otp', otpVerifyLimiter, async (req, res) => {
   try {
-    // 🔥 Strict Zod Validation
     const validationResult = otpSchema.safeParse(req.body);
     if (!validationResult.success) {
       return res.status(400).json({ success: false, message: "Validation failed", errors: validationResult.error.format() });
@@ -168,7 +153,7 @@ router.post('/api/public/verify-otp', otpVerifyLimiter, async (req, res) => {
 });
 
 // ==========================================
-// 👤 2. USER APIs (AUTHENTICATION)
+// 👤 2. USER RESOURCE MANAGEMENT APIs
 // ==========================================
 
 // 🔥 STRICTLY ADMIN ONLY
@@ -183,7 +168,7 @@ router.get('/api/users', protect, admin, async (req, res) => {
 });
 
 // ==========================================
-// 🔥 NEW: CUSTOMER 360 CRM PROFILE API
+// 🔥 CUSTOMER 360 CRM PROFILE API
 // ==========================================
 router.get('/api/users/:id/360-profile', protect, admin, async (req, res) => {
   try {
@@ -246,117 +231,6 @@ router.get('/api/users/:id/360-profile', protect, admin, async (req, res) => {
   } catch (error) {
     console.error("Customer 360 Error:", error);
     return res.status(500).json({ success: false, message: "Failed to generate Customer 360 profile" });
-  }
-});
-
-router.post('/api/users/register', async (req, res) => {
-  try {
-    // 🔥 Strict Zod Validation
-    const validationResult = registerSchema.safeParse(req.body);
-    if (!validationResult.success) {
-      return res.status(400).json({ success: false, message: "Validation failed", errors: validationResult.error.format() });
-    }
-
-    const { name, email, mobile, password } = validationResult.data;
-    const cleanEmail = email.toLowerCase().trim();
-
-    const userExists = await User.findOne({ email: cleanEmail });
-    if (userExists) {
-      return res.status(400).json({ message: "User already exists" });
-    }
-
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-
-    // Default role should be 'customer' (aligned with userSchema)
-    const newUser = new User({ 
-      name, 
-      email: cleanEmail, 
-      mobile: mobile || '', 
-      password: hashedPassword, 
-      role: 'customer' 
-    });
-    await newUser.save();
-
-    if (process.env.RESEND_API_KEY) {
-      const htmlContent = getWelcomeTemplate(name || 'User');
-      resend.emails.send({
-        from: 'Jack Essentials <updates@thejackessentials.com>', 
-        to: [cleanEmail],
-        subject: 'Welcome to the Elite Club! 🎉',
-        html: htmlContent
-      }).catch(err => console.error("Welcome email error:", err));
-    }
-
-    // 🔥 GENERATE JWT TOKEN
-    const token = generateToken(newUser._id);
-
-    return res.status(201).json({ message: "User registered successfully", userId: newUser._id, token });
-  } catch (error) { 
-    console.error("Registration Error:", error);
-    return res.status(500).json({ message: "Registration failed" }); 
-  }
-});
-
-router.post('/api/users/login', async (req, res) => {
-  try {
-    // 🔥 Strict Zod Validation
-    const validationResult = loginSchema.safeParse(req.body);
-    if (!validationResult.success) {
-      return res.status(400).json({ success: false, message: "Validation failed", errors: validationResult.error.format() });
-    }
-
-    const { email, password } = validationResult.data;
-    const cleanEmail = email.toLowerCase().trim();
-    
-    const user = await User.findOne({ email: cleanEmail }).select('+password');
-    if (!user) {
-      return res.status(400).json({ message: "Invalid email or password" });
-    }
-
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(400).json({ message: "Invalid email or password" });
-    }
-
-    if (user.isLocked) {
-      return res.status(403).json({ message: "Account is LOCKED for security. Please use the unlock page.", isLocked: true });
-    }
-    
-    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'Unknown Location';
-    const userAgent = req.headers['user-agent'] || 'Unknown Device';
-    const time = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-    
-    const lockToken = crypto.randomBytes(20).toString('hex');
-    user.resetPasswordToken = lockToken;
-    user.resetPasswordExpire = Date.now() + 3000000; 
-    await user.save();
-    
-    const lockLink = `https://thejackessentials.com/secure-account?token=${lockToken}`;
-    const accountAgeInMinutes = (Date.now() - new Date(user.createdAt || Date.now()).getTime()) / 60000;
-    const isBrandNewUser = accountAgeInMinutes < 2;
-
-    if (process.env.RESEND_API_KEY && !isBrandNewUser) {
-      const htmlContent = getLoginAlertTemplate(user.name || 'User', userAgent, time, ip, lockLink);
-      resend.emails.send({
-        from: 'Jack Essentials Security <updates@thejackessentials.com>', 
-        to: [cleanEmail],
-        subject: '⚠️ Security Alert: New Login to your Account',
-        html: htmlContent
-      }).catch(err => console.error("Login alert error:", err));
-    }
-    
-    // 🔥 GENERATE REAL JWT TOKEN
-    const token = generateToken(user._id);
-
-    // Filter password from response
-    const userResponse = { ...user._doc, id: user._id.toString() };
-    delete userResponse.password;
-
-    return res.json({ message: "Login successful", token, user: userResponse });
-  } catch (error) { 
-    console.error("Login Error:", error);
-    return res.status(500).json({ message: "Login failed" }); 
   }
 });
 
@@ -452,48 +326,6 @@ router.post('/api/users/unlock-account', async (req, res) => {
   } catch (error) {
     console.error("Unlock Account Error:", error);
     return res.status(500).json({ error: "Failed to unlock account." });
-  }
-});
-
-// ==========================================
-// 🔥 SOCIAL LOGIN
-// ==========================================
-router.post('/api/users/social-login', async (req, res) => {
-  try {
-    const { name, email, firebaseId } = req.body;
-    if (!email) {
-      return res.status(400).json({ message: "Email is required" });
-    }
-
-    const cleanEmail = email.toLowerCase().trim();
-    let user = await User.findOne({ email: cleanEmail });
-    let isNewUser = false; 
-    
-    if (!user) {
-      user = new User({ 
-        name: name || 'User', 
-        email: cleanEmail, 
-        password: firebaseId || 'social_login', 
-        role: 'customer' 
-      });
-      await user.save();
-      isNewUser = true; 
-    }
-
-    if (user.isLocked) {
-      return res.status(403).json({ message: "Account is LOCKED. Please login via Email/Password to enter your PIN.", isLocked: true });
-    }
-    
-    // 🔥 GENERATE REAL JWT TOKEN
-    const token = generateToken(user._id);
-
-    const userResponse = { ...user._doc, id: user._id.toString() };
-    delete userResponse.password;
-    
-    return res.json({ message: "Login successful", isNewUser, token, user: userResponse });
-  } catch (error) { 
-    console.error("Social Login Error:", error);
-    return res.status(500).json({ message: "Social login failed" }); 
   }
 });
 

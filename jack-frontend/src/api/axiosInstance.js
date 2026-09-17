@@ -11,30 +11,13 @@ const axiosInstance = axios.create({
   withCredentials: true,
 });
 
-// Helper function to safely retrieve token across storages
-const getAuthToken = () => {
-  if (typeof window === 'undefined') return null;
-  
-  // Check LocalStorage first
-  const localToken = localStorage.getItem('token') || 
-                     localStorage.getItem('admin_token') || 
-                     localStorage.getItem('jack_token');
-  if (localToken) return localToken;
-
-  // Fallback to safely parsing cookies if not in LocalStorage
-  const match = document.cookie.match(/(?:^|;\s*)(token|admin_token)=([^;]*)/);
-  return match ? match[2] : null;
-};
-
 // ==========================================
 // 🔥 REQUEST INTERCEPTOR
 // ==========================================
 axiosInstance.interceptors.request.use(
   (config) => {
-    const token = getAuthToken();
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
+    // 🔥 PRODUCTION SECURITY FIX: Manual Authorization header injection removed.
+    // Authentication tokens are now securely transmitted via HttpOnly cookies using withCredentials: true.
 
     // Add correlation ID for easier server-side debugging
     config.headers['X-Request-ID'] = crypto.randomUUID 
@@ -72,10 +55,9 @@ axiosInstance.interceptors.response.use(
     if (error.response && (error.response.status === 401 || error.response.status === 403)) {
       console.warn("🚨 Session expired or Unauthorized. Forcing auto-logout.");
       
+      // Clear non-sensitive user metadata from localStorage (Tokens are in HttpOnly cookies)
       localStorage.removeItem('jack_user');
-      localStorage.removeItem('token'); 
-      localStorage.removeItem('admin_token');
-      localStorage.removeItem('jack_token');
+      localStorage.removeItem('jack_remembered_identifier');
 
       window.dispatchEvent(new Event('jack_auth_change'));
 

@@ -4,11 +4,11 @@ const router = express.Router();
 const nodemailer = require('nodemailer'); 
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { Resend } = require('resend');
-const rateLimit = require('express-rate-limit'); // 🔥 IMPORTED RATE LIMITER
-const { Setting, Subscriber, EmailTemplate, Ticket, AbandonedCart, Order, Product } = require('../models'); // 🔥 FIXED: Order and Product models added for aggregation
+const rateLimit = require('express-rate-limit'); 
+const { Setting, Subscriber, EmailTemplate, Ticket, AbandonedCart, Order, Product } = require('../models'); 
 const { getReportTemplate, getBulkEmailTemplate } = require('../emailTemplates');
-const mongoose = require('mongoose'); // 🔥 Required for aggregation pipelines
-const webpush = require('web-push'); // 🔥 PWA Web Push Library
+const mongoose = require('mongoose'); 
+const webpush = require('web-push'); 
 
 // 🚨 IMPORT AUTH & RBAC MIDDLEWARES
 const { protect } = require('../middleware/authMiddleware');
@@ -16,7 +16,7 @@ const { checkPermission } = require('../middleware/rbacMiddleware');
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-// In-memory or Database storage for Push Subscriptions (For production, save in User/Setting model)
+// In-memory or Database storage for Push Subscriptions
 let pushSubscriptions = [];
 
 // ==========================================
@@ -66,7 +66,7 @@ async function sendAdminPushAlert(title, body, url = '/') {
   }
 }
 
-// Test trigger endpoint for useful alerts (New order, Payment failed, Low stock, Return request, Support ticket, Shipment failure)
+// Test trigger endpoint for operational alerts
 router.post('/api/admin/send-test-notification', protect, checkPermission('settings:all'), async (req, res) => {
   try {
     const { title, body } = req.body;
@@ -79,29 +79,16 @@ router.post('/api/admin/send-test-notification', protect, checkPermission('setti
 });
 
 // ==========================================
-// 🚀 NAYA FEATURE: COMMAND CENTER OPERATIONAL CONTROL API
+// 🚀 COMMAND CENTER OPERATIONAL CONTROL API
 // ==========================================
 router.get('/api/admin/command-center', protect, checkPermission('settings:all'), async (req, res) => {
   try {
-    // 1. Payments Failed / Pending issues
     const failedPaymentsCount = await Order.countDocuments({ status: { $in: ['Failed', 'PaymentFailed', 'Cancelled'] } });
-
-    // 2. Low Stock Alerts (< 5 items)
     const lowStockCount = await Product.countDocuments({ listingStatus: "Active", inventory: { $lt: 5 } });
-
-    // 3. Delhivery / Shipping Errors (Shipment status error or failed sync)
     const shippingErrorsCount = await Order.countDocuments({ "shipment.trackingStatus": { $regex: /error|failed|exception/i } });
-
-    // 4. RTO Orders
     const rtoCount = await Order.countDocuments({ status: 'RTO' });
-
-    // 5. Return Requests
     const returnRequestsCount = await Order.countDocuments({ status: { $in: ['ReturnRequested', 'ReturnApproved'] } });
-
-    // 6. Support Tickets (Unresolved)
     const openTicketsCount = await Ticket.countDocuments({ status: "open" });
-
-    // 7. Products Needing Approval (Listing status Draft)
     const pendingApprovalCount = await Product.countDocuments({ listingStatus: "Draft" });
 
     return res.json({
@@ -123,13 +110,13 @@ router.get('/api/admin/command-center', protect, checkPermission('settings:all')
 });
 
 // ==========================================
-// 🚀 NAYA FEATURE: LAG-FREE DASHBOARD AGGREGATION ENGINE (5-Zone Ready)
+// 🚀 LAG-FREE DASHBOARD AGGREGATION ENGINE
 // ==========================================
 router.get('/api/dashboard-stats', protect, checkPermission('settings:all'), async (req, res) => {
   try {
-    const { timeRange } = req.query; // 'today', '7days', 'month', 'all'
+    const { timeRange } = req.query; 
     const now = new Date();
-    let startDate = new Date(0); // Default to all time
+    let startDate = new Date(0); 
 
     if (timeRange === 'today') {
       startDate = new Date(now.setHours(0, 0, 0, 0));
@@ -141,7 +128,6 @@ router.get('/api/dashboard-stats', protect, checkPermission('settings:all'), asy
 
     const matchQuery = { createdAt: { $gte: startDate } };
 
-    // 🔥 1. MASSIVE ORDER AGGREGATION (Offloads math from Browser to MongoDB)
     const orderStats = await Order.aggregate([
       { $match: matchQuery },
       {
@@ -155,7 +141,6 @@ router.get('/api/dashboard-stats', protect, checkPermission('settings:all'), asy
           totalRtoCostPaise: { $sum: "$rtoCostPaise" },
           totalGatewayFeesPaise: { $sum: "$paymentFeePaise" },
           totalContributionPaise: { $sum: "$contributionPaise" },
-          // Pipeline Stats
           pendingCount: { $sum: { $cond: [{ $in: ["$status", ["Pending", "Pending Review"]] }, 1, 0] } },
           processingCount: { $sum: { $cond: [{ $in: ["$status", ["Processing", "Packed"]] }, 1, 0] } },
           shippedCount: { $sum: { $cond: [{ $eq: ["$status", "Shipped"] }, 1, 0] } },
@@ -171,22 +156,19 @@ router.get('/api/dashboard-stats', protect, checkPermission('settings:all'), asy
       pendingCount: 0, processingCount: 0, shippedCount: 0, deliveredCount: 0, returnedCount: 0
     };
 
-    // Converting Paise to Rupees
     const finance = {
       grossRevenue: stats.grossRevenuePaise / 100,
-      netProfit: stats.totalContributionPaise / 100, // Contribution before ad spend
+      netProfit: stats.totalContributionPaise / 100, 
       cogs: stats.exactCogsPaise / 100,
       refunds: stats.totalRefundsPaise / 100,
       rtoCost: stats.totalRtoCostPaise / 100
     };
 
-    // 🔥 2. INVENTORY ALERTS (Find low stock products)
     const lowStockAlerts = await Product.find({ 
       listingStatus: "Active", 
-      inventory: { $lt: 5 } // Alert threshold
+      inventory: { $lt: 5 } 
     }).select('title inventory sku').lean();
 
-    // 🔥 3. CUSTOMER / SYSTEM ALERTS (Tickets & Abandoned Carts)
     const openTicketsCount = await Ticket.countDocuments({ status: "open" });
     const freshAbandonedCarts = await AbandonedCart.countDocuments({ 
       updatedAt: { $gte: new Date(new Date().setHours(new Date().getHours() - 24)) }
@@ -216,7 +198,7 @@ router.get('/api/dashboard-stats', protect, checkPermission('settings:all'), asy
 });
 
 // ==========================================
-// 🤖 5TH ZONE FEATURE: AI BUSINESS COPILOT INSIGHTS
+// 🤖 AI BUSINESS COPILOT INSIGHTS
 // ==========================================
 router.get('/api/business-insights', protect, checkPermission('settings:all'), async (req, res) => {
   try {
@@ -224,20 +206,18 @@ router.get('/api/business-insights', protect, checkPermission('settings:all'), a
       return res.json({ success: false, insights: "AI API Key missing. Please configure Gemini." });
     }
 
-    // 1. Snapshot for AI
     const totalOrders = await Order.countDocuments();
     const rtoOrders = await Order.countDocuments({ status: 'RTO' });
     const lowStock = await Product.countDocuments({ inventory: { $lt: 5 }, listingStatus: "Active" });
     const pendingOrders = await Order.countDocuments({ status: { $in: ['Pending', 'Pending Review'] } });
     const abandoned = await AbandonedCart.countDocuments();
 
-    // 2. Secret Server Prompt
     const prompt = `You are a smart Ecommerce Business Copilot. Analyze these live store metrics and provide exactly 3 short, sharp, and actionable business insights for the store owner. 
     Data: Total Orders: ${totalOrders}, RTO (Return) Orders: ${rtoOrders}, Low Stock Products: ${lowStock}, Pending Orders: ${pendingOrders}, Abandoned Carts: ${abandoned}.
     Rule: Keep it professional, data-driven, and strictly under 30 words per point. Use plain text separated by newlines, do not use asterisk (**) markdown formatting.`;
 
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash", generationConfig: { maxOutputTokens: 512 } });
     const result = await model.generateContent(prompt);
     const text = result.response.text();
 
@@ -249,7 +229,7 @@ router.get('/api/business-insights', protect, checkPermission('settings:all'), a
 });
 
 // ==========================================
-// ⚙️ 4. STORE SETTINGS
+// ⚙️ STORE SETTINGS
 // ==========================================
 router.get('/api/settings', async (req, res) => {
   try {
@@ -288,7 +268,7 @@ router.put('/api/settings', protect, checkPermission('settings:all'), async (req
 });
 
 // ==========================================
-// 📧 5. REPORTS & FINANCIAL EMAILS
+// 📧 REPORTS & FINANCIAL EMAILS
 // ==========================================
 router.post('/api/send-report', protect, checkPermission('finance:all'), async (req, res) => {
   const { to, subject, data, dateRange } = req.body;
@@ -309,7 +289,7 @@ router.post('/api/send-report', protect, checkPermission('finance:all'), async (
 });
 
 // ==========================================
-// 📝 6. EMAIL TEMPLATES - RBAC ENFORCED
+// 📝 EMAIL TEMPLATES - RBAC ENFORCED
 // ==========================================
 router.get('/api/email-templates', protect, checkPermission('settings:all'), async (req, res) => {
   try {
@@ -343,11 +323,11 @@ router.delete('/api/email-templates/:id', protect, checkPermission('settings:all
 });
 
 // ==========================================
-// 🤖 7. GEMINI AI - Public (chatbot for normal users)
+// 🤖 GEMINI AI - Public Chatbot (Hardened against abuse)
 // ==========================================
 const aiPublicLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20, // Max 20 messages per IP
+  windowMs: 15 * 60 * 1000, 
+  max: 20, 
   message: { text: "Too many messages sent. Please try again later or contact human support." }
 });
 
@@ -368,20 +348,21 @@ router.post('/api/gemini-chat', aiPublicLimiter, async (req, res) => {
 
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     const model = genAI.getGenerativeModel({
-      model: "gemini-3.5-flash", 
+      model: "gemini-2.5-flash", 
       systemInstruction: SERVER_SYSTEM_INSTRUCTION,
+      generationConfig: { maxOutputTokens: 1024 }
     });
 
-    let formattedHistory = chatHistory ? chatHistory.map(msg => ({
+    let formattedHistory = chatHistory ? chatHistory.slice(-10).map(msg => ({
       role: (msg.role === 'model' || msg.role === 'bot') ? 'model' : 'user',
-      parts: [{ text: msg.parts && msg.parts[0] ? msg.parts[0].text : (msg.text || '') }],
+      parts: [{ text: typeof msg.content === 'string' ? msg.content : (msg.parts && msg.parts[0] ? msg.parts[0].text : (msg.text || '')) }],
     })) : [];
 
     while (formattedHistory.length > 0 && formattedHistory[0].role === 'model') {
       formattedHistory.shift(); 
     }
 
-    const chat = model.startChat({ history: formattedHistory, generationConfig: { temperature: 0.3 } });
+    const chat = model.startChat({ history: formattedHistory, generationConfig: { temperature: 0.3, maxOutputTokens: 1024 } });
     const result = await chat.sendMessage(userMessage);
     return res.json({ text: result.response.text() });
   } catch (error) { 
@@ -391,7 +372,7 @@ router.post('/api/gemini-chat', aiPublicLimiter, async (req, res) => {
 });
 
 // ==========================================
-// 🎟️ 8. TICKETS & SUPPORT ANALYTICS
+// 🎟️ TICKETS & SUPPORT ANALYTICS
 // ==========================================
 router.get('/api/tickets', protect, checkPermission('tickets:all'), async (req, res) => {
   try {
@@ -465,7 +446,7 @@ router.get('/api/support-analytics', protect, checkPermission('tickets:all'), as
 });
 
 // ==========================================
-// 🛒 9. ABANDONED CARTS
+// 🛒 ABANDONED CARTS
 // ==========================================
 router.post('/api/sync-cart', protect, async (req, res) => {
   try {
@@ -493,7 +474,7 @@ router.post('/api/sync-cart', protect, async (req, res) => {
     const updatedCart = await AbandonedCart.findOneAndUpdate(
       { "user.userId": secureUserId }, 
       { $set: cartData }, 
-      { upsert: true, new: true } // 🔥 Universal Mongoose new: true compatibility
+      { upsert: true, new: true } 
     );
 
     const io = req.app.get("io");
