@@ -208,9 +208,17 @@ const Login = ({ setIsLoggedIn }) => {
       if (!isMounted.current) return;
 
       if (res.data?.success) {
-        if (res.data?.token) {
-          localStorage.setItem('token', res.data.token);
+        // 🔥 FIXED: Store token and user details across all common keys so UserContext & AuthContext sync instantly
+        const authToken = res.data.token;
+        if (authToken) {
+          localStorage.setItem('token', authToken);
+          localStorage.setItem('jack_token', authToken);
+          localStorage.setItem('admin_token', authToken);
         }
+        if (res.data?.user) {
+          localStorage.setItem('jack_user', JSON.stringify(res.data.user));
+        }
+
         setStatus({ type: 'success', msg: 'Phone verified successfully! Redirecting...' });
         if (setIsLoggedIn) setIsLoggedIn(true);
         
