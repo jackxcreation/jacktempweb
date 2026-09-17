@@ -10,12 +10,9 @@ if (process.env.NODE_ENV === 'production' && !process.env.REDIS_URL) {
     throw new Error('FATAL: REDIS_URL environment variable is required in production for BullMQ queues.');
 }
 
-// 🔥 Robust Upstash / Cloud Redis connection config using REDIS_URL and TLS
+// 🔥 CRITICAL FIX: Removed hardcoded TLS. ioredis auto-detects TLS for 'rediss://' (Upstash) and disables it for 'redis://' (Render Internal)
 const connection = process.env.REDIS_URL 
   ? new Redis(process.env.REDIS_URL, {
-      tls: {
-        rejectUnauthorized: false
-      },
       maxRetriesPerRequest: null,
       enableReadyCheck: false
     })

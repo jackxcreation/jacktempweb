@@ -267,13 +267,12 @@ const io = new Server(server, {
   } 
 });
 
-// 🔥 ROBUST UPSTASH / REDIS SECURE CLIENT INITIALIZATION WITH TLS
+// ==========================================
+// 🔥 CRITICAL FIX: REDIS CLIENT WITHOUT HARDCODED TLS 
+// (Render automatically connects without TLS, Upstash will use TLS via 'rediss://' URL)
+// ==========================================
 const pubClient = createClient({ 
-  url: process.env.REDIS_URL,
-  socket: {
-    tls: process.env.REDIS_URL && process.env.REDIS_URL.startsWith('rediss://'),
-    rejectUnauthorized: false
-  }
+  url: process.env.REDIS_URL
 });
 
 pubClient.on('error', (err) => {
@@ -290,9 +289,9 @@ async function initRedis() {
     if (!pubClient.isOpen) await pubClient.connect();
     if (!subClient.isOpen) await subClient.connect();
     io.adapter(createAdapter(pubClient, subClient));
-    console.log("✅ Socket.IO Redis Adapter Connected Successfully via Upstash / REDIS_URL!");
+    console.log("✅ Socket.IO Redis Adapter Connected Successfully!");
   } catch (err) {
-    console.warn("⚠️ Redis connection failed using REDIS_URL (Running in standalone mode):", err.message);
+    console.warn("⚠️ Redis connection failed (Running in standalone mode):", err.message);
   }
 }
 initRedis();

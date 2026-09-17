@@ -10,14 +10,9 @@ if (process.env.NODE_ENV === 'production' && !process.env.REDIS_URL) {
     throw new Error('FATAL: REDIS_URL environment variable is required in production.');
 }
 
-// 🔥 Robust Upstash / Cloud Redis connection config using REDIS_URL and TLS
+// 🔥 CRITICAL FIX: Removed hardcoded TLS. ioredis automatically uses TLS for 'rediss://' (Upstash) and no TLS for 'redis://' (Render Internal)
 const redisClient = process.env.REDIS_URL 
-  ? new Redis(process.env.REDIS_URL, {
-      tls: {
-        rejectUnauthorized: false
-      },
-      maxRetriesPerRequest: null
-    })
+  ? new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: null })
   : new Redis('redis://localhost:6379', { maxRetriesPerRequest: null });
 
 redisClient.on('error', (err) => console.error('Redis Cache Error:', err));

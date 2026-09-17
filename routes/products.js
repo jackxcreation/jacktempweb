@@ -12,15 +12,11 @@ const { protect } = require('../middleware/authMiddleware');
 const { checkPermission } = require('../middleware/rbacMiddleware');
 
 // ==========================================
-// 🔥 SECURE UPSTASH / REDIS CLIENT INITIALIZATION FOR VIEW TRACKING
+// 🔥 CRITICAL FIX: SECURE UPSTASH / REDIS CLIENT WITHOUT HARDCODED TLS
+// (ioredis auto-detects TLS for 'rediss://' and disables it for 'redis://')
 // ==========================================
 const redisClient = process.env.REDIS_URL 
-  ? new Redis(process.env.REDIS_URL, {
-      tls: {
-        rejectUnauthorized: false
-      },
-      maxRetriesPerRequest: null
-    })
+  ? new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: null })
   : new Redis('redis://localhost:6379', { maxRetriesPerRequest: null });
 
 redisClient.on('error', (err) => console.error('Redis View Tracker Error:', err));
