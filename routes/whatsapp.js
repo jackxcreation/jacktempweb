@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const axios = require('axios');
+const jwt = require('jsonwebtoken');
 const User = require('../models/User'); // Tera User model
 
 // Temporary in-memory store for OTPs (Production ke liye Redis ya TTL DB collection best hai)
@@ -152,20 +153,44 @@ router.post('/verify-otp', async (req, res) => {
     // Clear OTP after successful verification
     otpStore.delete(phone);
 
-    // Find or create user in MongoDB
-    let user = await User.findOne({ phone });
+    // Normalize phone number variants to search safely in DB
+    const cleanPhone = phone.replace(/^\+91/, '').trim();
+
+    // 1. Find existing user matching any phone format variant
+    let user = await User.findOne({ 
+      $or: [
+        { phone: phone },
+        { phone: cleanPhone },
+        { phone: `+91${cleanPhone}` }
+      ]
+    });
+
+    // 2. If user doesn't exist, create one securely with fallback email to satisfy Mongoose schema
     if (!user) {
-      user = await User.create({ phone, name: 'WhatsApp User', role: 'customer' });
+      user = await User.create({ 
+        phone: cleanPhone, 
+        email: `wa_${cleanPhone}@thejackessentials.com`, 
+        name: 'WhatsApp User', 
+        role: 'customer' 
+      });
     }
+
+    // 3. 🔥 Issue JWT Token for instant frontend login session state
+    const token = jwt.sign(
+      { id: user._id, userId: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: '30d' }
+    );
 
     return res.status(200).json({
       success: true,
       message: 'Phone verified successfully!',
+      token,
       user
     });
   } catch (error) {
     console.error('❌ WhatsApp Verify OTP Error:', error.message);
-    return res.status(500).json({ success: false, message: 'Verification failed.' });
+    return res.status(500).json({ success: false, message: error.message || 'Verification failed.' });
   }
 });
 
