@@ -179,8 +179,17 @@ router.post('/verify-otp', async (req, res) => {
     const token = jwt.sign(
       { id: user._id, userId: user._id, role: user.role },
       process.env.JWT_SECRET,
-      { expiresIn: '30d' }
+      { expiresIn: '7d' }
     );
+
+    // 🔥 FIX: Set Secure HttpOnly Cookie matching authRouter.js configuration
+    const cookieName = user.role === 'admin' ? 'admin_token' : 'token';
+    res.cookie(cookieName, token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000
+    });
 
     return res.status(200).json({
       success: true,
