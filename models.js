@@ -1,6 +1,8 @@
+// models/index.js
 const mongoose = require('mongoose');
 
-// Import the single canonical User model from models/User.js to eliminate schema duplication bug
+// 🔥 CRITICAL FIX: Correct relative path for canonical User model inside models/ directory
+// models.js (root level par)
 const User = require('./models/User');
 
 // ==========================================
@@ -271,6 +273,7 @@ const shipmentSchema = new mongoose.Schema({
 
 const orderSchema = new mongoose.Schema({
   userId: { type: String, required: true, index: true },
+  orderNumber: { type: String, unique: true, sparse: true, index: true }, // 🔥 Unique constraint added for DB audit compliance
   items: Array, 
   totalAmount: String, 
   totalPaise: { type: Number, default: 0 },
@@ -378,6 +381,17 @@ const settlementSchema = new mongoose.Schema({
   taxPaise: { type: Number, default: 0 },
   status: { type: String, default: 'SETTLED', index: true },
   settledAt: { type: Date, default: Date.now }
+}, { timestamps: true });
+
+// ==========================================
+// 🔥 3.2 OTP SCHEMA (TTL INDEX FOR BRUTE-FORCE PROTECTION)
+// ==========================================
+const otpSchema = new mongoose.Schema({
+  identifier: { type: String, required: true, lowercase: true, trim: true, index: true },
+  otpHash: { type: String, required: true },
+  attempts: { type: Number, default: 0 },
+  lastResentAt: { type: Date, default: Date.now },
+  expiresAt: { type: Date, required: true, index: { expireAfterSeconds: 0 } }
 }, { timestamps: true });
 
 // ==========================================
@@ -549,6 +563,24 @@ const stockAlertSchema = new mongoose.Schema({
 stockAlertSchema.index({ user: 1, product: 1 }, { unique: true });
 
 // ==========================================
+// 🔥 11.1 REVIEW & QUESTION SCHEMAS
+// ==========================================
+const reviewSchema = new mongoose.Schema({
+  product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true, index: true },
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  rating: { type: Number, required: true, min: 1, max: 5 },
+  comment: { type: String, trim: true, maxlength: 1000, default: '' },
+  isVerifiedPurchase: { type: Boolean, default: false }
+}, { timestamps: true });
+
+const questionSchema = new mongoose.Schema({
+  product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true, index: true },
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  question: { type: String, required: true, trim: true, maxlength: 500 },
+  answer: { type: String, trim: true, maxlength: 1000, default: '' }
+}, { timestamps: true });
+
+// ==========================================
 // 🔥 12. SEPARATED ANALYTICS MODELS
 // ==========================================
 const productDailyMetricsSchema = new mongoose.Schema({
@@ -600,6 +632,8 @@ module.exports = {
   PaymentAttempt: mongoose.models.PaymentAttempt || mongoose.model('PaymentAttempt', paymentAttemptSchema),
   Refund: mongoose.models.Refund || mongoose.model('Refund', refundSchema),
   Settlement: mongoose.models.Settlement || mongoose.model('Settlement', settlementSchema),
+  Otp: mongoose.models.Otp || mongoose.model('Otp', otpSchema),
+  OTP: mongoose.models.Otp || mongoose.model('Otp', otpSchema),
   Setting: mongoose.models.Setting || mongoose.model('Setting', settingSchema),
   Subscriber: mongoose.models.Subscriber || mongoose.model('Subscriber', subscriberSchema),
   EmailTemplate: mongoose.models.EmailTemplate || mongoose.model('EmailTemplate', emailTemplateSchema),
@@ -612,6 +646,8 @@ module.exports = {
   Warehouse: mongoose.models.Warehouse || mongoose.model('Warehouse', warehouseSchema),
   PriceAlert: mongoose.models.PriceAlert || mongoose.model('PriceAlert', priceAlertSchema),
   StockAlert: mongoose.models.StockAlert || mongoose.model('StockAlert', stockAlertSchema),
+  Review: mongoose.models.Review || mongoose.model('Review', reviewSchema),
+  Question: mongoose.models.Question || mongoose.model('Question', questionSchema),
   ProductDailyMetrics: mongoose.models.ProductDailyMetrics || mongoose.model('ProductDailyMetrics', productDailyMetricsSchema),
   ProductViewEvent: mongoose.models.ProductViewEvent || mongoose.model('ProductViewEvent', productViewEventSchema),
   OrderMetric: mongoose.models.OrderMetric || mongoose.model('OrderMetric', orderMetricSchema),

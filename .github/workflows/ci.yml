@@ -1,0 +1,50 @@
+# .github/workflows/ci.yml
+name: Jack Essentials Enterprise CI/CD Gate
+
+on:
+  push:
+    branches: [ main, master, staging ]
+  pull_request:
+    branches: [ main, master, staging ]
+
+jobs:
+  security-and-tests:
+    runs-on: ubuntu-latest
+
+    services:
+      mongodb:
+        image: mongo:latest
+        ports:
+          - 27017:27017
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Clean Install Dependencies
+        run: npm ci
+
+      - name: Run Unit & Integration Tests
+        run: npm test
+        env:
+          MONGO_URI: mongodb://localhost:27017/jack_essentials_test
+          JWT_SECRET: ci_test_jwt_secret_key_12345
+          NODE_ENV: test
+
+      - name: Run Playwright E2E Tests
+        run: |
+          npx playwright install --with-deps
+          npm run test:e2e
+        env:
+          BASE_URL: http://localhost:3000
+          MONGO_URI: mongodb://localhost:27017/jack_essentials_test
+
+      - name: Run NPM Security Audit
+        run: npm audit --audit-level=high
+        continue-on-error: false

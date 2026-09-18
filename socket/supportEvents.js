@@ -1,4 +1,6 @@
-﻿/**
+﻿// utils/socketEvents.js
+
+/**
  * Centralized definition of Socket.io Support Events.
  * Enhanced with synchronized event keys used across all backend services.
  */
@@ -24,7 +26,7 @@ const SUPPORT_EVENTS = {
   // Security
   FORCE_LOGOUT: 'force_logout',
 
-  // 🔥 ADDED: Real-time synchronization events matching our backend services
+  // 🔥 Synchronized event keys matching our backend services & socket manager
   TICKET_UPDATED: 'ticketUpdated',
   AGENT_WORKLOAD_UPDATED: 'agentWorkloadUpdated',
   NEW_MESSAGE: 'support:new_message',

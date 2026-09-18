@@ -123,7 +123,6 @@ const logAdminAction = async (req, action, details, beforeState = null, afterSta
 router.post('/api/orders/:id/generate-awb', protect, checkPermission('orders:ship'), requireIdempotency, async (req, res) => {
   try {
     const { id } = req.params;
-    // 🔥 FIX: Extract provider from request body
     const { provider } = req.body; 
     
     const order = await Order.findById(id);
@@ -132,7 +131,6 @@ router.post('/api/orders/:id/generate-awb', protect, checkPermission('orders:shi
       return res.status(404).json({ success: false, message: "Order not found", requestId: req.requestId });
     }
 
-    // Idempotency check: Agar AWB pehle se hi assigned hai toh duplicate call par wahi return kar do
     if (order.shipment && order.shipment.awb) {
       return res.status(200).json({ 
         success: true, 
@@ -143,10 +141,7 @@ router.post('/api/orders/:id/generate-awb', protect, checkPermission('orders:shi
       });
     }
 
-    // 🔥 MASTER FIX: Convert Mongoose Document to Plain JS Object
     const orderPayload = order.toObject();
-
-    // Plain payload pass kiya jaa raha hai
     const shipmentResult = await shippingEngine.generateAWB(orderPayload, provider);
 
     const previousShipment = order.shipment ? { ...order.shipment } : {};
@@ -170,7 +165,6 @@ router.post('/api/orders/:id/generate-awb', protect, checkPermission('orders:shi
       { shipment: order.shipment.awb, provider: order.shipment.provider }
     );
 
-    // 🔥 Emit shipment created event over channels
     const io = req.app.get("io");
     if (io) {
       try {
@@ -240,7 +234,7 @@ router.post('/api/orders/:id/cancel-shipment', protect, checkPermission('orders:
 });
 
 // ==========================================
-// 🛒 MAIN ORDER CREATION ROUTE - ZOD VALIDATED, MULTI-WAREHOUSE ROUTING & IDEMPOTENCY PROTECTED 🔥
+// 🛒 MAIN ORDER CREATION ROUTE - ZOD VALIDATED, ATOMIC INVENTORY & IDEMPOTENCY PROTECTED 🔥
 // ==========================================
 router.post('/api/orders', protect, requireIdempotency, async (req, res) => {
   const validationResult = orderCreationSchema.safeParse(req.body);
@@ -299,7 +293,6 @@ router.post('/api/orders', protect, requireIdempotency, async (req, res) => {
       }
     }
 
-    // Fallback to highest priority warehouse if no precise match found
     if (!selectedWarehouse && activeWarehouses.length > 0) {
       selectedWarehouse = activeWarehouses[0];
     }
@@ -312,11 +305,19 @@ router.post('/api/orders', protect, requireIdempotency, async (req, res) => {
       const productId = rawItem.productId;
       const orderQty = rawItem.quantity;
 
-      const product = await Product.findById(productId).session(session);
+      // 🔥 ATOMIC RACE-CONDITION SAFE STOCK CHECK 🔥
+      const product = await Product.findOne({
+        _id: productId,
+        $or: [
+          { 'inventoryState.available': { $gte: orderQty } },
+          { inventory: { $gte: orderQty } }
+        ]
+      }).session(session);
+
       if (!product) {
         await session.abortTransaction();
         session.endSession();
-        return res.status(400).json({ success: false, message: `Product not found for ID: ${productId}`, requestId: req.requestId });
+        return res.status(400).json({ success: false, message: `Insufficient available stock or product not found for ID: ${productId}`, requestId: req.requestId });
       }
 
       if (!product.inventoryState) {
@@ -339,12 +340,10 @@ router.post('/api/orders', protect, requireIdempotency, async (req, res) => {
 
       const newAvailable = prevAvailable - orderQty;
 
-      // Update global inventory state
       product.inventoryState.available = newAvailable;
       product.inventoryState.reserved = (product.inventoryState.reserved || 0) + orderQty;
       product.inventory = newAvailable;
 
-      // Update warehouse-specific inventory if warehouse selected
       if (selectedWarehouse) {
         let whInvIndex = product.warehouseInventories?.findIndex(w => w.warehouse.toString() === selectedWarehouse._id.toString());
         if (whInvIndex !== -1 && whInvIndex !== undefined) {
@@ -703,7 +702,7 @@ router.put('/api/orders/:id', protect, checkPermission('orders:edit'), async (re
     const updatedOrder = await Order.findByIdAndUpdate(
         req.params.id, 
         updateFields, 
-        { new: true, session } // 🔥 Universal Mongoose new: true compatibility
+        { new: true, session } 
     );
 
     await session.commitTransaction();
@@ -749,11 +748,60 @@ router.put('/api/orders/:id', protect, checkPermission('orders:edit'), async (re
 });
 
 // ==========================================
+// 👤 GET SPECIFIC ORDER BY ID (WITH STRICT OWNERSHIP VERIFICATION) 🔥
+// ==========================================
+router.get('/api/orders/:id', protect, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid Order ID format", requestId: req.requestId });
+    }
+
+    const order = await Order.findById(id).lean();
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found", requestId: req.requestId });
+    }
+
+    const privilegedRoles = [
+      'admin', 'super_admin', 'operations_manager', 'catalog_manager', 
+      'warehouse_manager', 'customer_support', 'finance_manager', 
+      'marketing_manager', 'content_manager', 'analyst', 'read_only_auditor', 
+      'manager', 'catalog', 'support'
+    ];
+
+    const isPrivilegedStaff = privilegedRoles.includes(req.user.role);
+    const isOwner = order.userId && order.userId.toString() === req.user._id.toString();
+
+    // 🔥 STRICT RESOURCE-LEVEL OWNERSHIP ENFORCEMENT
+    if (!isOwner && !isPrivilegedStaff) {
+      logger.warn({
+        message: `UNAUTHORIZED ACCESS ATTEMPT: User ${req.user.email} tried to access Order #${id} owned by User ${order.userId}`,
+        requestId: req.requestId,
+        userId: req.user._id
+      });
+      return res.status(403).json({ success: false, message: "Access Denied: You do not own this order.", requestId: req.requestId });
+    }
+
+    return res.status(200).json({ success: true, order: { ...order, id: order._id.toString() } });
+  } catch (error) {
+    return sendErrorResponse(res, req, error, "Failed to fetch order details");
+  }
+});
+
+// ==========================================
 // 👤 GET USER ORDERS
 // ==========================================
 router.get('/api/orders/user/:userId', protect, async (req, res) => {
   try {
-    if (req.user._id.toString() !== req.params.userId && req.user.role !== 'admin' && req.user.role !== 'manager' && req.user.role !== 'super_admin') {
+    const privilegedRoles = [
+      'admin', 'super_admin', 'operations_manager', 'catalog_manager', 
+      'warehouse_manager', 'customer_support', 'finance_manager', 
+      'marketing_manager', 'content_manager', 'analyst', 'read_only_auditor', 
+      'manager', 'catalog', 'support'
+    ];
+    const isPrivilegedStaff = privilegedRoles.includes(req.user.role);
+
+    if (req.user._id.toString() !== req.params.userId && !isPrivilegedStaff) {
        return res.status(403).json({ success: false, message: "Access Denied: You can only view your own orders.", requestId: req.requestId });
     }
 

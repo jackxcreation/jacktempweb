@@ -27,24 +27,28 @@ const authenticateSocket = async (socket, next) => {
         return acc;
       }, {});
       
-      token = cookies.admin_token || cookies.token || cookies.jwt || null;
+      // 🔥 Expanded to include all isolated cookie namespaces used across backend
+      token = cookies.customer_session || cookies.admin_session || cookies.admin_token || cookies.token || cookies.jwt || null;
     }
 
     // If token exists, verify and attach registered user
     if (token) {
       if (!process.env.JWT_SECRET) {
-        console.warn("⚠️ JWT_SECRET is not defined in environment variables!");
-      }
+        console.error("🚨 CRITICAL SECURITY ERROR: JWT_SECRET environment variable is missing!");
+      } else {
+        // 🔥 AUDIT FIX: Explicit algorithm allowlist
+        const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
+        const userId = decoded.id || decoded.userId || decoded._id;
 
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      const userId = decoded.id || decoded.userId || decoded._id;
-
-      if (userId) {
-        const user = await User.findById(userId).select('-password');
-        
-        if (user && !user.isLocked) {
-          socket.user = user;
-          return next();
+        if (userId) {
+          const user = await User.findById(userId).select('-password');
+          
+          // 🔥 AUDIT FIX: Strict account lock and active status validation
+          if (user && !user.isLocked && user.isActive !== false) {
+            socket.user = user;
+            socket.sessionId = decoded.sid;
+            return next();
+          }
         }
       }
     }

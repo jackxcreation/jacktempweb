@@ -1,3 +1,4 @@
+// routes/whatsapp.js
 const express = require('express');
 const router = express.Router();
 const axios = require('axios');
@@ -21,6 +22,26 @@ const verifyOtpIpLimiter = rateLimit({
   max: 15, 
   message: { success: false, message: 'Too many verification attempts from this IP. Please try again later.' }
 });
+
+// ==========================================
+// 🔐 DATA PROTECTION: SAFE USER RESPONSE FORMATTER
+// ==========================================
+const formatSafeUser = (user) => {
+  if (!user) return null;
+  return {
+    id: user._id || user.id,
+    name: user.name,
+    email: user.email,
+    phone: user.phone,
+    role: user.role || 'customer',
+    isPhoneVerified: user.isPhoneVerified || false,
+    isActive: user.isActive,
+    twoFactorEnabled: user.twoFactorEnabled || false,
+    addresses: user.addresses || [],
+    wishlist: user.wishlist || [],
+    recentlyViewed: user.recentlyViewed || []
+  };
+};
 
 // ==========================================
 // 🛡️ SECURE DB-BACKED OTP SCHEMA (Per-Phone & Per-Challenge Tracking)
@@ -224,7 +245,7 @@ router.post('/send-otp', sendOtpIpLimiter, async (req, res) => {
 });
 
 // ==========================================
-// 5. VERIFY WHATSAPP OTP (POST) -> Sets HttpOnly Cookie (No Token in JSON)
+// 5. VERIFY WHATSAPP OTP (POST) -> Sets Canonical HttpOnly Cookie & Sanitized User Response
 // ==========================================
 router.post('/verify-otp', verifyOtpIpLimiter, async (req, res) => {
   try {
@@ -282,19 +303,29 @@ router.post('/verify-otp', verifyOtpIpLimiter, async (req, res) => {
         { expiresIn: '7d' }
       );
 
-      const cookieName = existingUser.role === 'admin' ? 'admin_token' : 'token';
+      // 🔥 ALIGNED WITH CANONICAL COOKIE NAMESPACES (`admin_session` / `customer_session`)
+      const privilegedRoles = [
+        'admin', 'super_admin', 'operations_manager', 'catalog_manager', 
+        'warehouse_manager', 'customer_support', 'finance_manager', 
+        'marketing_manager', 'content_manager', 'analyst', 'read_only_auditor', 
+        'manager', 'catalog', 'support'
+      ];
+      const isAdminRole = privilegedRoles.includes(existingUser.role);
+      const cookieName = isAdminRole ? 'admin_session' : 'customer_session';
+      const maxAgeValue = isAdminRole ? 8 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
+
       res.cookie(cookieName, userToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000
+        maxAge: maxAgeValue
       });
 
       return res.status(200).json({
         success: true,
         isExistingUser: true,
         message: 'Phone verified & logged in successfully!',
-        user: existingUser
+        user: formatSafeUser(existingUser)
       });
     }
 

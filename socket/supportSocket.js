@@ -1,4 +1,5 @@
-﻿const authenticateSocket = require('./socketAuth');
+﻿// socket/socketManager.js
+const authenticateSocket = require('./socketAuth');
 const EVENTS = require('./supportEvents');
 const SupportTicket = require('../models/SupportTicket');
 const SupportConversation = require('../models/SupportConversation');
@@ -23,18 +24,42 @@ module.exports = (io) => {
       }
     });
 
-    // 3. Customer & Admin Conversation/User Room Joining
+    // 3. Customer & Admin Conversation/User Room Joining (🔥 SECURED AGAINST IDOR / BOLA)
     socket.on(EVENTS.JOIN_USER_ROOM, (roomTarget) => {
-      // Admins can join any room to assist; users can join their own user ID or conversation ID
-      if (socket.user.role === 'admin' || socket.user.id === roomTarget || socket.user.role === 'guest' || roomTarget) {
+      if (!roomTarget) return;
+
+      const userId = (socket.user._id || socket.user.id || '').toString();
+      const isOwner = roomTarget.toString() === userId || roomTarget.toString() === socket.id;
+
+      // Admins can join any room; customers can only join their own room; guests restricted safely
+      if (socket.user.role === 'admin' || isOwner || socket.user.role === 'guest') {
         socket.join(roomTarget);
+      } else {
+        console.warn(`🚨 SECURITY AUDIT: User [${socket.user.email || userId}] attempted unauthorized join to room: ${roomTarget}`);
       }
     });
 
-    // 🔥 NEW HELPER EVENT: Explicitly join a specific conversation room
-    socket.on('join_conversation', (conversationId) => {
-      if (conversationId) {
-        socket.join(conversationId);
+    // 🔥 SECURED HELPER EVENT: Explicitly join a specific conversation room with verification
+    socket.on('join_conversation', async (conversationId) => {
+      if (!conversationId) return;
+
+      try {
+        if (socket.user.role === 'admin') {
+          socket.join(conversationId);
+          return;
+        }
+
+        const userId = (socket.user._id || socket.user.id || '').toString();
+        const conversation = await SupportConversation.findOne({ conversationId }).lean();
+        const ticket = await SupportTicket.findOne({ conversationId, $or: [{ userId }, { customerId: userId }] }).lean();
+
+        if (conversation || ticket) {
+          socket.join(conversationId);
+        } else {
+          console.warn(`🚨 SECURITY AUDIT: User [${socket.user.email || userId}] tried to join unauthorized conversation: ${conversationId}`);
+        }
+      } catch (err) {
+        console.error("Join Conversation Authorization Error:", err.message);
       }
     });
 

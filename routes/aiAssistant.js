@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { GoogleGenAI } = require('@google/genai'); // 🔥 MODERN SDK IMPORT
 const { availableTools } = require('../utils/aiTools');
 const { protect } = require('../middleware/authMiddleware');
 const { Ticket } = require('../models');
@@ -22,18 +22,18 @@ function getGeminiKeys() {
 // ==========================================
 // 🛡️ HELPER: TIMEOUT WRAPPER FOR AI ABUSE PROTECTION
 // ==========================================
-async function callGeminiWithTimeout(model, payload, timeoutMs = 12000) {
+async function callGeminiWithTimeout(modelsClient, payload, timeoutMs = 12000) {
   const timeoutPromise = new Promise((_, reject) => 
     setTimeout(() => reject(new Error('AI Request timed out to prevent API hanging')), timeoutMs)
   );
   return Promise.race([
-    model.generateContent(payload),
+    modelsClient.generateContent(payload),
     timeoutPromise
   ]);
 }
 
 // ==========================================
-// 🤖 CANONICAL GEMINI AI CORE HANDLER (WITH ABUSE & COST PROTECTIONS)
+// 🤖 CANONICAL GEMINI AI CORE HANDLER (USING @google/genai)
 // ==========================================
 async function callGeminiAI({ messages, systemPrompt, temperature = 0.3, tools = null }) {
   const apiKeys = getGeminiKeys();
@@ -52,7 +52,7 @@ async function callGeminiAI({ messages, systemPrompt, temperature = 0.3, tools =
 
   let lastError = null;
 
-  // Transform standard messages to STRICT Gemini format
+  // Transform standard messages to format supported by modern SDK
   const formattedContents = safeMessages.map(m => {
     // 1. Model / Assistant mapping
     if (m.role === 'assistant' || m.role === 'model') {
@@ -96,36 +96,34 @@ async function callGeminiAI({ messages, systemPrompt, temperature = 0.3, tools =
 
   for (const key of apiKeys) {
     try {
-      const genAI = new GoogleGenerativeAI(key);
-      const modelConfig = {
-        model: "gemini-2.5-flash", 
+      const ai = new GoogleGenAI({ apiKey: key }); // 🔥 MODERN CLIENT INITIALIZATION
+      
+      const config = {
         systemInstruction: systemPrompt, // 🔥 STRICTLY SERVER-CONTROLLED
-        generationConfig: { 
-          temperature,
-          maxOutputTokens: 1024 // 🔥 API-COST PROTECTION: Cap maximum output tokens
-        }
+        temperature,
+        maxOutputTokens: 1024 // 🔥 API-COST PROTECTION: Cap maximum output tokens
       };
 
       if (tools) {
-        modelConfig.tools = [{ functionDeclarations: tools }];
+        config.tools = [{ functionDeclarations: tools }];
       }
 
-      const model = genAI.getGenerativeModel(modelConfig);
+      // 🔥 CALL MODERN SDK models.generateContent API with timeout wrapper
+      const response = await callGeminiWithTimeout(ai.models, {
+        model: "gemini-2.5-flash",
+        contents: formattedContents,
+        config
+      }, 12000);
       
-      // 🔥 ABUSE PROTECTION: Call Gemini with strict timeout
-      const result = await callGeminiWithTimeout(model, { contents: formattedContents }, 12000);
-      const response = result.response;
-      
-      const functionCalls = response.functionCalls();
-      let textContent = "";
-      try { textContent = response.text(); } catch (e) {}
+      const functionCalls = response.functionCalls || [];
+      const textContent = response.text || "";
 
       return {
         provider: "Gemini",
         message: {
           role: "assistant", 
           content: textContent,
-          tool_calls: functionCalls ? functionCalls.map(call => ({
+          tool_calls: functionCalls.length > 0 ? functionCalls.map(call => ({
             function: {
               name: call.name,
               arguments: JSON.stringify(call.args)

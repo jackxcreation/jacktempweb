@@ -1,16 +1,7 @@
 // workers/abandonedCartWorker.js
 const mongoose = require('mongoose');
 const { Order } = require('../models');
-const winston = require('winston');
-
-const logger = winston.createLogger({
-  level: 'info',
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.json()
-  ),
-  transports: [new winston.transports.Console()]
-});
+const { logger } = require('../utils/logger'); // 🔥 Synchronized with central enterprise logger
 
 // ==========================================
 // 🛒 ABANDONED CART BACKGROUND WORKER

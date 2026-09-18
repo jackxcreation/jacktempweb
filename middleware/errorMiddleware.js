@@ -39,25 +39,28 @@ const errorHandler = (err, req, res, next) => {
   }
 
   const requestId = req.requestId || req.headers['x-request-id'] || 'unknown-req';
+  const referenceCode = `JE-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
   const isProduction = process.env.NODE_ENV === 'production';
 
-  // Comprehensive error logging via Winston
+  // Comprehensive error logging via Winston with reference tracking
   logger.error({
     message: err.message || 'Unknown error occurred',
     code: errorCode,
     statusCode,
     requestId,
+    referenceCode,
     stack: err.stack,
     route: req.originalUrl,
     method: req.method,
     ip: req.ip
   });
 
-  // Client JSON response payload
+  // Client JSON response payload with enterprise reference code
   res.status(statusCode).json({
     success: false,
     code: errorCode,
-    message: isProduction && statusCode === 500 ? 'Internal Server Error' : (err.message || 'Something went wrong'),
+    message: isProduction && statusCode === 500 ? 'Internal Server Error. Please try again.' : (err.message || 'Something went wrong'),
+    reference: referenceCode,
     errors: err.errors || err.issues || undefined,
     requestId,
     retryable: statusCode >= 500 || statusCode === 408

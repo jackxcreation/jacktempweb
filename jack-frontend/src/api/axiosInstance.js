@@ -27,7 +27,7 @@ axiosInstance.interceptors.request.use(
     // ENTERPRISE IDEMPOTENCY: Safely inject Idempotency-Key for mutating requests
     const method = config.method?.toLowerCase();
     if (['post', 'put', 'patch', 'delete'].includes(method)) {
-      if (!config.headers['Idempotency-Key']) {
+      if (!config.headers['Idempotency-Key'] && !config.headers['x-idempotency-key']) {
         config.headers['Idempotency-Key'] = crypto.randomUUID 
           ? crypto.randomUUID() 
           : `idemp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -118,7 +118,7 @@ export const submitSupportFeedback = async (feedbackData) => {
 };
 
 // ==========================================
-// 🔥 WHATSAPP AUTHENTICATION & OTP HELPERS (NEWLY ADDED)
+// 🔥 WHATSAPP AUTHENTICATION & OTP HELPERS
 // ==========================================
 
 export const sendWhatsAppOtp = async (phone) => {

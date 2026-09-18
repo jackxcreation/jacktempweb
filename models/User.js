@@ -165,6 +165,10 @@ userSchema.pre('save', function(next) {
     this.email = this.email.toLowerCase().trim();
   }
 
+  if (this.isModified('phone') && this.phone) {
+    this.phone = this.phone.replace(/^\+91/, '').trim();
+  }
+
   // Data Minimization: Prevent unbounded growth of login and audit history logs
   if (this.loginHistory && this.loginHistory.length > 10) {
     this.loginHistory = this.loginHistory.slice(-10);

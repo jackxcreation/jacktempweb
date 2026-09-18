@@ -1,3 +1,4 @@
+// server.js
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -46,11 +47,11 @@ const { processSmartPriceDropRecommendations } = require('./services/smartAlertS
 // 🔥 IMPORT WHATSAPP ROUTES (OTP & WEBHOOK)
 const whatsappRoutes = require('./routes/whatsapp');
 
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { GoogleGenAI } = require('@google/genai'); // 🔥 MODERN SDK IMPORT
 
 dotenv.config();
 
-// 🔥 SECURE LOGGING FIX: Avoid printing raw secrets in production logs
+// 🔥 SECURED LOGGING FIX: Avoid printing raw secrets in production logs
 console.log("JWT configured:", Boolean(process.env.JWT_SECRET));
 
 // ==========================================
@@ -97,21 +98,29 @@ app.use(helmet({
 app.use(cookieParser());
 
 // ==========================================
-// 🌐 COMPREHENSIVE CORS ALLOWLIST & PREFLIGHT SUPPORT
+// 🌐 COMPREHENSIVE STRICT CORS ALLOWLIST & PREFLIGHT SUPPORT
 // ==========================================
-const allowedOrigins = [
+const baseAllowedOrigins = [
   "https://thejackessentials.com", 
   "https://www.thejackessentials.com",
   "https://admin.thejackessentials.com",
   "https://www.admin.thejackessentials.com",
   "https://ecom-project-lyart-sigma.vercel.app",
-  "http://localhost:5173",
-  "http://localhost:3000",
-  "http://localhost:5174",
-  "http://192.168.31.240:5173",
   process.env.ADMIN_ORIGIN,
   process.env.STORE_ORIGIN
 ].filter(Boolean);
+
+// 🔥 LOCALHOST & LOCAL IPs ONLY FOR NON-PRODUCTION ENVIRONMENTS
+const developmentOrigins = [
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "http://localhost:5174",
+  "http://192.168.31.240:5173"
+];
+
+const allowedOrigins = process.env.NODE_ENV === 'production' 
+  ? baseAllowedOrigins 
+  : [...baseAllowedOrigins, ...developmentOrigins];
 
 const corsOptions = {
   origin: (origin, callback) => {
@@ -119,7 +128,7 @@ const corsOptions = {
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS policy'));
+      callback(new Error('Blocked by strict CORS policy: Origin not trusted'));
     }
   },
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -338,7 +347,7 @@ app.use('/', require('./routes/priceAlerts').router);
 app.use('/', require('./routes/stockAlerts').router);
 
 // ==========================================
-// 🔥 SECURED: AI CATALOG GENERATOR (ADMIN ONLY) 
+// 🔥 SECURED: AI CATALOG GENERATOR (ADMIN ONLY - USING @google/genai) 
 // ==========================================
 app.post('/api/generate-catalog', protect, admin, async (req, res) => {
   try {
@@ -357,19 +366,22 @@ app.post('/api/generate-catalog', protect, admin, async (req, res) => {
 
     for (const currentKey of apiKeys) {
       try {
-        const genAI = new GoogleGenerativeAI(currentKey);
-        const model = genAI.getGenerativeModel({ 
+        const ai = new GoogleGenAI({ apiKey: currentKey });
+        const response = await ai.models.generateContent({
           model: "gemini-2.5-flash",
-          generationConfig: { maxOutputTokens: 2048 }
+          contents: [
+            { role: 'user', parts: [{ text: prompt }, { inlineData: { data: cleanBase64, mimeType: mimeType } }] }
+          ],
+          config: { maxOutputTokens: 2048 }
         });
-        result = await model.generateContent([ prompt, { inlineData: { data: cleanBase64, mimeType: mimeType } } ]);
+        result = response;
         break;
       } catch (err) { lastError = err; }
     }
 
     if (!result) throw lastError || new Error("All Gemini API Keys Failed");
 
-    const responseText = result.response.text().trim();
+    const responseText = (result.text || "").trim();
     logInfo("🤖 Raw Gemini Catalog Response received");
 
     let finalJson;
@@ -389,11 +401,10 @@ app.post('/api/generate-catalog', protect, admin, async (req, res) => {
 });
 
 // ==========================================
-// 🔥 SECURED: HARDENED AI CHAT ROUTE (WITH ABUSE & COST PROTECTIONS)
+// 🔥 SECURED: HARDENED AI CHAT ROUTE (WITH @google/genai & ABUSE PROTECTIONS)
 // ==========================================
 app.post('/api/chat', aiChatLimiter, async (req, res) => {
   try {
-    // 🔥 ABUSE PROTECTION: Ignore client-provided systemInstruction entirely
     const { message, chatHistory, languageStyle } = req.body;
     const apiKeys = getGeminiKeys();
 
@@ -402,55 +413,46 @@ app.post('/api/chat', aiChatLimiter, async (req, res) => {
     if (!message || typeof message !== 'string' || message.trim().length === 0) {
       return res.status(400).json({ error: 'Message cannot be empty' });
     }
-    // 🔥 ABUSE PROTECTION: Enforce strict message length limit
     if (message.length > 1000) {
       return res.status(400).json({ error: 'Message exceeds maximum allowed length of 1000 characters' });
     }
 
-    // 🔥 API-COST PROTECTION: Enforce history length cap (max last 10 messages)
     const safeHistory = Array.isArray(chatHistory) ? chatHistory.slice(-10) : [];
-
-    // 🔥 TRUSTED SERVER-SIDE SYSTEM INSTRUCTION
     const serverSystemInstruction = "You are an official, helpful, and polite customer support assistant for Jack Essentials. Assist customers with store products, orders, and policies safely and accurately.";
 
-    const formattedHistory = safeHistory.map(msg => ({
-      role: msg.role === "assistant" ? "model" : "user",
-      parts: [{ text: typeof msg.content === 'string' ? msg.content : (msg.text || "") }]
-    }));
+    const formattedContents = [];
+    safeHistory.forEach(msg => {
+      formattedContents.push({
+        role: msg.role === "assistant" ? "model" : "user",
+        parts: [{ text: typeof msg.content === 'string' ? msg.content : (msg.text || "") }]
+      });
+    });
+    formattedContents.push({ role: 'user', parts: [{ text: message }] });
 
     let result = null;
     let lastError = null;
 
     for (const currentKey of apiKeys) {
       try {
-        const genAI = new GoogleGenerativeAI(currentKey);
-        const model = genAI.getGenerativeModel({ 
-          model: "gemini-2.5-flash",
-          systemInstruction: serverSystemInstruction, // 🔥 STRICTLY ENFORCED SERVER PROMPT
-          generationConfig: { 
-            temperature: 0.7,
-            maxOutputTokens: 1024 // 🔥 API-COST PROTECTION: Cap maximum output tokens
-          }
-        });
-
-        const chat = model.startChat({
-          history: formattedHistory,
-          generationConfig: { 
-            temperature: 0.7,
-            maxOutputTokens: 1024
-          }
-        });
-
-        // 🔥 ABUSE PROTECTION: Timeout wrapper for chat generation
+        const ai = new GoogleGenAI({ apiKey: currentKey });
         const timeoutPromise = new Promise((_, reject) => 
           setTimeout(() => reject(new Error('AI Request timed out')), 12000)
         );
         
-        result = await Promise.race([
-          chat.sendMessage(message),
+        const response = await Promise.race([
+          ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: formattedContents,
+            config: {
+              systemInstruction: serverSystemInstruction,
+              temperature: 0.7,
+              maxOutputTokens: 1024
+            }
+          }),
           timeoutPromise
         ]);
 
+        result = response;
         break;
       } catch (err) {
         lastError = err;
@@ -459,7 +461,7 @@ app.post('/api/chat', aiChatLimiter, async (req, res) => {
 
     if (!result) throw lastError || new Error("All Gemini API Keys Failed");
 
-    const replyText = result.response.text().trim();
+    const replyText = (result.text || "").trim();
     res.json({ reply: replyText });
     
   } catch (error) { 

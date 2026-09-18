@@ -130,7 +130,7 @@ const analyticsWorker = new Worker('analytics-queue', async (job) => {
 
           const qty = item.quantity || 1;
 
-          const updateQuery = eventType === 'RTO' ? { $inc: { rto: qty } } : { $inc: { returns: qty } };
+          const updateQuery = eventType === 'RTO' ? { $inc: { rto: qty } } : {$inc: { returns: qty } };
           await ProductDailyMetrics.findOneAndUpdate({ product: prodId, date: todayDate }, updateQuery, { upsert: true });
 
           if (eventType === 'RTO') {
