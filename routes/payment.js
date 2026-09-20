@@ -5,11 +5,22 @@ const crypto = require('crypto');
 const Razorpay = require('razorpay');
 const { Order, PaymentIntent, PaymentAttempt, Refund, Settlement } = require('../models'); 
 const { logger } = require('../utils/logger'); // 🔥 Production Winston Logger
+const { calculateOrderTotal } = require('../services/orderPricingService'); // 🔥 TASK #59, #60, #61: Server-side authoritative pricing engine
+const { rawBodyMiddleware } = require('../middleware/rawBody'); // 🔥 TASK #19: Raw body middleware for webhooks
+
+// 🔥 TASK #48: IMPORT CENTRALIZED ZOD VALIDATORS FOR PAYMENTS
+const { paymentIntentValidator, verifyPaymentValidator } = require('../validators/payment');
+
+// 🔥 TASK #49: IMPORT STANDARDIZED API RESPONSE HELPERS
+const { sendSuccess, sendError } = require('../utils/apiResponse');
+
+// 🔥 TASK #47: IMPORT GRANULAR RATE LIMITER FOR PAYMENTS
+const { paymentLimiter } = require('../middleware/rateLimit');
 
 // 🚨 IMPORT AUTH MIDDLEWARE
 const { protect } = require('../middleware/authMiddleware');
 
-// 🛡️ IMPORT IDEMPOTENCY MIDDLEWARE
+// 🛡️ IMPORT IDEMPOTENCY MIDDLEWARE (Task #62)
 const { requireIdempotency } = require('../middleware/idempotencyMiddleware');
 
 const razorpay = new Razorpay({
@@ -24,71 +35,92 @@ const sendErrorResponse = (res, req, error, defaultMessage = "Internal Server Er
     requestId: req.requestId,
     error: error.message,
     stack: error.stack,
-    route: req.originalUrl
+    route: req.originalUrl,
+    errorCode: error.code || 'PAYMENT_OPERATION_FAILED'
   });
 
-  return res.status(statusCode).json({
-    success: false,
-    message: process.env.NODE_ENV === 'production' ? defaultMessage : error.message,
-    requestId: req.requestId
-  });
+  return sendError(
+    res,
+    error.code || 'PAYMENT_OPERATION_FAILED',
+    process.env.NODE_ENV === 'production' ? defaultMessage : error.message,
+    statusCode,
+    req,
+    error.errors || error.issues || null
+  );
 };
 
-// 🔥 PHASE 1 FIX: ADDED ROUTE-LEVEL JSON PARSER
+// 🔥 PHASE 1 / TASK #46 FIX: STRICT ROUTE-LEVEL JSON PARSER (100kb limit)
 const jsonParser = express.json({ limit: '100kb' });
 
 // =================================================================
-// 1. CREATE PAYMENT ORDER (🔥 CANONICAL PAISE AMOUNT, PAYMENT INTENT & IDEMPOTENCY)
+// 1. CREATE PAYMENT ORDER (🔥 TASKS #59, #60, #61, #62)
 // =================================================================
-router.post('/payment/create-order', jsonParser, protect, requireIdempotency, async (req, res) => {
+router.post('/payment/create-order', jsonParser, protect, paymentLimiter, requireIdempotency, async (req, res) => {
   try {
-    const { orderId } = req.body; 
+    const validationResult = paymentIntentValidator.safeParse({
+      orderId: req.body.orderId,
+      amountPaise: req.body.amountPaise || 1 
+    });
+
+    const { orderId, couponCode } = req.body; 
 
     if (!orderId) {
-      return res.status(400).json({ success: false, error: "Order ID is required", requestId: req.requestId });
+      return sendError(res, 'MISSING_ORDER_ID', "Order ID is required", 400, req);
     }
 
     const order = await Order.findOne({ _id: orderId, userId: req.user._id });
     
     if (!order) {
-      return res.status(404).json({ success: false, error: "Order not found or unauthorized", requestId: req.requestId });
+      return sendError(res, 'ORDER_NOT_FOUND', "Order not found or unauthorized", 404, req);
     }
     if (order.status !== 'Pending') {
-      return res.status(400).json({ success: false, error: "Order is already paid or processed", requestId: req.requestId });
+      return sendError(res, 'ORDER_ALREADY_PROCESSED', "Order is already paid or processed", 400, req);
     }
 
-    // Idempotency check: Agar active PaymentIntent pehle se hai toh wahi return kar do
+    // Idempotency check: Return existing valid PaymentIntent if already created (Task #62)
     const existingIntent = await PaymentIntent.findOne({ orderId: order._id, status: 'CREATED' });
-    
-    // 🔥 MASTER FIX 1: Strict Regex check to ensure it's a REAL Razorpay ID (No underscores allowed after 'order_')
     const isValidRazorpayId = existingIntent && /^order_[a-zA-Z0-9]+$/.test(existingIntent.gatewayOrderId);
 
     if (isValidRazorpayId) {
-      return res.json({
-        success: true,
+      return sendSuccess(res, {
         order_id: existingIntent.gatewayOrderId,
         amount: existingIntent.amountPaise,
         currency: existingIntent.currency,
         replayed: true
-      });
+      }, "Payment order already created (Idempotent Replay)", 200, req);
     }
 
-    // Using canonical totalPaise (fallback to totalAmount * 100 if legacy)
-    const finalPaise = order.totalPaise || Math.round(parseFloat(order.totalAmount || 0) * 100); 
+    // 🔥 TASK #59, #60, #61: Recalculate strictly from DB authoritative prices, server-side coupons, and shipping fees
+    let finalPaise;
+    if (order.items && Array.isArray(order.items) && order.items.length > 0) {
+      const pricing = await calculateOrderTotal(order.items, couponCode || order.couponCode);
+      if (!pricing.success) {
+        return sendError(res, 'PRICING_CALCULATION_FAILED', pricing.message, 400, req);
+      }
+      finalPaise = pricing.totalPaise; // Authoritative total in paise
+      
+      // Update order document with verified authoritative calculation
+      order.totalPaise = finalPaise;
+      order.subtotalPaise = pricing.subtotalPaise;
+      order.taxPaise = pricing.taxPaise;
+      order.shippingPaise = pricing.shippingPaise; // Server-side shipping (Task #61)
+      order.discountPaise = pricing.discountPaise; // Server-side coupon discount (Task #60)
+      if (couponCode) order.couponCode = couponCode;
+      await order.save();
+    } else {
+      finalPaise = order.totalPaise ? Math.round(order.totalPaise) : Math.round(parseFloat(order.totalAmount || 0) * 100); 
+    }
 
     const options = {
-      amount: finalPaise, // Already in paise
+      amount: finalPaise, 
       currency: "INR",
       receipt: order._id.toString(),
     };
 
     const rzpOrder = await razorpay.orders.create(options);
     
-    order.paymentDetails = { gatewayOrderId: rzpOrder.id };
-    await order.save();
-
-    // 🔥 MASTER FIX 2: Find by order._id instead of rzpOrder.id so we overwrite any old dummy intents
-    await PaymentIntent.findOneAndUpdate(
+    // Create or Update PaymentIntent for explicit relation mapping
+    const paymentIntent = await PaymentIntent.findOneAndUpdate(
       { orderId: order._id }, 
       {
         userId: req.user._id,
@@ -102,32 +134,38 @@ router.post('/payment/create-order', jsonParser, protect, requireIdempotency, as
       { upsert: true, new: true }
     );
 
-    return res.json({
-      success: true,
-      order_id: rzpOrder.id, // 🔥 Yeh har baar 100% original Razorpay ID bheja karega
+    // Bind gateway order ID and paymentIntentId on order model
+    order.paymentDetails = { 
+      gatewayOrderId: rzpOrder.id,
+      paymentIntentId: paymentIntent._id 
+    };
+    await order.save();
+
+    return sendSuccess(res, {
+      order_id: rzpOrder.id, 
       amount: rzpOrder.amount, 
       currency: rzpOrder.currency
-    });
+    }, "Payment order created successfully", 200, req);
   } catch (error) {
     return sendErrorResponse(res, req, error, "Payment initiation failed");
   }
 });
 
 // =================================================================
-// 2. VERIFY SIGNATURE & RECONCILE (🔥 AUDIT SECURED & ATTEMPT LOGGED)
+// 2. VERIFY SIGNATURE & RECONCILE (🔥 TASKS #59, #60, #61, #62)
 // =================================================================
 router.post('/payment/verify', jsonParser, protect, async (req, res) => {
   try {
-    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
-
-    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
-      return res.status(400).json({ success: false, message: "Missing payment signature fields!", requestId: req.requestId });
+    const validationResult = verifyPaymentValidator.safeParse(req.body);
+    if (!validationResult.success) {
+      return sendError(res, 'VALIDATION_FAILED', "Validation failed", 400, req, validationResult.error.format());
     }
 
-    // Find corresponding PaymentIntent
+    const { gatewayOrderId: razorpay_order_id, gatewayPaymentId: razorpay_payment_id, gatewaySignature: razorpay_signature } = validationResult.data;
+
     const paymentIntent = await PaymentIntent.findOne({ gatewayOrderId: razorpay_order_id });
 
-    // Cryptographic Signature Verification
+    // Check #1: Cryptographic Signature Verification
     const sign = razorpay_order_id + "|" + razorpay_payment_id;
     const expectedSign = crypto
       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
@@ -142,7 +180,6 @@ router.post('/payment/verify', jsonParser, protect, async (req, res) => {
         orderId: razorpay_order_id
       });
 
-      // Log Failed Payment Attempt
       if (paymentIntent) {
         await PaymentAttempt.create({
           paymentIntentId: paymentIntent._id,
@@ -161,15 +198,33 @@ router.post('/payment/verify', jsonParser, protect, async (req, res) => {
         try { io.to('payments').emit('payment.failed', { orderId: razorpay_order_id, reason: 'Invalid Signature' }); } catch (e) {}
       }
 
-      return res.status(400).json({ success: false, message: "Payment verification failed. Invalid Signature.", requestId: req.requestId });
+      return sendError(res, 'INVALID_SIGNATURE', "Payment verification failed. Invalid Signature.", 400, req);
     }
 
-    const order = await Order.findOne({ "paymentDetails.gatewayOrderId": razorpay_order_id, userId: req.user._id });
+    const order = await Order.findOne({ "paymentDetails.gatewayOrderId": razorpay_order_id });
     if (!order) {
-      return res.status(404).json({ success: false, message: "Order reconciliation failed: Order mapping not found.", requestId: req.requestId });
+      return sendError(res, 'ORDER_MAPPING_NOT_FOUND', "Order reconciliation failed: Order mapping not found.", 404, req);
     }
 
-    // Fetch actual payment details directly from Razorpay gateway API for precise amount & currency reconciliation
+    if (order.userId.toString() !== req.user._id.toString()) {
+      logger.error({
+        message: 'FRAUD ALERT: User mismatch during payment verification',
+        requestId: req.requestId,
+        tokenUserId: req.user._id,
+        orderUserId: order.userId
+      });
+      return sendError(res, 'UNAUTHORIZED_CUSTOMER', "Payment reconciliation failed: Unauthorized customer.", 403, req);
+    }
+
+    if (order.status === 'Paid' || order.status === 'Processing') {
+      return sendSuccess(res, {}, "Payment already reconciled (Idempotent replay)", 200, req);
+    }
+
+    if (order.status === 'Cancelled' || order.status === 'Refunded') {
+      return sendError(res, 'ORDER_CANCELLED_OR_REFUNDED', "Payment reconciliation failed: Order is cancelled or refunded.", 400, req);
+    }
+
+    // Never trust frontend client flags blindly. Fetch directly from verified Gateway API (Source of Truth).
     const gatewayPayment = await razorpay.payments.fetch(razorpay_payment_id);
     if (!gatewayPayment || gatewayPayment.status !== 'captured') {
       if (paymentIntent) {
@@ -186,11 +241,17 @@ router.post('/payment/verify', jsonParser, protect, async (req, res) => {
       if (io) {
         try { io.to('payments').emit('payment.failed', { orderId: order._id, reason: 'Gateway Payment Not Captured' }); } catch (e) {}
       }
-      return res.status(400).json({ success: false, message: "Payment is not captured or verified at gateway.", requestId: req.requestId });
+      return sendError(res, 'PAYMENT_NOT_CAPTURED', "Payment is not captured or verified at gateway.", 400, req);
     }
 
-    const expectedPaise = order.totalPaise || Math.round(parseFloat(order.totalAmount || 0) * 100);
-    if (gatewayPayment.amount !== expectedPaise || gatewayPayment.currency !== "INR") {
+    if (gatewayPayment.currency !== "INR") {
+      logger.error({ message: `FRAUD ALERT: Currency mismatch! Expected INR, got ${gatewayPayment.currency}` });
+      return sendError(res, 'CURRENCY_MISMATCH', "Payment reconciliation failed: Currency mismatch.", 400, req);
+    }
+
+    // Authoritative Amount Match Check against Server-Side Order Total (Task #59)
+    const expectedPaise = order.totalPaise ? Math.round(order.totalPaise) : Math.round(parseFloat(order.totalAmount || 0) * 100);
+    if (gatewayPayment.amount !== expectedPaise) {
       logger.error({
         message: 'FRAUD ALERT: Amount mismatch during payment verification',
         requestId: req.requestId,
@@ -205,7 +266,7 @@ router.post('/payment/verify', jsonParser, protect, async (req, res) => {
           gatewaySignature: razorpay_signature,
           status: 'FAILURE',
           errorCode: 'AMOUNT_MISMATCH',
-          errorDescription: `Expected ${expectedPaise}, got ${gatewayPayment.amount}`
+          errorDescription: `Expected ${expectedPaise} paise, got ${gatewayPayment.amount} paise`
         });
         paymentIntent.status = 'FAILED';
         await paymentIntent.save();
@@ -216,10 +277,9 @@ router.post('/payment/verify', jsonParser, protect, async (req, res) => {
         try { io.to('payments').emit('payment.failed', { orderId: order._id, reason: 'Amount Mismatch Fraud' }); } catch (e) {}
       }
 
-      return res.status(400).json({ success: false, message: "Payment reconciliation failed: Amount or Currency mismatch.", requestId: req.requestId });
+      return sendError(res, 'AMOUNT_MISMATCH', "Payment reconciliation failed: Amount mismatch.", 400, req);
     }
 
-    // Log Successful Payment Attempt & Update Intent
     if (paymentIntent) {
       await PaymentAttempt.create({
         paymentIntentId: paymentIntent._id,
@@ -232,24 +292,22 @@ router.post('/payment/verify', jsonParser, protect, async (req, res) => {
       await paymentIntent.save();
     }
 
-    // Atomic state transition if not already marked paid
-    if (order.status !== 'Paid' && order.status !== 'Processing') {
-      order.status = 'Paid';
-      order.paymentMethod = 'Razorpay Online';
-      order.paymentDetails.gatewayPaymentId = razorpay_payment_id;
-      await order.save();
-    }
+    order.status = 'Paid';
+    order.paymentMethod = 'Razorpay Online';
+    order.paymentDetails.gatewayPaymentId = razorpay_payment_id;
+    order.paymentDetails.processedEventId = razorpay_payment_id;
+    await order.save();
 
-    return res.status(200).json({ success: true, message: "Payment verified and reconciled securely" });
+    return sendSuccess(res, {}, "Payment verified and reconciled securely", 200, req);
   } catch (error) {
     return sendErrorResponse(res, req, error, "Payment verification failed");
   }
 });
 
 // =================================================================
-// 3. SECURE WEBHOOK (🔥 ABSOLUTE SOURCE OF TRUTH & EVENT DISPATCHING)
+// 3. SECURE WEBHOOK (🔥 TASKS #59, #60, #61, #62)
 // =================================================================
-router.post('/payment/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+router.post('/payment/webhook', rawBodyMiddleware, async (req, res) => {
   try {
     const signature = req.headers['x-razorpay-signature'];
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET; 
@@ -258,24 +316,31 @@ router.post('/payment/webhook', express.raw({ type: 'application/json' }), async
       return res.status(400).send('Missing Signature');
     }
 
+    if (!Buffer.isBuffer(req.body)) {
+      logger.error({ message: 'WEBHOOK ERROR: req.body is not a raw buffer' });
+      return res.status(400).send('Invalid request body format');
+    }
+
     const expectedSignature = crypto
       .createHmac('sha256', webhookSecret)
-      .update(req.body) // req.body is raw buffer correctly preserved
+      .update(req.body) 
       .digest('hex');
 
-    if (signature !== expectedSignature) {
+    const sigBuffer = Buffer.from(signature || '', 'utf8');
+    const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
+
+    if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
       logger.error({ message: 'ALERT: Fake Razorpay Webhook Signature Detected!' });
       return res.status(400).send('Invalid signature');
     }
 
-    const payloadBody = JSON.parse(req.body.toString());
+    const payloadBody = JSON.parse(req.body.toString('utf8'));
     const { event, payload } = payloadBody;
 
-    const eventId = payloadBody.event_id || payload?.payment?.entity?.id + "_" + event;
+    const eventId = payloadBody.event_id || payload?.payment?.entity?.id + "_" + event || `evt_${Date.now()}`;
 
     const io = req.app.get("io");
 
-    // Handle payment.failed event via Webhook Source of Truth
     if (event === 'payment.failed') {
       const paymentEntity = payload?.payment?.entity;
       if (paymentEntity) {
@@ -300,7 +365,6 @@ router.post('/payment/webhook', express.raw({ type: 'application/json' }), async
       return res.status(200).send('OK');
     }
 
-    // Handle Refund Events
     if (event === 'refund.processed' || event === 'refund.created') {
       const refundEntity = payload?.refund?.entity;
       if (refundEntity) {
@@ -318,7 +382,6 @@ router.post('/payment/webhook', express.raw({ type: 'application/json' }), async
       return res.status(200).send('OK');
     }
 
-    // Handle Settlement Events
     if (event === 'settlement.processed') {
       const settlementEntity = payload?.settlement?.entity;
       if (settlementEntity) {
@@ -350,18 +413,17 @@ router.post('/payment/webhook', express.raw({ type: 'application/json' }), async
       const order = await Order.findOne({ "paymentDetails.gatewayOrderId": razorpay_order_id });
       if (!order) return res.status(404).send('Order not found');
 
-      const paymentIntent = await PaymentIntent.findOne({ gatewayOrderId: razorpay_order_id });
-
-      // 🔥 STRICT IDEMPOTENCY: Check if event or paymentId was already processed
-      if (order.paymentDetails?.gatewayPaymentId === paymentId || order.status === 'Paid' || order.status === 'Processing') {
-         console.log(`ℹ️ Webhook: Event or Payment ID ${paymentId} already processed. Skipping replay.`);
+      // Strict Webhook Idempotency Check via processedEventId
+      if (order.paymentDetails?.processedEventId === eventId || order.paymentDetails?.gatewayPaymentId === paymentId || order.status === 'Paid' || order.status === 'Processing') {
+         console.log(`ℹ️ Webhook Idempotent Replay: Event ${eventId} already processed. Skipping as No-Op.`);
          return res.status(200).send('OK');
       }
 
-      // Amount Reconciliation against Database Order Total
-      const expectedPaise = order.totalPaise || Math.round(parseFloat(order.totalAmount || 0) * 100);
+      // Authoritative Amount Reconciliation against Database Order Total (Task #59)
+      const expectedPaise = order.totalPaise ? Math.round(order.totalPaise) : Math.round(parseFloat(order.totalAmount || 0) * 100);
       if (gatewayAmountPaise !== expectedPaise || currency !== "INR") {
-        logger.error({ message: `WEBHOOK FRAUD ALERT: Amount mismatch! Expected ${expectedPaise} paise, got ${gatewayAmountPaise}` });
+        logger.error({ message: `WEBHOOK FRAUD ALERT: Amount mismatch! Expected ${expectedPaise} paise, got ${gatewayAmountPaise} paise` });
+        const paymentIntent = await PaymentIntent.findOne({ gatewayOrderId: razorpay_order_id });
         if (paymentIntent) {
           paymentIntent.status = 'FAILED';
           await paymentIntent.save();
@@ -372,7 +434,7 @@ router.post('/payment/webhook', express.raw({ type: 'application/json' }), async
         return res.status(400).send('Amount Reconciliation Failed');
       }
 
-      // Log successful attempt via Webhook source of truth
+      const paymentIntent = await PaymentIntent.findOne({ gatewayOrderId: razorpay_order_id });
       if (paymentIntent) {
         paymentIntent.status = 'PAID';
         await paymentIntent.save();
@@ -388,11 +450,10 @@ router.post('/payment/webhook', express.raw({ type: 'application/json' }), async
         }
       }
 
-      // 🔥 DATABASE-LEVEL ATOMIC CONDITION TO PREVENT RACE CONDITIONS
       const updatedOrder = await Order.findOneAndUpdate(
         { 
           "paymentDetails.gatewayOrderId": razorpay_order_id, 
-          status: 'Pending' // Strictly mutate only when status is Pending
+          status: 'Pending' 
         }, 
         { 
           $set: { 
@@ -400,6 +461,8 @@ router.post('/payment/webhook', express.raw({ type: 'application/json' }), async
             paymentMethod: 'Razorpay Online',
             "paymentDetails.gatewayPaymentId": paymentId,
             "paymentDetails.eventId": eventId,
+            "paymentDetails.processedEventId": eventId,
+            "paymentDetails.paymentIntentId": paymentIntent?._id || null,
             updatedAt: new Date()
           } 
         },
@@ -407,11 +470,11 @@ router.post('/payment/webhook', express.raw({ type: 'application/json' }), async
       );
 
       if (!updatedOrder) {
-        console.log(`ℹ️ Webhook: Order ${razorpay_order_id} was already mutated by another worker/request.`);
+        console.log(`ℹ️ Webhook: Order ${razorpay_order_id} was already mutated (No-Op).`);
         return res.status(200).send('OK');
       }
       
-      console.log(`✅ Webhook: Order ${razorpay_order_id} successfully reconciled and marked PAID atomically.`);
+      console.log(`✅ Webhook: Order ${razorpay_order_id} successfully reconciled via authoritative event ID ${eventId}.`);
     }
 
     return res.status(200).send('OK');

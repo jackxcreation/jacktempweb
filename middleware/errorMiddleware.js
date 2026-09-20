@@ -42,7 +42,7 @@ const errorHandler = (err, req, res, next) => {
   const referenceCode = `JE-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
   const isProduction = process.env.NODE_ENV === 'production';
 
-  // Comprehensive error logging via Winston with reference tracking
+  // Comprehensive error logging via Winston with reference tracking (Task #49 & #50)
   logger.error({
     message: err.message || 'Unknown error occurred',
     code: errorCode,
@@ -55,7 +55,7 @@ const errorHandler = (err, req, res, next) => {
     ip: req.ip
   });
 
-  // Client JSON response payload with enterprise reference code
+  // Client JSON response payload aligned strictly with Task #49 standardized format
   res.status(statusCode).json({
     success: false,
     code: errorCode,
@@ -66,5 +66,9 @@ const errorHandler = (err, req, res, next) => {
     retryable: statusCode >= 500 || statusCode === 408
   });
 };
+
+// 🔥 Add robust export aliases for maximum compatibility across different modules
+errorHandler.errorHandler = errorHandler;
+errorHandler.handler = errorHandler;
 
 module.exports = { errorHandler };

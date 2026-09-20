@@ -4,16 +4,23 @@ const router = express.Router();
 const mongoose = require('mongoose');
 const Redis = require('ioredis'); 
 const { Product, User, Order, Warehouse } = require('../models');
-const { z } = require('zod'); 
 const { logger } = require('../utils/logger'); // 🔥 Production Winston Logger
 
+// 🔥 TASK #49: IMPORT STANDARDIZED API RESPONSE HELPERS
+const { sendSuccess, sendError } = require('../utils/apiResponse');
+
+// 🔥 TASK #47: IMPORT GRANULAR RATE LIMITER FOR SEARCH
+const { searchLimiter } = require('../middleware/rateLimit');
+
+// 🛡️ IMPORT STRICT ZOD VALIDATORS (TASK #48)
+const { productValidationSchema, productUpdateSchema } = require('../validators/product');
+
 // 🚨 IMPORT SECURE MIDDLEWARES & ZERO-TRUST RBAC
-const { protect } = require('../middleware/authMiddleware');
+const { protect } = require('../middleware/auth');
 const { checkPermission } = require('../middleware/rbacMiddleware');
 
 // ==========================================
-// 🔥 CRITICAL FIX: SECURE UPSTASH / REDIS CLIENT WITHOUT HARDCODED TLS
-// (ioredis auto-detects TLS for 'rediss://' and disables it for 'redis://')
+// 🔥 CRITICAL FIX: SECURE UPSTASH / REDIS CLIENT
 // ==========================================
 const redisClient = process.env.REDIS_URL 
   ? new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: null })
@@ -22,97 +29,14 @@ const redisClient = process.env.REDIS_URL
 redisClient.on('error', (err) => console.error('Redis View Tracker Error:', err));
 
 // ==========================================
-// 🛡️ ZOD VALIDATION SCHEMA FOR PRODUCTS
-// ==========================================
-const productValidationSchema = z.object({
-  title: z.string().min(2, "Title is required").max(200, "Title is too long"),
-  description: z.string().max(2000, "Description is too long").optional(),
-  
-  // Safe fallback for old systems
-  price: z.coerce.number().nonnegative().optional(),
-  mrp: z.coerce.number().nonnegative().optional(),
-
-  pricePaise: z.coerce.number().int().nonnegative("Price must be a positive number").optional(),
-  mrpPaise: z.coerce.number().int().nonnegative("MRP must be a positive number").optional(),
-  category: z.string().min(1, "Category is required"),
-  brand: z.string().optional(),
-  inventory: z.coerce.number().int().nonnegative().default(0), 
-  
-  image: z.string().optional(),
-  // 🔥 ROBUST IMAGES TRANSFORMER: Accepts either array or comma-separated string from the canonical editor
-  images: z.union([
-    z.array(z.string()), 
-    z.string()
-  ]).optional().transform((val) => {
-    if (!val) return [];
-    if (typeof val === 'string') {
-      return val.split(',').map(s => s.trim()).filter(Boolean);
-    }
-    return Array.isArray(val) ? val.filter(Boolean) : [];
-  }),
-
-  sku: z.string().optional(),
-  weight: z.string().optional(),
-  color: z.string().optional(),
-  size: z.string().optional(),
-  material: z.string().optional(),
-  manufacturerName: z.string().optional(),
-  warehouseId: z.string().optional().nullable(),
-  discount: z.string().optional(),
-
-  // 🔥 ADVANCED CATALOG & COMPLIANCE FIELDS 🔥
-  subCategory: z.string().optional(),
-  listingStatus: z.enum(['Active', 'Inactive', 'Draft']).optional(),
-  minimumOrderQty: z.coerce.number().int().nonnegative().optional(),
-  
-  shippingProvider: z.string().optional(),
-  handlingLocal: z.coerce.number().optional(),
-  handlingZonal: z.coerce.number().optional(),
-  handlingNational: z.coerce.number().optional(),
-  
-  length: z.coerce.number().optional(),
-  breadth: z.coerce.number().optional(),
-  height: z.coerce.number().optional(),
-  
-  hsnCode: z.string().optional(),
-  tax: z.coerce.number().optional(),
-  countryOfOrigin: z.string().optional(),
-  
-  manufactureDetails: z.string().optional(),
-  packerDetails: z.string().optional(),
-  importDetails: z.string().optional(),
-  eanUpc: z.string().optional(),
-  
-  searchKeywords: z.string().optional(),
-  packOf: z.coerce.number().int().optional(),
-  variant: z.string().optional(),
-  
-  modelNo: z.string().optional(),
-  itemsIncluded: z.string().optional(),
-  noOfTools: z.string().optional(),
-  toolFeatures: z.string().optional(),
-  powerConsumption: z.string().optional(),
-  otherPowerFeatures: z.string().optional(),
-  
-  domesticWarranty: z.string().optional(),
-  internationalWarranty: z.string().optional(),
-  warrantySummary: z.string().optional(),
-  warrantyServiceType: z.string().optional(),
-  coveredInWarranty: z.string().optional(),
-  notCoveredInWarranty: z.string().optional(),
-  
-  auditReason: z.string().max(300).optional() // 🔥 Audit Reason for enterprise compliance
-});
-
-// ==========================================
-// 🛡️ REGEX ESCAPE HELPER (Prevents ReDoS / Regex Injection)
+// 🛡️ REGEX ESCAPE HELPER
 // ==========================================
 const escapeRegex = (text) => {
   return text.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
 };
 
 // ==========================================
-// 🛡️ CENTRALIZED AUDIT HELPER (WHO, WHAT, WHEN, WHERE, BEFORE, AFTER, WHY)
+// 🛡️ CENTRALIZED AUDIT HELPER
 // ==========================================
 const logAdminAction = async (req, action, details, beforeState = null, afterState = null) => {
   try {
@@ -145,11 +69,11 @@ const logAdminAction = async (req, action, details, beforeState = null, afterSta
 };
 
 // ==========================================
-// 📦 1. PRODUCT APIs
+// 📦 1. PUBLIC PRODUCT APIs (GET)
 // ==========================================
 
-// 1. Get All Products (🔥 Flipkart-scale Server-side Atlas Search, Powerful Multi-Facet Filtering, Pagination & Sorting)
-router.get('/api/products', async (req, res) => {
+// 1. Get All Products
+router.get('/api/products', searchLimiter, async (req, res) => {
   try {
     let { category, brand, minPrice, maxPrice, sort, search, warehouseId, warehouse, rating, availability, stock, status, color, size } = req.query;
     
@@ -238,7 +162,7 @@ router.get('/api/products', async (req, res) => {
           {
             $facet: {
               metadata: [{ $count: "total" }],
-              data: [{ $skip: skip }, { $limit: limit }]
+              data: [{ $skip: skip }, {$limit: limit }]
             }
           }
         ];
@@ -268,7 +192,7 @@ router.get('/api/products', async (req, res) => {
       } else if (stock === 'out-of-stock') {
         query.inventory = { $lte: 0 };
       } else if (stock === 'low-stock') {
-        query.inventory = { $gt: 0, $lte: 10 };
+        query.inventory = { $gt: 0,$lte: 10 };
       }
 
       if (minPrice || finalMaxPrice) {
@@ -292,20 +216,21 @@ router.get('/api/products', async (req, res) => {
       ]);
     }
 
+    const mappedProducts = products.map(p => ({ ...p, id: p._id.toString() }));
+
     if (req.query.paginated === 'true' || category || search || sort || req.query.page || targetWarehouse || stock || targetStatus) {
-      return res.json({
-        success: true,
+      return sendSuccess(res, {
         total: totalCount,
         page,
         pages: Math.ceil(totalCount / limit) || 1,
-        products: products.map(p => ({ ...p, id: p._id.toString() }))
-      });
+        products: mappedProducts
+      }, "Products fetched successfully", 200, req);
     }
 
-    return res.json(products.map(p => ({ ...p, id: p._id.toString() })));
+    return sendSuccess(res, mappedProducts, "Products fetched successfully", 200, req);
   } catch (error) { 
-    console.error("Fetch Products Error:", error);
-    return res.status(500).json({ message: "Server Error" }); 
+    logger.error("Fetch Products Error:", error, { requestId: req.requestId });
+    return sendError(res, 'SERVER_ERROR', "Server Error", 500, req); 
   }
 });
 
@@ -317,10 +242,11 @@ router.get('/api/products/trending/top', async (req, res) => {
       .limit(8)
       .lean();
       
-    return res.json(trendingProducts.map(p => ({ ...p, id: p._id.toString() })));
+    const mapped = trendingProducts.map(p => ({ ...p, id: p._id.toString() }));
+    return sendSuccess(res, mapped, "Trending products fetched successfully", 200, req);
   } catch (error) {
-    console.error("Trending Products Error:", error);
-    return res.status(500).json({ message: "Error fetching trending products" });
+    logger.error("Trending Products Error:", error, { requestId: req.requestId });
+    return sendError(res, 'TRENDING_ERROR', "Error fetching trending products", 500, req);
   }
 });
 
@@ -328,55 +254,85 @@ router.get('/api/products/trending/top', async (req, res) => {
 router.get('/api/products/similar/:id', async (req, res) => {
   try {
     const currentProduct = await Product.findById(req.params.id);
-    if (!currentProduct) return res.status(404).json({ message: "Product not found" });
+    if (!currentProduct) return sendError(res, 'PRODUCT_NOT_FOUND', "Product not found", 404, req);
 
     const similarProducts = await Product.find({
       category: currentProduct.category,
       _id: { $ne: currentProduct._id }
     }).limit(5).lean();
 
-    return res.json(similarProducts.map(p => ({ ...p, id: p._id.toString() })));
+    const mapped = similarProducts.map(p => ({ ...p, id: p._id.toString() }));
+    return sendSuccess(res, mapped, "Similar products fetched successfully", 200, req);
   } catch (error) {
-    console.error("Similar Products Error:", error);
-    return res.status(500).json({ message: "Error fetching similar products" });
+    logger.error("Similar Products Error:", error, { requestId: req.requestId });
+    return sendError(res, 'SIMILAR_ERROR', "Error fetching similar products", 500, req);
   }
 });
 
-// 🔥 4. Get Single Product
+// 🔥 3.5 ADDED DEDICATED SLUG ROUTE (Protects frontend if it specifically calls /slug/)
+router.get('/api/products/slug/:slug', async (req, res) => {
+  try {
+    const product = await Product.findOne({ slug: req.params.slug }).lean();
+    if (!product) return sendError(res, 'PRODUCT_NOT_FOUND', "Product not found", 404, req);
+    
+    // Background view increment
+    Product.updateOne({ _id: product._id }, { $inc: { views: 1 } }).catch(e => {});
+    return sendSuccess(res, { ...product, id: product._id.toString() }, "Product fetched by slug successfully", 200, req);
+  } catch (error) {
+    logger.error("Fetch Slug Error:", error, { requestId: req.requestId });
+    return sendError(res, 'SERVER_ERROR', "Server Error", 500, req);
+  }
+});
+
+// 🔥 4. Get Single Product (BULLETPROOF SMART IDENTIFIER: ID, Slug, or SKU)
 router.get('/api/products/:id', async (req, res) => {
   try {
-    const productId = req.params.id;
+    const identifier = req.params.id;
     const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown_ip';
-    const redisKey = `view:${productId}:${clientIp}`;
+    const redisKey = `view:${identifier}:${clientIp}`;
 
-    let productQuery = Product.findById(productId);
-
-    const viewLock = await redisClient.set(redisKey, '1', 'EX', 1800, 'NX');
-    if (viewLock === 'OK') {
-      productQuery = Product.findByIdAndUpdate(
-        productId,
-        { $inc: { views: 1 } }, 
-        { new: true }
-      );
+    // Smart Database Query: Checks if ID is ObjectId, else searches by Slug or SKU
+    let query;
+    if (mongoose.Types.ObjectId.isValid(identifier)) {
+      query = { _id: identifier };
+    } else {
+      query = { $or: [{ slug: identifier }, { sku: identifier }] };
     }
 
-    const product = await productQuery.lean();
-    if (!product) return res.status(404).json({ message: "Product not found" });
+    const viewLock = await redisClient.set(redisKey, '1', 'EX', 1800, 'NX');
     
-    return res.json({ ...product, id: product._id.toString() });
+    let product;
+    if (viewLock === 'OK') {
+      product = await Product.findOneAndUpdate(
+        query,
+        { $inc: { views: 1 } }, 
+        { new: true }
+      ).lean();
+    } else {
+      product = await Product.findOne(query).lean();
+    }
+
+    if (!product) return sendError(res, 'PRODUCT_NOT_FOUND', "Product not found", 404, req);
+    
+    return sendSuccess(res, { ...product, id: product._id.toString() }, "Product details fetched successfully", 200, req);
   } catch (error) { 
-    console.error("Fetch Single Product Error:", error);
-    return res.status(500).json({ message: "Server Error" }); 
+    logger.error("Fetch Single Product Error:", error, { requestId: req.requestId });
+    return sendError(res, 'SERVER_ERROR', "Server Error", 500, req); 
   }
 });
 
 // ==========================================
-// 🔥 RECOMMENDATION ENGINE APIS
+// 🔥 RECOMMENDATION ENGINE APIS (PUBLIC)
 // ==========================================
 router.get('/api/recommendations/frequently-bought/:id', async (req, res) => {
   try {
-    const product = await Product.findById(req.params.id);
-    if (!product) return res.status(404).json({ message: "Product not found" });
+    // Smart fetch here too, just in case
+    const identifier = req.params.id;
+    const product = mongoose.Types.ObjectId.isValid(identifier) 
+        ? await Product.findById(identifier)
+        : await Product.findOne({ $or: [{slug: identifier}, {sku: identifier}]});
+        
+    if (!product) return sendError(res, 'PRODUCT_NOT_FOUND', "Product not found", 404, req);
 
     const bundle = await Product.find({
       _id: { $ne: product._id },
@@ -384,16 +340,22 @@ router.get('/api/recommendations/frequently-bought/:id', async (req, res) => {
       tags: { $in: product.tags || [] }
     }).limit(3).lean();
 
-    return res.json(bundle.map(p => ({ ...p, id: p._id.toString() })));
+    const mapped = bundle.map(p => ({ ...p, id: p._id.toString() }));
+    return sendSuccess(res, mapped, "Frequently bought recommendations fetched", 200, req);
   } catch (err) {
-    return res.status(500).json({ message: "Error fetching bundle recommendations" });
+    logger.error("Bundle Recommendations Error:", err, { requestId: req.requestId });
+    return sendError(res, 'RECOMMENDATION_ERROR', "Error fetching bundle recommendations", 500, req);
   }
 });
 
 router.get('/api/recommendations/also-viewed/:id', async (req, res) => {
   try {
-    const product = await Product.findById(req.params.id);
-    if (!product) return res.status(404).json({ message: "Product not found" });
+    const identifier = req.params.id;
+    const product = mongoose.Types.ObjectId.isValid(identifier) 
+        ? await Product.findById(identifier)
+        : await Product.findOne({ $or: [{slug: identifier}, {sku: identifier}]});
+
+    if (!product) return sendError(res, 'PRODUCT_NOT_FOUND', "Product not found", 404, req);
 
     const similar = await Product.find({
       _id: { $ne: product._id },
@@ -401,9 +363,11 @@ router.get('/api/recommendations/also-viewed/:id', async (req, res) => {
       rating: { $gte: 4.0 }
     }).sort({ views: -1 }).limit(4).lean();
 
-    return res.json(similar.map(p => ({ ...p, id: p._id.toString() })));
+    const mapped = similar.map(p => ({ ...p, id: p._id.toString() }));
+    return sendSuccess(res, mapped, "Also viewed recommendations fetched", 200, req);
   } catch (err) {
-    return res.status(500).json({ message: "Error fetching viewed recommendations" });
+    logger.error("Also Viewed Recommendations Error:", err, { requestId: req.requestId });
+    return sendError(res, 'RECOMMENDATION_ERROR', "Error fetching viewed recommendations", 500, req);
   }
 });
 
@@ -414,9 +378,11 @@ router.get('/api/recommendations/trending', async (req, res) => {
       .limit(8)
       .lean();
 
-    return res.json(trending.map(p => ({ ...p, id: p._id.toString() })));
+    const mapped = trending.map(p => ({ ...p, id: p._id.toString() }));
+    return sendSuccess(res, mapped, "Trending recommendations fetched", 200, req);
   } catch (err) {
-    return res.status(500).json({ message: "Error fetching trending products" });
+    logger.error("Trending Recommendations Error:", err, { requestId: req.requestId });
+    return sendError(res, 'RECOMMENDATION_ERROR', "Error fetching trending products", 500, req);
   }
 });
 
@@ -466,7 +432,8 @@ router.get('/api/recommendations/because-you-bought/:userId', protect, async (re
 
     if (!recommended || recommended.length === 0) {
       const topRated = await Product.find().sort({ rating: -1 }).limit(4).lean();
-      return res.json(topRated.map(p => ({ ...p, id: p._id.toString() })));
+      const mapped = topRated.map(p => ({ ...p, id: p._id.toString() }));
+      return sendSuccess(res, mapped, "Personalized recommendations fetched", 200, req);
     }
 
     if (recommended.length < 4) {
@@ -475,18 +442,19 @@ router.get('/api/recommendations/because-you-bought/:userId', protect, async (re
       recommended = recommended.concat(additional);
     }
 
-    return res.json(recommended.map(p => ({ ...p, id: p._id.toString() })));
+    const mapped = recommended.map(p => ({ ...p, id: p._id.toString() }));
+    return sendSuccess(res, mapped, "Personalized recommendations fetched", 200, req);
   } catch (err) {
-    console.error("Because You Bought Recommendations Error:", err);
-    return res.status(500).json({ message: "Error fetching personalized recommendations" });
+    logger.error("Because You Bought Recommendations Error:", err, { requestId: req.requestId });
+    return sendError(res, 'RECOMMENDATION_ERROR', "Error fetching personalized recommendations", 500, req);
   }
 });
 
 // ==========================================
-// 🛡️ CATALOG & ADMIN PROTECTED ROUTES (ZERO-TRUST GRANULAR RBAC ENFORCED & AUDIT LOGGED)
+// 🛡️ ADMIN-ONLY PROTECTED MUTATION ROUTES (ZERO-TRUST RBAC & AUDIT LOGGED)
 // ==========================================
 
-// 5. Create New Product - 🔥 GRANULAR RBAC ('products:create') & AUDIT LOGGED + WAREHOUSE LINKING FIX
+// 5. Create New Product - 🔥 ADMIN ONLY ('products:create') & AUDIT LOGGED
 router.post('/api/products', protect, checkPermission('products:create'), async (req, res) => {
   try {
     if (req.body.price !== undefined && req.body.pricePaise === undefined) {
@@ -496,7 +464,6 @@ router.post('/api/products', protect, checkPermission('products:create'), async 
       req.body.mrpPaise = Math.round(Number(req.body.mrp) * 100);
     }
 
-    // If warehouseId is missing or empty, fetch the default active warehouse automatically
     if (!req.body.warehouseId || req.body.warehouseId === "null" || req.body.warehouseId === "") {
       const defaultWarehouse = await Warehouse.findOne({ isActive: true }).sort({ priority: 1 });
       if (defaultWarehouse) {
@@ -506,16 +473,11 @@ router.post('/api/products', protect, checkPermission('products:create'), async 
 
     const validationResult = productValidationSchema.safeParse(req.body);
     if (!validationResult.success) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Validation failed", 
-        errors: validationResult.error.format() 
-      });
+      return sendError(res, 'VALIDATION_FAILED', "Validation failed", 400, req, validationResult.error.format());
     }
 
     const productData = validationResult.data;
 
-    // 🔥 AUTOMATIC WAREHOUSE INVENTORY MAPPING (Fixes 0 items in warehouse view)
     if (productData.warehouseId && mongoose.Types.ObjectId.isValid(productData.warehouseId)) {
       const warehouseObjId = new mongoose.Types.ObjectId(productData.warehouseId);
       productData.warehouseInventories = [{
@@ -531,7 +493,6 @@ router.post('/api/products', protect, checkPermission('products:create'), async 
     const newProduct = new Product(productData);
     const savedProduct = await newProduct.save();
 
-    // 🔥 AUDIT LOG RECORDED FOR PRODUCT CREATION
     await logAdminAction(
       req,
       'PRODUCT_CREATED',
@@ -540,14 +501,14 @@ router.post('/api/products', protect, checkPermission('products:create'), async 
       { id: savedProduct._id, title: savedProduct.title, price: savedProduct.price, inventory: savedProduct.inventory }
     );
 
-    return res.status(201).json({ ...savedProduct._doc, id: savedProduct._id.toString() });
+    return sendSuccess(res, { ...savedProduct._doc, id: savedProduct._id.toString() }, "Product created successfully", 201, req);
   } catch (error) { 
-    console.error("Save Product Error:", error);
-    return res.status(500).json({ message: "Error saving product" }); 
+    logger.error("Save Product Error:", error, { requestId: req.requestId });
+    return sendError(res, 'SERVER_ERROR', "Error saving product", 500, req); 
   }
 });
 
-// 6. Update Existing Product - 🔥 GRANULAR RBAC ('products:edit') & AUDIT LOGGED (PRICE/STOCK/TITLE/IMAGE CHANGES)
+// 6. Update Existing Product - 🔥 ADMIN ONLY ('products:edit') & AUDIT LOGGED
 router.put('/api/products/:id', protect, checkPermission('products:edit'), async (req, res) => {
   try {
     if (req.body.price !== undefined && req.body.pricePaise === undefined) {
@@ -557,17 +518,13 @@ router.put('/api/products/:id', protect, checkPermission('products:edit'), async
       req.body.mrpPaise = Math.round(Number(req.body.mrp) * 100);
     }
 
-    const validationResult = productValidationSchema.partial().safeParse(req.body);
+    const validationResult = productUpdateSchema.safeParse(req.body);
     if (!validationResult.success) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Validation failed", 
-        errors: validationResult.error.format() 
-      });
+      return sendError(res, 'VALIDATION_FAILED', "Validation failed", 400, req, validationResult.error.format());
     }
 
     const existingProduct = await Product.findById(req.params.id).lean();
-    if (!existingProduct) return res.status(404).json({ message: "Product not found" });
+    if (!existingProduct) return sendError(res, 'PRODUCT_NOT_FOUND', "Product not found", 404, req);
 
     const updateData = validationResult.data;
     const whitelistedUpdateData = {};
@@ -577,7 +534,6 @@ router.put('/api/products/:id', protect, checkPermission('products:edit'), async
       }
     });
 
-    // Keep warehouse mapping synced if inventory or warehouseId updates
     if (whitelistedUpdateData.inventory !== undefined || whitelistedUpdateData.warehouseId !== undefined) {
       const targetWarehouseId = whitelistedUpdateData.warehouseId || existingProduct.warehouseId;
       const targetInventory = whitelistedUpdateData.inventory !== undefined ? whitelistedUpdateData.inventory : existingProduct.inventory;
@@ -597,9 +553,8 @@ router.put('/api/products/:id', protect, checkPermission('products:edit'), async
       { new: true, runValidators: true, returnDocument: 'after' }
     ).lean();
     
-    if (!updatedProduct) return res.status(404).json({ message: "Product not found" });
+    if (!updatedProduct) return sendError(res, 'PRODUCT_NOT_FOUND', "Product not found", 404, req);
 
-    // 🔥 DETAILED AUDIT LOG RECORDING (PRICE, STOCK, TITLE, IMAGES COMPARISON)
     let changeSummary = [];
     if (whitelistedUpdateData.pricePaise !== undefined && whitelistedUpdateData.pricePaise !== existingProduct.pricePaise) {
       changeSummary.push(`Price: ₹${(existingProduct.pricePaise/100).toFixed(2)} → ₹${(whitelistedUpdateData.pricePaise/100).toFixed(2)}`);
@@ -624,14 +579,14 @@ router.put('/api/products/:id', protect, checkPermission('products:edit'), async
       { price: updatedProduct.pricePaise, inventory: updatedProduct.inventory, title: updatedProduct.title }
     );
 
-    return res.json({ ...updatedProduct, id: updatedProduct._id.toString() });
+    return sendSuccess(res, { ...updatedProduct, id: updatedProduct._id.toString() }, "Product updated successfully", 200, req);
   } catch (error) {
-    console.error("Update Product Error:", error);
-    return res.status(500).json({ message: "Error updating product" });
+    logger.error("Update Product Error:", error, { requestId: req.requestId });
+    return sendError(res, 'SERVER_ERROR', "Error updating product", 500, req);
   }
 });
 
-// 7. Safe Delete / Soft Delete - 🔥 GRANULAR RBAC & AUDIT LOGGED
+// 7. Safe Delete / Soft Delete - 🔥 ADMIN ONLY ('products:edit') & AUDIT LOGGED
 router.delete('/api/products/:id', protect, checkPermission('products:edit'), async (req, res) => {
   try {
     const productId = req.params.id;
@@ -639,7 +594,7 @@ router.delete('/api/products/:id', protect, checkPermission('products:edit'), as
 
     const product = await Product.findById(productId);
     if (!product) {
-      return res.status(404).json({ success: false, message: "Product not found" });
+      return sendError(res, 'PRODUCT_NOT_FOUND', "Product not found", 404, req);
     }
 
     const activeOrders = await Order.find({
@@ -648,12 +603,10 @@ router.delete('/api/products/:id', protect, checkPermission('products:edit'), as
     }).lean();
 
     if (activeOrders.length > 0 && !force) {
-      return res.status(400).json({
-        success: false,
+      return sendSuccess(res, {
         requiresConfirmation: true,
-        message: `Safety Block: This product is part of ${activeOrders.length} active/unfulfilled order(s). Deleting it will break fulfillment.`,
         activeOrdersCount: activeOrders.length
-      });
+      }, `Safety Block: This product is part of ${activeOrders.length} active/unfulfilled order(s). Deleting it will break fulfillment.`, 400, req);
     }
 
     const previousStatus = product.listingStatus;
@@ -661,7 +614,6 @@ router.delete('/api/products/:id', protect, checkPermission('products:edit'), as
     product.inventory = 0;
     await product.save();
 
-    // 🔥 AUDIT LOG RECORDED FOR SOFT DELETE / ARCHIVE
     await logAdminAction(
       req,
       'PRODUCT_ARCHIVED',
@@ -670,14 +622,12 @@ router.delete('/api/products/:id', protect, checkPermission('products:edit'), as
       { listingStatus: 'Inactive', inventory: 0 }
     );
 
-    return res.json({ 
-      success: true, 
-      message: "Product safely moved to recycle bin (Soft Deleted) with audit logging.",
+    return sendSuccess(res, { 
       auditReason: auditReason || "No reason provided"
-    });
+    }, "Product safely moved to recycle bin (Soft Deleted) with audit logging.", 200, req);
   } catch (error) { 
-    console.error("Safe Delete Product Error:", error);
-    return res.status(500).json({ message: "Error processing safe deletion" }); 
+    logger.error("Safe Delete Product Error:", error, { requestId: req.requestId });
+    return sendError(res, 'SERVER_ERROR', "Error processing safe deletion", 500, req); 
   }
 });
 

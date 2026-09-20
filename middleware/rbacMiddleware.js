@@ -135,6 +135,9 @@ const checkPermission = (requiredPermission) => {
 // 🔥 PRO FEATURE: Multi-Permission Checkers (Any / All)
 // ==========================================
 const checkAnyPermission = (...permissions) => {
+  // 🔥 Flatten permissions array to safely handle both spread args and array inputs
+  const flattenedPermissions = permissions.flat();
+
   return (req, res, next) => {
     try {
       const user = req.user;
@@ -149,7 +152,7 @@ const checkAnyPermission = (...permissions) => {
       }
 
       const userPermissions = ROLE_PERMISSIONS[user.role] || [];
-      const hasAny = permissions.some(perm => {
+      const hasAny = flattenedPermissions.some(perm => {
         const [module] = perm.split(':');
         return userPermissions.includes(perm) || userPermissions.includes(`${module}:all`) || userPermissions.includes('all');
       });
@@ -165,4 +168,14 @@ const checkAnyPermission = (...permissions) => {
   };
 };
 
-module.exports = { checkPermission, checkAnyPermission, ROLE_PERMISSIONS };
+// 🔥 Add robust export aliases for seamless module compatibility
+checkPermission.checkPermission = checkPermission;
+checkPermission.requirePermission = checkPermission;
+checkAnyPermission.checkAnyPermission = checkAnyPermission;
+
+module.exports = { 
+  checkPermission, 
+  checkAnyPermission, 
+  checkAny: checkAnyPermission,
+  ROLE_PERMISSIONS 
+};

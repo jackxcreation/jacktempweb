@@ -11,7 +11,7 @@ const mongoose = require('mongoose');
 const webpush = require('web-push'); 
 
 // 🚨 IMPORT AUTH & RBAC MIDDLEWARES
-const { protect } = require('../middleware/authMiddleware');
+const { protect } = require('../middleware/auth');
 const { checkPermission } = require('../middleware/rbacMiddleware');
 
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -141,11 +141,11 @@ router.get('/api/dashboard-stats', protect, checkPermission('settings:all'), asy
           totalRtoCostPaise: { $sum: "$rtoCostPaise" },
           totalGatewayFeesPaise: { $sum: "$paymentFeePaise" },
           totalContributionPaise: { $sum: "$contributionPaise" },
-          pendingCount: { $sum: { $cond: [{ $in: ["$status", ["Pending", "Pending Review"]] }, 1, 0] } },
-          processingCount: { $sum: { $cond: [{ $in: ["$status", ["Processing", "Packed"]] }, 1, 0] } },
-          shippedCount: { $sum: { $cond: [{ $eq: ["$status", "Shipped"] }, 1, 0] } },
-          deliveredCount: { $sum: { $cond: [{ $eq: ["$status", "Delivered"] }, 1, 0] } },
-          returnedCount: { $sum: { $cond: [{ $in: ["$status", ["Returned", "RTO"]] }, 1, 0] } }
+          pendingCount: { $sum: {$cond: [{ $in: ["$status", ["Pending", "Pending Review"]] }, 1, 0] } },
+          processingCount: { $sum: {$cond: [{ $in: ["$status", ["Processing", "Packed"]] }, 1, 0] } },
+          shippedCount: { $sum: {$cond: [{ $eq: ["$status", "Shipped"] }, 1, 0] } },
+          deliveredCount: { $sum: {$cond: [{ $eq: ["$status", "Delivered"] }, 1, 0] } },
+          returnedCount: { $sum: {$cond: [{ $in: ["$status", ["Returned", "RTO"]] }, 1, 0] } }
         }
       }
     ]);

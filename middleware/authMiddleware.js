@@ -35,19 +35,19 @@ const protect = async (req, res, next) => {
       const user = await User.findById(decoded.id).select('-password');
       
       if (!user) {
-        return res.status(401).json({ message: 'User not found. Invalid token.' });
+        return res.status(401).json({ success: false, message: 'User not found. Invalid token.' });
       }
 
       // 🔥 AUDIT FIX: Strict account status & lock validation
       if (user.isLocked || user.isActive === false) {
-        return res.status(403).json({ message: 'Access Denied: Account is locked, suspended, or inactive.' });
+        return res.status(403).json({ success: false, message: 'Access Denied: Account is locked, suspended, or inactive.' });
       }
 
       // 🔥 ACTIVE SESSION REVOCATION CHECK (If session ID exists in token)
       if (decoded.sid && user.activeSessions && user.activeSessions.length > 0) {
         const sessionExists = user.activeSessions.some(s => s.sessionId === decoded.sid);
         if (!sessionExists) {
-          return res.status(401).json({ message: 'Session has been revoked or terminated. Please login again.' });
+          return res.status(401).json({ success: false, message: 'Session has been revoked or terminated. Please login again.' });
         }
       }
 
@@ -59,16 +59,16 @@ const protect = async (req, res, next) => {
       console.error("JWT Verification Error:", error.message);
       
       if (error.name === 'TokenExpiredError') {
-        return res.status(401).json({ message: 'Token has expired. Please login again.' });
+        return res.status(401).json({ success: false, message: 'Token has expired. Please login again.' });
       }
       if (error.name === 'JsonWebTokenError') {
-        return res.status(401).json({ message: 'Invalid token signature. Unauthorized.' });
+        return res.status(401).json({ success: false, message: 'Invalid token signature. Unauthorized.' });
       }
 
-      return res.status(401).json({ message: 'Not authorized, token failed' });
+      return res.status(401).json({ success: false, message: 'Not authorized, token failed' });
     }
   } else {
-    return res.status(401).json({ message: 'Not authorized, no token provided' });
+    return res.status(401).json({ success: false, message: 'Not authorized, no token provided' });
   }
 };
 
@@ -98,18 +98,18 @@ const adminProtect = async (req, res, next) => {
       const user = await User.findById(decoded.id).select('-password');
       
       if (!user) {
-        return res.status(401).json({ message: 'Admin not found. Invalid token.' });
+        return res.status(401).json({ success: false, message: 'Admin not found. Invalid token.' });
       }
 
       if (user.isLocked || user.isActive === false) {
-        return res.status(403).json({ message: 'Access Denied: Account is locked, suspended, or inactive.' });
+        return res.status(403).json({ success: false, message: 'Access Denied: Account is locked, suspended, or inactive.' });
       }
 
       // 🔥 Session revocation check for admin
       if (decoded.sid && user.activeSessions && user.activeSessions.length > 0) {
         const sessionExists = user.activeSessions.some(s => s.sessionId === decoded.sid);
         if (!sessionExists) {
-          return res.status(401).json({ message: 'Admin session has been revoked. Please login again.' });
+          return res.status(401).json({ success: false, message: 'Admin session has been revoked. Please login again.' });
         }
       }
 
@@ -121,7 +121,7 @@ const adminProtect = async (req, res, next) => {
       ];
 
       if (!privilegedRoles.includes(user.role)) {
-        return res.status(403).json({ message: 'Access Denied: Requires privileged staff role.' });
+        return res.status(403).json({ success: false, message: 'Access Denied: Requires privileged staff role.' });
       }
 
       req.user = user;
@@ -132,16 +132,16 @@ const adminProtect = async (req, res, next) => {
       console.error("Admin JWT Verification Error:", error.message);
       
       if (error.name === 'TokenExpiredError') {
-        return res.status(401).json({ message: 'Admin token has expired. Please login again.' });
+        return res.status(401).json({ success: false, message: 'Admin token has expired. Please login again.' });
       }
       if (error.name === 'JsonWebTokenError') {
-        return res.status(401).json({ message: 'Invalid admin token signature. Unauthorized.' });
+        return res.status(401).json({ success: false, message: 'Invalid admin token signature. Unauthorized.' });
       }
 
-      return res.status(401).json({ message: 'Not authorized, admin token failed' });
+      return res.status(401).json({ success: false, message: 'Not authorized, admin token failed' });
     }
   } else {
-    return res.status(401).json({ message: 'Not authorized, no admin token provided' });
+    return res.status(401).json({ success: false, message: 'Not authorized, no admin token provided' });
   }
 };
 
@@ -150,11 +150,11 @@ const admin = (req, res, next) => {
   const privilegedRoles = ['admin', 'super_admin', 'operations_manager', 'catalog_manager', 'warehouse_manager', 'finance_manager'];
   if (req.user && privilegedRoles.includes(req.user.role)) {
     if (req.user.isLocked || req.user.isActive === false) {
-      return res.status(403).json({ message: 'Access Denied: Account is locked, suspended, or inactive.' });
+      return res.status(403).json({ success: false, message: 'Access Denied: Account is locked, suspended, or inactive.' });
     }
     next();
   } else {
-    return res.status(403).json({ message: 'Not authorized as an admin or privileged manager' });
+    return res.status(403).json({ success: false, message: 'Not authorized as an admin or privileged manager' });
   }
 };
 
@@ -164,16 +164,23 @@ const admin = (req, res, next) => {
 const authorizeRoles = (...allowedRoles) => {
   return (req, res, next) => {
     if (!req.user) {
-      return res.status(401).json({ message: 'Not authorized, user context missing' });
+      return res.status(401).json({ success: false, message: 'Not authorized, user context missing' });
     }
     if (req.user.isLocked || req.user.isActive === false) {
-      return res.status(403).json({ message: 'Access Denied: Account is locked or inactive.' });
+      return res.status(403).json({ success: false, message: 'Access Denied: Account is locked or inactive.' });
     }
     if (!allowedRoles.includes(req.user.role)) {
-      return res.status(403).json({ message: `Access Denied: Requires one of these roles: ${allowedRoles.join(', ')}` });
+      return res.status(403).json({ success: false, message: `Access Denied: Requires one of these roles: ${allowedRoles.join(', ')}` });
     }
     next();
   };
 };
 
-module.exports = { protect, adminProtect, admin, authorizeRoles };
+// 🔥 Add robust compatibility aliases for smooth cross-module imports
+protect.protect = protect;
+protect.authenticateToken = protect;
+adminProtect.adminProtect = adminProtect;
+admin.admin = admin;
+authorizeRoles.authorizeRoles = authorizeRoles;
+
+module.exports = { protect, adminProtect, admin, authorizeRoles, authenticateToken: protect };

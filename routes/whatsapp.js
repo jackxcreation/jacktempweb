@@ -86,7 +86,7 @@ const verifyMetaSignature = (req) => {
 };
 
 // ==========================================
-// 2. META WEBHOOK VERIFICATION (GET) - Strict Token Check (No Fallback)
+// 2. META WEBHOOK VERIFICATION (GET) - Strict Token Check
 // ==========================================
 router.get('/webhook', (req, res) => {
   const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;

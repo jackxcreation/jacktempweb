@@ -5,6 +5,8 @@ const paymentEventSchema = new mongoose.Schema({
   eventId: { type: String, required: true, unique: true, index: true },
   eventType: { type: String, required: true, index: true },
   paymentGateway: { type: String, default: 'razorpay' },
+  orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order', index: true }, // 🔥 Added for direct event-to-order reconciliation tracing
+  gatewayPaymentId: { type: String, index: true }, // 🔥 Added for fast webhook deduplication & lookup
   payload: { type: Object, required: true },
   status: { type: String, enum: ['PROCESSED', 'FAILED', 'IGNORED'], default: 'PROCESSED', index: true },
   processedAt: { type: Date, default: Date.now, index: true }

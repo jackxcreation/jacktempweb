@@ -4,13 +4,14 @@ const router = express.Router();
 const crypto = require('crypto');
 const { PaymentEvent, Order, PaymentIntent } = require('../../models');
 const { logger } = require('../../utils/logger');
+const { rawBodyMiddleware } = require('../../middleware/rawBody'); // 🔥 TASK #19: Centralized raw body middleware
 
 /**
  * @route   POST /api/webhooks/razorpay
  * @desc    Secure Razorpay Webhook listener with signature verification and event idempotency
  * @access  Public (Secured by HMAC SHA256 Webhook Signature)
  */
-router.post('/', express.raw({ type: 'application/json' }), async (req, res) => {
+router.post('/', rawBodyMiddleware, async (req, res) => {
   const webhookSignature = req.headers['x-razorpay-signature'];
   const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
 
@@ -20,14 +21,22 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   }
 
   try {
-    // 1. Verify HMAC SHA256 Signature
-    const rawBody = req.body; // Buffer from express.raw()
+    const rawBody = req.body; // Buffer from rawBodyMiddleware
+    if (!Buffer.isBuffer(rawBody)) {
+      logger.error("🚨 WEBHOOK ERROR: req.body is not a raw Buffer");
+      return res.status(400).json({ success: false, message: 'Invalid request body format' });
+    }
+
+    // 1. Verify HMAC SHA256 Signature safely
     const expectedSignature = crypto
       .createHmac('sha256', webhookSecret)
       .update(rawBody)
       .digest('hex');
 
-    if (!crypto.timingSafeEqual(Buffer.from(webhookSignature || ''), Buffer.from(expectedSignature))) {
+    const sigBuffer = Buffer.from(webhookSignature || '', 'utf8');
+    const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
+
+    if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
       logger.warn("🚨 SECURITY AUDIT: Invalid Razorpay webhook signature detected!");
       return res.status(400).json({ success: false, message: 'Invalid signature' });
     }

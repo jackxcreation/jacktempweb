@@ -2,8 +2,8 @@
 const mongoose = require('mongoose');
 
 // 🔥 CRITICAL FIX: Correct relative path for canonical User model inside models/ directory
-// models.js (root level par)
 const User = require('./models/User');
+const PaymentEvent = require('./models/PaymentEvent'); // 🔥 TASK #18 & #20: Imported PaymentEvent model
 
 // ==========================================
 // 🔥 MULTI-STATE INVENTORY SUB-SCHEMA
@@ -57,6 +57,7 @@ const warehouseInventorySchema = new mongoose.Schema({
 // ==========================================
 const productSchema = new mongoose.Schema({
   title: { type: String, required: [true, 'Product title is required'], trim: true, maxlength: 200, index: true }, 
+  slug: { type: String, unique: true, sparse: true, index: true, lowercase: true, trim: true }, // 🔥 TASK #63: Product.slug index
   
   price: { type: Number, default: 0 }, 
   mrp: { type: Number, default: 0 }, 
@@ -207,6 +208,11 @@ productSchema.pre('save', function () {
   if (this.price && !this.pricePaise) this.pricePaise = Math.round(this.price * 100);
   if (this.mrp && !this.mrpPaise) this.mrpPaise = Math.round(this.mrp * 100);
   if (this.cogs && !this.cogsPaise) this.cogsPaise = Math.round(this.cogs * 100); 
+
+  // Auto-generate slug if missing
+  if (this.title && !this.slug) {
+    this.slug = this.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
+  }
 });
 
 productSchema.pre('findOneAndUpdate', function () {
@@ -246,8 +252,10 @@ productSchema.pre('findOneAndUpdate', function () {
 });
 
 // ==========================================
-// 🔥 E-COMMERCE QUERY-PATTERN COMPOUND INDEXES
+// 🔥 E-COMMERCE QUERY-PATTERN COMPOUND INDEXES (TASK #63)
 // ==========================================
+productSchema.index({ slug: 1 }); // 🔥 TASK #63: Product.slug index
+productSchema.index({ category: 1, listingStatus: 1 }); // 🔥 TASK #63: Product.categoryId (category) + status (listingStatus) index
 productSchema.index({ category: 1, pricePaise: 1 });
 productSchema.index({ category: 1, createdAt: -1 });
 productSchema.index({ brand: 1, pricePaise: 1 });
@@ -262,6 +270,10 @@ productSchema.index({ 'warehouseInventories.warehouse': 1, 'warehouseInventories
 const shipmentSchema = new mongoose.Schema({
   provider: { type: String, enum: ['delhivery', 'shiprocket', 'none'], default: 'none' },
   awb: { type: String, default: '' },
+  trackingNumber: { type: String, default: '' }, 
+  carrier: { type: String, default: '' },         
+  courier: { type: String, default: '' },         
+  shipmentId: { type: String, default: '' },     
   providerOrderId: { type: String, default: '' },
   labelUrl: { type: String, default: '' },
   manifestId: { type: String, default: '' },
@@ -273,7 +285,8 @@ const shipmentSchema = new mongoose.Schema({
 
 const orderSchema = new mongoose.Schema({
   userId: { type: String, required: true, index: true },
-  orderNumber: { type: String, unique: true, sparse: true, index: true }, // 🔥 Unique constraint added for DB audit compliance
+  orderNumber: { type: String, unique: true, sparse: true, index: true }, 
+  idempotencyKey: { type: String, unique: true, sparse: true, index: true }, 
   items: Array, 
   totalAmount: String, 
   totalPaise: { type: Number, default: 0 },
@@ -314,7 +327,9 @@ const orderSchema = new mongoose.Schema({
   paymentDetails: {
     gatewayOrderId: { type: String, default: "" },
     gatewayPaymentId: { type: String, default: "" },
-    eventId: { type: String, default: "" }
+    eventId: { type: String, default: "" },
+    processedEventId: { type: String, default: "", index: true },
+    paymentIntentId: { type: mongoose.Schema.Types.ObjectId, ref: 'PaymentIntent', default: null, index: true }
   },
   address: { type: Object, default: {} }, 
   userDetails: { type: Object, default: {} },
@@ -325,14 +340,20 @@ const orderSchema = new mongoose.Schema({
 });
 
 orderSchema.virtual('shiprocketOrderId').get(function() {
-  return this.shipment?.awb || '';
+  if (this.shipment?.provider === 'shiprocket') {
+    return this.shipment?.providerOrderId || this.shipment?.awb || '';
+  }
+  return '';
 });
 
-orderSchema.index({ userId: 1, createdAt: -1 });
+// 🔥 TASK #63: Critical Order Indexes Audit
+orderSchema.index({ userId: 1, createdAt: -1 }); // Order.userId + createdAt
+orderSchema.index({ "paymentDetails.gatewayOrderId": 1 }); // Order.paymentDetails.gatewayOrderId
 orderSchema.index({ status: 1, createdAt: -1 });
 orderSchema.index({ paymentMethod: 1, createdAt: -1 });
 orderSchema.index({ fulfilledFromWarehouse: 1, status: 1 });
 orderSchema.index({ 'shipment.awb': 1 });
+orderSchema.index({ 'shipment.trackingNumber': 1 });
 
 // ==========================================
 // 🔥 3.1 ENTERPRISE PAYMENT ARCHITECTURE MODELS
@@ -384,7 +405,22 @@ const settlementSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // ==========================================
-// 🔥 3.2 OTP SCHEMA (TTL INDEX FOR BRUTE-FORCE PROTECTION)
+// 🔥 3.2 COUPON SCHEMA
+// ==========================================
+const couponSchema = new mongoose.Schema({
+  code: { type: String, required: true, unique: true, uppercase: true, trim: true, index: true },
+  discountType: { type: String, enum: ['PERCENTAGE', 'FLAT'], required: true, default: 'PERCENTAGE' },
+  discountValue: { type: Number, required: true, min: 0 }, 
+  minOrderPaise: { type: Number, default: 0, min: 0 },
+  maxDiscountPaise: { type: Number, default: null },
+  usageLimit: { type: Number, default: null },
+  timesUsed: { type: Number, default: 0 },
+  isActive: { type: Boolean, default: true, index: true },
+  expiresAt: { type: Date, default: null }
+}, { timestamps: true });
+
+// ==========================================
+// 🔥 3.3 OTP SCHEMA (TTL INDEX FOR BRUTE-FORCE PROTECTION)
 // ==========================================
 const otpSchema = new mongoose.Schema({
   identifier: { type: String, required: true, lowercase: true, trim: true, index: true },
@@ -440,7 +476,7 @@ const emailTemplateSchema = new mongoose.Schema({
 });
 
 // ==========================================
-// 7. TICKET & SUPPORT SCHEMAS
+// 7. TICKET & SUPPORT SCHEMAS (TASK #63)
 // ==========================================
 const ticketSchema = new mongoose.Schema({
   userId: { type: String, index: true }, 
@@ -466,6 +502,9 @@ const ticketSchema = new mongoose.Schema({
   messages: [{ sender: { type: String, enum: ['user', 'admin', 'support', 'bot', 'USER', 'ADMIN', 'BOT'] }, text: String, timestamp: { type: Date, default: Date.now } }],
   createdAt: { type: Date, default: Date.now, index: true }
 });
+
+// 🔥 TASK #63: Ticket.userId + status index audit
+ticketSchema.index({ userId: 1, status: 1 });
 
 const supportConversationSchema = new mongoose.Schema({
   conversationId: { type: String, required: true, unique: true, index: true },
@@ -598,7 +637,7 @@ const productViewEventSchema = new mongoose.Schema({
   product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true, index: true },
   userId: { type: String, default: null },
   sessionId: { type: String, default: '' },
-  timestamp: { type: Date, default: Date.now, expires: 2592000 } // TTL 30 days
+  timestamp: { type: Date, default: Date.now, expires: 2592000 } 
 });
 productViewEventSchema.index({ product: 1, timestamp: -1 });
 
@@ -626,12 +665,14 @@ trafficEventSchema.index({ timestamp: -1 });
 // ==========================================
 module.exports = {
   Product: mongoose.models.Product || mongoose.model('Product', productSchema),
-  User, // Re-exported from models/User.js to eliminate schema duplication bug
+  User, 
   Order: mongoose.models.Order || mongoose.model('Order', orderSchema),
   PaymentIntent: mongoose.models.PaymentIntent || mongoose.model('PaymentIntent', paymentIntentSchema),
   PaymentAttempt: mongoose.models.PaymentAttempt || mongoose.model('PaymentAttempt', paymentAttemptSchema),
   Refund: mongoose.models.Refund || mongoose.model('Refund', refundSchema),
   Settlement: mongoose.models.Settlement || mongoose.model('Settlement', settlementSchema),
+  PaymentEvent, 
+  Coupon: mongoose.models.Coupon || mongoose.model('Coupon', couponSchema), 
   Otp: mongoose.models.Otp || mongoose.model('Otp', otpSchema),
   OTP: mongoose.models.Otp || mongoose.model('Otp', otpSchema),
   Setting: mongoose.models.Setting || mongoose.model('Setting', settingSchema),

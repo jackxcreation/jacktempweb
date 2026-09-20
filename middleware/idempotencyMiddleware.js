@@ -90,4 +90,8 @@ const requireIdempotency = (req, res, next) => {
   next();
 };
 
+// 🔥 Add robust export aliases for maximum compatibility across different modules
+requireIdempotency.requireIdempotency = requireIdempotency;
+requireIdempotency.idempotencyMiddleware = requireIdempotency;
+
 module.exports = { requireIdempotency };

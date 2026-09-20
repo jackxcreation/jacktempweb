@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL } from '../config'; 
 import { fetchAIResponse, processBotResponse } from '../utils/chatBrain'; 
@@ -6,8 +6,8 @@ import { fetchAIResponse, processBotResponse } from '../utils/chatBrain';
 // 🔥 BULLETPROOF HOOKS IMPORTS (Fixed Paths & Duplicates based on your Folder Structure)
 import { useSupportChat } from "../hooks/useSupportChat";
 import { useConversation } from "../hooks/useConversation";
-import { useSupportSocket } from "../hooks/useSupportSocket"; // Added missing import!
-import { useSupportState } from '../hooks/support/useSupportState'; // This one is inside 'support' folder
+import { useSupportSocket } from "../hooks/useSupportSocket"; 
+import { useSupportState } from '../hooks/support/useSupportState'; 
 
 // 🔥 IMPORTED MODULAR UI COMPONENTS
 import ChatHeader from '../components/support/ChatHeader';
@@ -21,6 +21,9 @@ const Chat = ({ isOpen, onClose, contextData, user }) => {
   // 1. Context-Aware Conversation (Prevents Chat Bleeding between orders)
   const { conversationId, resetConversation } = useConversation(user, contextData?.id || contextData?._id || 'general');
   
+  // 🔥 TASK #39 & #41: Track persistent ticketId & assignment state for conversation & thread continuity
+  const [ticketId, setTicketId] = useState(null);
+
   // 2. Centralized State Manager (Prevents UI bugs)
   const { 
     status, agent, isEscalated, isResolved, isHumanActive, isAiActive,
@@ -31,6 +34,9 @@ const Chat = ({ isOpen, onClose, contextData, user }) => {
   const { 
     messages, isTyping, setIsTyping, addMessage, clearMessages, createAbortSignal 
   } = useSupportChat();
+
+  // 🔥 TASK #37: Track detected language state for multi-language response matching
+  const [currentLanguage, setCurrentLanguage] = useState('english');
 
   const BACKEND_API_URL = `${API_URL}/support/message`;
 
@@ -49,6 +55,7 @@ const Chat = ({ isOpen, onClose, contextData, user }) => {
       if (!event) return;
       if (event.type === 'agent_joined') {
         setHumanActive(event.agent);
+        if (event.ticketId) setTicketId(event.ticketId);
         addMessage({ id: `sys-${Date.now()}`, type: 'system', text: `${event.agent?.name || 'An agent'} joined the chat.` });
       } else if (event.type === 'ticket_resolved') {
         setResolved();
@@ -89,6 +96,8 @@ const Chat = ({ isOpen, onClose, contextData, user }) => {
     resetConversation();
     clearMessages();
     resetState();
+    setCurrentLanguage('english');
+    setTicketId(null);
     setTimeout(() => {
       addMessage({
         id: `init-${Date.now()}`,
@@ -116,15 +125,29 @@ const Chat = ({ isOpen, onClose, contextData, user }) => {
 
     addMessage(userMsg);
 
-    // Human Escalation Loop (Bypass AI API to save costs)
+    // 🔥 TASK #40 & #41: Human Escalation & Persistent Message Saving Loop
     if (isEscalated || isHumanActive) {
       escalate({
         conversationId,
+        ticketId,
         userId: user?.id || user?._id || 'guest_user',
         userName: user?.name || 'Guest',
         orderId: contextData?.id || contextData?._id || null,
         history: [{ sender: 'user', text: trimmedText }]
       });
+
+      // Persistently save message via backend ticket route if ticketId is available
+      if (ticketId) {
+        try {
+          await fetch(`${API_URL}/tickets/${ticketId}/messages`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: trimmedText, sender: 'USER' })
+          });
+        } catch (apiErr) {
+          console.error("Failed to persist escalated message:", apiErr);
+        }
+      }
       return;
     }
 
@@ -155,16 +178,32 @@ const Chat = ({ isOpen, onClose, contextData, user }) => {
       return; 
     }
 
+    // 🔥 TASK #37: Capture detected language if provided by backend response brain
+    if (rawBotResponse?.detectedLanguage || rawBotResponse?.data?.detectedLanguage) {
+      setCurrentLanguage(rawBotResponse.detectedLanguage || rawBotResponse.data.detectedLanguage);
+    }
+
+    // 🔥 TASK #39 & #41: Capture ticketId if returned by backend for conversation & session continuity
+    if (rawBotResponse?.ticketId || rawBotResponse?.data?.ticketId) {
+      setTicketId(rawBotResponse.ticketId || rawBotResponse.data.ticketId);
+    }
+
     let { finalBotText, triggerEscalation, structuredData } = processBotResponse(rawBotResponse);
+
+    // 🔥 TASK #38: Deterministic Escalation Trigger from backend intelligence policy
+    const backendShouldEscalate = rawBotResponse?.shouldEscalate || rawBotResponse?.data?.shouldEscalate;
+    if (backendShouldEscalate) {
+      triggerEscalation = true;
+    }
 
     // Deep Payload Fallback
     if (!finalBotText || typeof finalBotText !== 'string' || finalBotText.trim() === '') {
       finalBotText = rawBotResponse?.data?.message?.content || rawBotResponse?.message?.content || rawBotResponse?.text || "I'm having trouble connecting right now.";
     }
 
-    // Prevent false-positive immediate escalation
+    // Prevent false-positive immediate escalation on simple greetings unless explicitly triggered by backend policy
     const simpleGreetings = ['hello', 'hi', 'hey', 'good morning', 'good afternoon', 'good evening', 'sup', 'helo', 'namaste'];
-    if (simpleGreetings.includes(trimmedText.toLowerCase())) {
+    if (simpleGreetings.includes(trimmedText.toLowerCase()) && !backendShouldEscalate) {
       triggerEscalation = false;
     }
 
@@ -185,11 +224,22 @@ const Chat = ({ isOpen, onClose, contextData, user }) => {
       
       escalate({
         conversationId,
+        ticketId,
         userId: user?.id || user?._id || 'guest_user',
         userName: user?.name || 'Guest',
         orderId: contextData?.id || contextData?._id || null,
         history: [...messages, userMsg].slice(-10) 
       });
+
+      if (ticketId) {
+        try {
+          await fetch(`${API_URL}/tickets/${ticketId}/messages`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: trimmedText, sender: 'USER' })
+          });
+        } catch (e) {}
+      }
     }
   };
 

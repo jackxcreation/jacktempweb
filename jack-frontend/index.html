@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
     <meta name="theme-color" content="#FF4500" />
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -12,6 +12,13 @@
     <meta name="description" content="Discover limitless shopping with Jack Essentials. Exclusive deals, premium electronics, fashion, and everyday essentials at unbeatable prices in India." />
     <meta name="author" content="Jack Essentials Inc." />
 
+    <!-- 🔥 TASK #54 & #57: Performance Preconnect & DNS Prefetch for CDNs & External SDKs -->
+    <link rel="preconnect" href="https://sdk.cashfree.com" />
+    <link rel="dns-prefetch" href="https://sdk.cashfree.com" />
+    <link rel="preconnect" href="https://images.unsplash.com" />
+    <link rel="dns-prefetch" href="https://images.unsplash.com" />
+
+    <!-- Open Graph Meta Tags (Task #54) -->
     <meta property="og:site_name" content="Jack Essentials" />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="Jack Essentials | Premium Lifestyle & Electronics" />
@@ -19,6 +26,7 @@
     <meta property="og:image" content="https://thejackessentials.com/logo.png" />
     <meta property="og:url" content="https://thejackessentials.com" />
 
+    <!-- Twitter Card Meta Tags (Task #54) -->
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Jack Essentials | Premium Lifestyle" />
     <meta name="twitter:description" content="Shop the most premium collection of electronics and fashion curated just for you." />
@@ -30,6 +38,7 @@
     <!-- 🔥 PWA Manifest Link -->
     <link rel="manifest" href="/manifest.json" />
 
+    <!-- Cashfree Payment Gateway SDK -->
     <script src="https://sdk.cashfree.com/js/v3/cashfree.js"></script>
   </head>
   

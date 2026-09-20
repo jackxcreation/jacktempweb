@@ -4,6 +4,7 @@ const ShiprocketProvider = require('./providers/shiprocketProvider');
 const BlueDartProvider = require('./providers/bluedartProvider');
 const DTDCProvider = require('./providers/dtdcProvider');
 const { Setting } = require('../../models');
+const { logInfo, logError } = require('../../utils/logger'); // 🔥 TASK #45: Sanitized PII Logger
 
 class ShippingEngine {
   constructor() {
@@ -49,7 +50,8 @@ class ShippingEngine {
     try {
       return provider.createShipment ? await provider.createShipment(enrichedOrder) : await provider.generateAWB(enrichedOrder);
     } catch (error) {
-      console.error(`[ShippingEngine] Primary provider [${providerName}] failed createShipment. Attempting auto-failover...`, error.message);
+      logError(`[ShippingEngine] Primary provider [${providerName}] failed createShipment. Attempting auto-failover...`, error, { requestId });
+      
       // 🔥 Pro Feature: Automatic Failover to backup provider
       const backupKey = providerName === 'delhivery' ? 'shiprocket' : 'delhivery';
       const backupProvider = this.providers[backupKey];
@@ -72,28 +74,39 @@ class ShippingEngine {
     
     try {
       const result = await provider.generateAWB(enrichedOrder);
+      // 🔥 TASK #43: Ensure strict semantic fields are returned without conflating shiprocketOrderId
       return {
         ...result,
         provider: result.provider || providerName,
+        awb: result.awb || result.waybill || '',
+        trackingNumber: result.trackingNumber || result.awb || result.waybill || '',
+        carrier: result.carrier || providerName,
+        courier: result.courier || providerName,
+        shipmentId: result.shipmentId || '',
         unifiedState: this.normalizeState(result.trackingStatus)
       };
     } catch (error) {
-      console.error(`[ShippingEngine Error] [RequestId: ${requestId || 'N/A'}] Primary AWB Generation failed for [${providerName}]:`, error.message);
+      logError(`[ShippingEngine Error] Primary AWB Generation failed for [${providerName}]`, error, { requestId });
       
       // 🔥 Pro Feature: Automatic Failover for AWB Generation
       const backupKey = providerName === 'delhivery' ? 'shiprocket' : 'delhivery';
       const backupProvider = this.providers[backupKey];
       if (backupProvider && typeof backupProvider.generateAWB === 'function') {
         try {
-          console.warn(`[ShippingEngine] Failing over AWB generation to backup provider: [${backupKey}]`);
+          logInfo(`[ShippingEngine] Failing over AWB generation to backup provider: [${backupKey}]`, { requestId });
           const backupResult = await backupProvider.generateAWB(enrichedOrder);
           return {
             ...backupResult,
             provider: backupResult.provider || backupKey,
+            awb: backupResult.awb || backupResult.waybill || '',
+            trackingNumber: backupResult.trackingNumber || backupResult.awb || '',
+            carrier: backupResult.carrier || backupKey,
+            courier: backupResult.courier || backupKey,
+            shipmentId: backupResult.shipmentId || '',
             unifiedState: this.normalizeState(backupResult.trackingStatus)
           };
         } catch (backupErr) {
-          console.error(`[ShippingEngine] Backup provider [${backupKey}] also failed AWB generation:`, backupErr.message);
+          logError(`[ShippingEngine] Backup provider [${backupKey}] also failed AWB generation`, backupErr, { requestId });
         }
       }
 

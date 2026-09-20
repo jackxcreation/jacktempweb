@@ -8,19 +8,40 @@ const rateLimit = require('express-rate-limit');
 const User = require('../models/User');
 const { protect } = require('../middleware/authMiddleware'); 
 const { z } = require('zod'); 
+const { JWT_SECRET } = require('../config/env'); // 🔥 STRICT ZERO-FALLBACK JWT SECRET IMPORT
+const { authenticateUser, registerUser, formatSafeUser, generateToken } = require('../services/authService'); // 🔥 CENTRALIZED AUTH SERVICE
+const { verifyAndAuthenticateGoogleToken } = require('../services/socialAuth'); // 🔥 SECURE SERVER-SIDE GOOGLE TOKEN VERIFICATION
+
+// 🔥 TASK #49 & #50: Standardized API response helpers and structured logger
+const { sendSuccess, sendError } = require('../utils/apiResponse');
+const { logInfo, logError, logWarn } = require('../utils/logger');
 
 const { Resend } = require('resend');
 const { 
   getResetOtpTemplate, 
   getPASSWORDChangedTemplate, 
-  getPasswordChangedTemplate, 
+  getEncryptionChangedTemplate, 
   getLoginAlertTemplate 
 } = require('../emailTemplates'); 
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
+const otpStore = new Map();
+
 // ==================================================
-// 🛡️ ZOD VALIDATION SCHEMAS FOR AUTHENTICATION
+// 🔥 PRO FEATURE: MEMORY LEAK CLEANUP INTERVAL FOR OTP
+// ==================================================
+setInterval(() => {
+  const now = Date.now();
+  for (const [email, record] of otpStore.entries()) {
+    if (now > record.expiresAt) {
+      otpStore.delete(email);
+    }
+  }
+}, 15 * 60 * 1000); // Run every 15 minutes
+
+// ==================================================
+// 🛡️ ZOD VALIDATION SCHEMAS FOR AUTHENTICATION (TASK #48)
 // ==================================================
 const registerSchema = z.object({
   name: z.string().min(2, "Name is required").max(100, "Name is too long"),
@@ -41,10 +62,9 @@ const loginSchema = z.object({
   twoFactorCode: z.string().optional()
 });
 
+// 🔥 SECURE SOCIAL LOGIN SCHEMA (Accepts idToken instead of raw spoofable identity fields)
 const socialLoginSchema = z.object({
-  name: z.string().min(1, "Name is required"),
-  email: z.string().email("Invalid email address"),
-  googleId: z.string().min(1, "Google ID is required")
+  idToken: z.string().min(1, "Google ID Token is required")
 });
 
 const otpRequestSchema = z.object({
@@ -76,26 +96,6 @@ const rotatePasswordSchema = z.object({
   currentPassword: z.string().min(1, "Current password is required"),
   newPassword: z.string().min(6, "New password must be at least 6 characters long")
 });
-
-// ==================================================
-// 🔐 DATA PROTECTION: SAFE USER RESPONSE FORMATTER
-// ==================================================
-const formatSafeUser = (user) => {
-  if (!user) return null;
-  return {
-    id: user._id || user.id,
-    name: user.name,
-    email: user.email,
-    phone: user.phone,
-    role: user.role || 'customer',
-    isPhoneVerified: user.isPhoneVerified || false,
-    isActive: user.isActive,
-    twoFactorEnabled: user.twoFactorEnabled || false,
-    addresses: user.addresses || [],
-    wishlist: user.wishlist || [],
-    recentlyViewed: user.recentlyViewed || []
-  };
-};
 
 // ==================================================
 // 🛡️ ACCOUNT-LEVEL FAILED LOGIN TRACKER (Anti-Brute Force)
@@ -190,52 +190,40 @@ const clearFailedUnlock = (email) => {
 };
 
 // ==================================================
-// 🛡️ PHASE 9: ENDPOINT-SPECIFIC RATE LIMITERS
+// 🛡️ PHASE 9 / TASK #47: ENDPOINT-SPECIFIC RATE LIMITERS
 // ==================================================
 const loginLimiter = rateLimit({
   windowMs: 5 * 60 * 1000, 
   max: 5, 
-  message: { error: "Too many login attempts from this IP. Please try again after 5 minutes." }
+  message: { success: false, code: 'RATE_LIMIT_EXCEEDED', error: "Too many login attempts from this IP. Please try again after 5 minutes." }
 });
 
 const otpLimiter = rateLimit({
   windowMs: 10 * 60 * 1000, 
   max: 3, 
-  message: { error: "Too many OTP requests. Please wait before trying again." }
+  message: { success: false, code: 'RATE_LIMIT_EXCEEDED', error: "Too many OTP requests. Please wait before trying again." }
 });
 
 const resetLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, 
   max: 5, 
-  message: { error: "Too many password reset attempts. Please try later." }
+  message: { success: false, code: 'RATE_LIMIT_EXCEEDED', error: "Too many password reset attempts. Please try later." }
 });
 
 const registerLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, 
   max: 5, 
-  message: { error: "Too many accounts created from this IP. Please try later." }
+  message: { success: false, code: 'RATE_LIMIT_EXCEEDED', error: "Too many accounts created from this IP. Please try later." }
 });
 
 const unlockLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, 
   max: 5, 
-  message: { error: "Too many unlock requests from this IP. Please try later." }
+  message: { success: false, code: 'RATE_LIMIT_EXCEEDED', error: "Too many unlock requests from this IP. Please try later." }
 });
 
-const generateSecureToken = (user, sessionId) => {
-  if (!process.env.JWT_SECRET) {
-    console.error("🚨 CRITICAL: JWT_SECRET is missing in .env!");
-    throw new Error("Server Configuration Error");
-  }
-  return jwt.sign(
-    { id: user._id, role: user.role, sid: sessionId }, 
-    process.env.JWT_SECRET, 
-    { expiresIn: '7d' } 
-  );
-};
-
 // ==================================================
-// 🔥 SEPARATED NAMESPACE COOKIE HELPER (CUSTOMER vs ADMIN)
+// 🔥 TASK #51: SEPARATED NAMESPACE COOKIE HELPER (CUSTOMER vs ADMIN)
 // ==================================================
 const setAuthCookie = (res, token, role) => {
   const privilegedRoles = [
@@ -263,7 +251,7 @@ router.post('/register/start', registerLimiter, async (req, res) => {
   try {
     const validationResult = registerStartSchema.safeParse(req.body);
     if (!validationResult.success) {
-      return res.status(400).json({ success: false, error: "Validation failed", errors: validationResult.error.format() });
+      return sendError(res, 'VALIDATION_FAILED', "Validation failed", 400, req, validationResult.error.format());
     }
 
     const { email } = validationResult.data;
@@ -271,7 +259,7 @@ router.post('/register/start', registerLimiter, async (req, res) => {
 
     const existingUser = await User.findOne({ email: cleanEmail });
     if (existingUser) {
-      return res.status(400).json({ success: false, error: "This email is already registered. Please login." });
+      return sendError(res, 'EMAIL_ALREADY_REGISTERED', "This email is already registered. Please login.", 400, req);
     }
 
     const otp = crypto.randomInt(100000, 999999).toString();
@@ -295,86 +283,57 @@ router.post('/register/start', registerLimiter, async (req, res) => {
       });
     }
 
-    return res.status(200).json({ success: true, message: "Verification code started and sent successfully." });
+    return sendSuccess(res, { message: "Verification code started and sent successfully." }, "Success", 200, req);
   } catch (error) {
-    console.error("Register Start Error:", error);
-    return res.status(500).json({ success: false, error: "Failed to start registration process." });
+    logError("Register Start Error:", error, { requestId: req.requestId });
+    return sendError(res, 'INTERNAL_SERVER_ERROR', "Failed to start registration process.", 500, req);
   }
 });
 
 // ==================================================
-// 1.1 CANONICAL REGISTRATION: VERIFY & FINISH 🔥
+// 1.1 CANONICAL REGISTRATION: VERIFY & FINISH (Unified via authService) 🔥
 // ==================================================
 router.post('/register/verify', registerLimiter, async (req, res) => {
   try {
     const validationResult = registerSchema.safeParse(req.body);
     if (!validationResult.success) {
-      return res.status(400).json({ success: false, error: "Validation failed", errors: validationResult.error.format() });
+      return sendError(res, 'VALIDATION_FAILED', "Validation failed", 400, req, validationResult.error.format());
     }
 
     const { name, email, password, phone, verificationToken } = validationResult.data;
     const cleanEmail = email.toLowerCase().trim();
 
-    const existingUser = await User.findOne({ email: cleanEmail });
-    if (existingUser) {
-      return res.status(400).json({ success: false, error: "This email is already registered. Please login." });
-    }
-
-    let isPhoneVerified = false;
     let cleanPhone = phone ? phone.replace(/^\+91/, '').trim() : undefined;
 
     if (verificationToken && cleanPhone) {
       try {
-        const decoded = jwt.verify(verificationToken, process.env.JWT_SECRET);
-        if (decoded.verified && decoded.phone === cleanPhone) {
-          isPhoneVerified = true;
-          const phoneExists = await User.findOne({ phone: cleanPhone });
-          if (phoneExists) {
-            return res.status(400).json({ success: false, error: "This phone number is already linked to another account." });
-          }
-        } else {
-          return res.status(400).json({ success: false, error: "Invalid or expired phone verification token." });
+        const decoded = jwt.verify(verificationToken, JWT_SECRET);
+        if (!decoded.verified || decoded.phone !== cleanPhone) {
+          return sendError(res, 'INVALID_TOKEN', "Invalid or expired phone verification token.", 400, req);
         }
       } catch (err) {
-        return res.status(400).json({ success: false, error: "Phone verification session expired. Please verify again." });
+        return sendError(res, 'TOKEN_EXPIRED', "Phone verification session expired. Please verify again.", 400, req);
       }
     }
 
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-
-    const newUser = new User({ 
-      name, 
-      email: cleanEmail, 
-      password: hashedPassword, 
+    // 🔥 Delegated to centralized authService (returns token & user with sessionId)
+    const { token, user } = await registerUser({
+      name,
+      email: cleanEmail,
+      password,
       phone: cleanPhone,
-      isPhoneVerified,
-      role: 'customer', 
-      auditLogs: [{ action: 'REGISTER', details: 'User account created securely via canonical route', ip: req.ip || 'Unknown' }]
+      role: 'customer',
+      ip: req.ip || 'Unknown',
+      userAgent: req.headers['user-agent'] || 'Unknown Device'
     });
 
-    await newUser.save();
+    setAuthCookie(res, token, user.role);
 
-    const sessionId = crypto.randomBytes(16).toString('hex');
-    const ip = req.ip || 'Unknown';
-    const userAgent = req.headers['user-agent'] || 'Unknown Device';
-
-    newUser.activeSessions = newUser.activeSessions || [];
-    newUser.activeSessions.push({ sessionId, ipAddress: ip, device: userAgent, loginAt: new Date() });
-    await newUser.save();
-
-    const token = generateSecureToken(newUser, sessionId);
-    setAuthCookie(res, token, newUser.role);
-
-    return res.status(201).json({ 
-      success: true, 
-      message: "Welcome to Jack Essentials! Account created successfully.",
-      user: formatSafeUser(newUser)
-    });
+    return sendSuccess(res, { user }, "Welcome to Jack Essentials! Account created successfully.", 201, req);
 
   } catch (error) {
-    console.error("Registration Verify Error:", error);
-    return res.status(500).json({ success: false, error: "Internal Server Error. Please try again." });
+    logError("Registration Verify Error:", error, { requestId: req.requestId });
+    return sendError(res, 'REGISTRATION_FAILED', error.message || "Internal Server Error. Please try again.", 500, req);
   }
 });
 
@@ -384,13 +343,13 @@ router.post('/register', registerLimiter, async (req, res) => {
 });
 
 // ==================================================
-// 2. CANONICAL USER / ADMIN LOGIN 🔥
+// 2. CANONICAL USER / ADMIN LOGIN (Unified via authService) 🔥
 // ==================================================
 router.post('/login', loginLimiter, async (req, res) => {
   try {
     const validationResult = loginSchema.safeParse(req.body);
     if (!validationResult.success) {
-      return res.status(400).json({ success: false, error: "Validation failed", errors: validationResult.error.format() });
+      return sendError(res, 'VALIDATION_FAILED', "Validation failed", 400, req, validationResult.error.format());
     }
 
     const { email, password, twoFactorCode } = validationResult.data;
@@ -398,160 +357,97 @@ router.post('/login', loginLimiter, async (req, res) => {
     
     const lockoutStatus = checkAccountLockout(cleanEmail);
     if (lockoutStatus.isLocked) {
-      return res.status(429).json({ 
-        error: `Too many failed login attempts for this account. Please try again after ${lockoutStatus.remainingTime} minutes.` 
-      });
+      return sendError(
+        res, 
+        'ACCOUNT_LOCKED', 
+        `Too many failed login attempts for this account. Please try again after ${lockoutStatus.remainingTime} minutes.`, 
+        429, 
+        req
+      );
     }
 
-    const user = await User.findOne({ email: cleanEmail }).select('+password +twoFactorSecret');
-    
-    if (!user) {
-      recordFailedAttempt(cleanEmail);
-      return res.status(401).json({ error: "Invalid email or password." });
-    }
-
-    if (user.isLocked) {
-      return res.status(403).json({ error: "Account is LOCKED.", isLocked: true, email: user.email });
-    }
-
-    if (!user.password) {
-      return res.status(400).json({ error: "Please login using your Google account." });
-    }
-
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      recordFailedAttempt(cleanEmail); 
-      user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
-      
-      user.auditLogs = user.auditLogs || [];
-      user.auditLogs.push({ action: 'FAILED_LOGIN', details: 'Incorrect password entered', ip: req.ip || 'Unknown' });
-      
-      await user.save();
-      return res.status(401).json({ error: "Invalid email or password." });
-    }
-
-    if (user.twoFactorEnabled) {
-      if (!twoFactorCode) {
-        return res.status(200).json({ requiresTwoFactor: true, message: "2FA verification code required." });
-      }
-      if (twoFactorCode !== user.twoFactorSecret) {
-        return res.status(400).json({ error: "Invalid 2FA code." });
+    // Additional 2FA check pre-validation if required
+    if (twoFactorCode) {
+      const tempUser = await User.findOne({ email: cleanEmail }).select('+twoFactorSecret');
+      if (tempUser && tempUser.twoFactorEnabled && twoFactorCode !== tempUser.twoFactorSecret) {
+        return sendError(res, 'INVALID_2FA', "Invalid 2FA code.", 400, req);
       }
     }
+
+    // 🔥 Delegated to centralized authService
+    const { token, user } = await authenticateUser({
+      email: cleanEmail,
+      password,
+      ip: req.ip || 'Unknown Location',
+      userAgent: req.headers['user-agent'] || 'Unknown Device'
+    });
 
     clearFailedAttempts(cleanEmail);
-    user.failedLoginAttempts = 0;
-
-    const sessionId = crypto.randomBytes(16).toString('hex');
-    const ip = req.ip || 'Unknown Location';
-    const userAgent = req.headers['user-agent'] || 'Unknown Device';
-    const time = new Date();
-
-    user.activeSessions = user.activeSessions || [];
-    user.loginHistory = user.loginHistory || [];
-    user.auditLogs = user.auditLogs || [];
-
-    user.activeSessions.push({
-      sessionId,
-      ipAddress: ip,
-      device: userAgent,
-      loginAt: time
-    });
-
-    user.loginHistory.push({
-      ipAddress: ip,
-      device: userAgent,
-      status: 'SUCCESS',
-      timestamp: time
-    });
-
-    user.auditLogs.push({
-      action: 'LOGIN',
-      details: `Successful login from device: ${userAgent}`,
-      ip
-    });
-
-    const token = generateSecureToken(user, sessionId);
     setAuthCookie(res, token, user.role);
 
-    const lockToken = crypto.randomBytes(32).toString('hex');
-    user.resetPasswordToken = lockToken;
-    user.resetPasswordExpire = Date.now() + 3000000; 
-    await user.save();
+    // Generate emergency lock token for email alerts
+    const fullUserDoc = await User.findById(user.id);
+    if (fullUserDoc) {
+      const lockToken = crypto.randomBytes(32).toString('hex');
+      fullUserDoc.resetPasswordToken = lockToken;
+      fullUserDoc.resetPasswordExpire = Date.now() + 3000000; 
+      await fullUserDoc.save();
 
-    const timeString = time.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-    const lockLink = `https://thejackessentials.com/secure-account?token=${lockToken}`;
-    const accountAgeInMinutes = (Date.now() - new Date(user.createdAt || Date.now()).getTime()) / 60000;
+      const time = new Date();
+      const timeString = time.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+      const lockLink = `https://thejackessentials.com/secure-account?token=${lockToken}`;
+      const accountAgeInMinutes = (Date.now() - new Date(fullUserDoc.createdAt || Date.now()).getTime()) / 60000;
 
-    if (process.env.RESEND_API_KEY && accountAgeInMinutes >= 2) {
-      const htmlContent = getLoginAlertTemplate(user.name || 'User', userAgent, timeString, ip, lockLink);
-      resend.emails.send({
-        from: 'Jack Essentials Security <updates@thejackessentials.com>', 
-        to: [user.email],
-        subject: '⚠️ Security Alert: New Login to your Account',
-        html: htmlContent
-      }).catch(err => console.error("DEBUG: Failed to send login alert:", err));
+      if (process.env.RESEND_API_KEY && accountAgeInMinutes >= 2) {
+        const htmlContent = getLoginAlertTemplate(fullUserDoc.name || 'User', req.headers['user-agent'] || 'Unknown Device', timeString, req.ip || 'Unknown', lockLink);
+        resend.emails.send({
+          from: 'Jack Essentials Security <updates@thejackessentials.com>', 
+          to: [fullUserDoc.email],
+          subject: '⚠️ Security Alert: New Login to your Account',
+          html: htmlContent
+        }).catch(err => logWarn("Failed to send login alert email", { error: err.message }));
+      }
     }
 
-    return res.json({ message: "Authentication successful.", user: formatSafeUser(user) });
+    return sendSuccess(res, { user }, "Authentication successful.", 200, req);
   } catch (error) {
-    console.error("Login Error:", error);
-    return res.status(500).json({ error: "An unexpected error occurred during authentication." });
+    logError("Login Error:", error, { requestId: req.requestId });
+    if (error.isLocked) {
+      return res.status(403).json({ success: false, code: 'ACCOUNT_LOCKED', error: "Account is LOCKED.", isLocked: true, email: error.email, requestId: req.requestId });
+    }
+    recordFailedAttempt(req.body?.email?.toLowerCase()?.trim() || '');
+    return sendError(res, 'AUTHENTICATION_FAILED', error.message || "An unexpected error occurred during authentication.", 401, req);
   }
 });
 
 // ==================================================
-// 3. CANONICAL SOCIAL LOGIN: GOOGLE 🔥
+// 3. CANONICAL SECURE SOCIAL LOGIN: GOOGLE 🔥 (Server-Side Verified)
 // ==================================================
 router.post('/social/google', loginLimiter, async (req, res) => {
   try {
     const validationResult = socialLoginSchema.safeParse(req.body);
     if (!validationResult.success) {
-      return res.status(400).json({ success: false, error: "Validation failed", errors: validationResult.error.format() });
+      return sendError(res, 'VALIDATION_FAILED', "Validation failed", 400, req, validationResult.error.format());
     }
 
-    const { name, email, googleId } = validationResult.data;
-    const cleanEmail = email.toLowerCase().trim();
+    const { idToken } = validationResult.data;
 
-    let user = await User.findOne({ email: cleanEmail });
-    let isNewUser = false;
+    // 🔥 Delegated to centralized socialAuth service for cryptographic verification
+    const { token, user, isNewUser } = await verifyAndAuthenticateGoogleToken({
+      idToken,
+      ip: req.ip || 'Unknown Location',
+      userAgent: req.headers['user-agent'] || 'Unknown Device'
+    });
 
-    if (user && user.isLocked) {
-      return res.status(403).json({ error: "Account is LOCKED.", isLocked: true, email: user.email });
-    }
-
-    const sessionId = crypto.randomBytes(16).toString('hex');
-    const ip = req.ip || 'Unknown Location';
-    const userAgent = req.headers['user-agent'] || 'Unknown Device';
-
-    if (!user) {
-      user = new User({ 
-        name, 
-        email: cleanEmail, 
-        googleId, 
-        role: 'customer', 
-        activeSessions: [{ sessionId, ipAddress: ip, device: userAgent, loginAt: new Date() }],
-        auditLogs: [{ action: 'SOCIAL_REGISTER', details: 'Registered via Google OAuth', ip }]
-      });
-      await user.save();
-      isNewUser = true;
-    } else {
-      if (!user.googleId) user.googleId = googleId;
-      user.activeSessions = user.activeSessions || [];
-      user.auditLogs = user.auditLogs || [];
-
-      user.activeSessions.push({ sessionId, ipAddress: ip, device: userAgent, loginAt: new Date() });
-      user.auditLogs.push({ action: 'SOCIAL_LOGIN', details: 'Logged in via Google OAuth', ip });
-      await user.save();
-    }
-
-    const token = generateSecureToken(user, sessionId);
     setAuthCookie(res, token, user.role);
     
-    return res.json({ message: "Social Login Successful", user: formatSafeUser(user), isNewUser });
+    return sendSuccess(res, { user, isNewUser }, "Social Login Successful", 200, req);
   } catch (error) {
-    console.error("Social Login Error:", error);
-    return res.status(500).json({ error: "Google authentication failed on server." });
+    logError("Secure Social Login Error:", error, { requestId: req.requestId });
+    if (error.isLocked) {
+      return res.status(403).json({ success: false, code: 'ACCOUNT_LOCKED', error: "Account is LOCKED.", isLocked: true, email: error.email, requestId: req.requestId });
+    }
+    return sendError(res, 'SOCIAL_LOGIN_FAILED', error.message || "Google authentication failed on server.", 401, req);
   }
 });
 
@@ -567,23 +463,23 @@ router.post('/refresh', async (req, res) => {
   try {
     const token = req.cookies.admin_session || req.cookies.customer_session || req.cookies.token || req.cookies.admin_token;
     if (!token) {
-      return res.status(401).json({ success: false, error: 'No active session token found in cookies' });
+      return sendError(res, 'NO_SESSION', 'No active session token found in cookies', 401, req);
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET);
     const user = await User.findById(decoded.id);
     if (!user || user.isActive === false || user.isLocked) {
-      return res.status(401).json({ success: false, error: 'Session invalid or user inactive/locked' });
+      return sendError(res, 'INVALID_SESSION', 'Session invalid or user inactive/locked', 401, req);
     }
 
     const newSessionId = decoded.sid || crypto.randomBytes(16).toString('hex');
-    const newToken = generateSecureToken(user, newSessionId);
+    const newToken = generateToken(user, newSessionId);
     setAuthCookie(res, newToken, user.role);
 
-    return res.status(200).json({ success: true, message: 'Session refreshed successfully' });
+    return sendSuccess(res, {}, 'Session refreshed successfully', 200, req);
   } catch (error) {
-    console.error("Token Refresh Error:", error);
-    return res.status(401).json({ success: false, error: 'Invalid or expired session token' });
+    logError("Token Refresh Error:", error, { requestId: req.requestId });
+    return sendError(res, 'INVALID_SESSION', 'Invalid or expired session token', 401, req);
   }
 });
 
@@ -594,12 +490,12 @@ router.post('/send-otp', otpLimiter, async (req, res) => {
   try {
     const validationResult = otpRequestSchema.safeParse(req.body);
     if (!validationResult.success) {
-      return res.status(400).json({ success: false, error: "Validation failed", errors: validationResult.error.format() });
+      return sendError(res, 'VALIDATION_FAILED', "Validation failed", 400, req, validationResult.error.format());
     }
 
     const cleanEmail = validationResult.data.email.toLowerCase().trim();
     const userExists = await User.findOne({ email: cleanEmail });
-    if (!userExists) return res.status(404).json({ error: "Account not found." });
+    if (!userExists) return sendError(res, 'USER_NOT_FOUND', "Account not found.", 404, req);
 
     const otp = crypto.randomInt(100000, 999999).toString();
     const salt = await bcrypt.genSalt(10);
@@ -625,10 +521,10 @@ router.post('/send-otp', otpLimiter, async (req, res) => {
       });
     }
 
-    return res.json({ message: "OTP sent to your email." });
+    return sendSuccess(res, {}, "OTP sent to your email.", 200, req);
   } catch (error) {
-    console.error("Send OTP Error:", error);
-    return res.status(500).json({ error: "Failed to send OTP." });
+    logError("Send OTP Error:", error, { requestId: req.requestId });
+    return sendError(res, 'OTP_SEND_FAILED', "Failed to send OTP.", 500, req);
   }
 });
 
@@ -639,7 +535,7 @@ router.post('/verify-otp', resetLimiter, async (req, res) => {
   try {
     const validationResult = verifyOtpSchema.safeParse(req.body);
     if (!validationResult.success) {
-      return res.status(400).json({ success: false, error: "Validation failed", errors: validationResult.error.format() });
+      return sendError(res, 'VALIDATION_FAILED', "Validation failed", 400, req, validationResult.error.format());
     }
 
     const { email, otp } = validationResult.data;
@@ -648,22 +544,22 @@ router.post('/verify-otp', resetLimiter, async (req, res) => {
     
     const user = await User.findOne({ email: cleanEmail }).lean();
     if (!user || !user.resetOTP || !user.resetOTPExpires) {
-      return res.status(400).json({ error: "No OTP request found for this email." });
+      return sendError(res, 'OTP_NOT_FOUND', "No OTP request found for this email.", 400, req);
     }
 
     if (Date.now() > user.resetOTPExpires) {
-      return res.status(400).json({ error: "OTP has expired. Please request a new one." });
+      return sendError(res, 'OTP_EXPIRED', "OTP has expired. Please request a new one.", 400, req);
     }
 
     const isMatch = await bcrypt.compare(cleanOtp, user.resetOTP);
     if (!isMatch) {
-      return res.status(400).json({ error: "Incorrect OTP. Please try again." });
+      return sendError(res, 'INCORRECT_OTP', "Incorrect OTP. Please try again.", 400, req);
     }
 
-    return res.json({ message: "OTP Verified successfully." });
+    return sendSuccess(res, {}, "OTP Verified successfully.", 200, req);
   } catch (error) {
-    console.error("Verify OTP Error:", error);
-    return res.status(500).json({ error: "Verification failed." });
+    logError("Verify OTP Error:", error, { requestId: req.requestId });
+    return sendError(res, 'VERIFICATION_FAILED', "Verification failed.", 500, req);
   }
 });
 
@@ -674,7 +570,7 @@ router.post('/reset-password', resetLimiter, async (req, res) => {
   try {
     const validationResult = resetPasswordSchema.safeParse(req.body);
     if (!validationResult.success) {
-      return res.status(400).json({ success: false, error: "Validation failed", errors: validationResult.error.format() });
+      return sendError(res, 'VALIDATION_FAILED', "Validation failed", 400, req, validationResult.error.format());
     }
 
     const { email, otp, newPassword } = validationResult.data;
@@ -683,12 +579,12 @@ router.post('/reset-password', resetLimiter, async (req, res) => {
     
     const user = await User.findOne({ email: cleanEmail });
     if (!user || !user.resetOTP || Date.now() > user.resetOTPExpires) {
-      return res.status(400).json({ error: "Session expired. Please request a new OTP." });
+      return sendError(res, 'SESSION_EXPIRED', "Session expired. Please request a new OTP.", 400, req);
     }
 
     const isMatch = await bcrypt.compare(cleanOtp, user.resetOTP);
     if (!isMatch) {
-      return res.status(400).json({ error: "Security validation failed. Incorrect OTP." });
+      return sendError(res, 'INCORRECT_OTP', "Security validation failed. Incorrect OTP.", 400, req);
     }
 
     const salt = await bcrypt.genSalt(10);
@@ -704,7 +600,7 @@ router.post('/reset-password', resetLimiter, async (req, res) => {
 
     if (process.env.RESEND_API_KEY) {
       const loginLink = "https://thejackessentials.com/login"; 
-      const successHtml = getPasswordChangedTemplate(user.name, loginLink);
+      const successHtml = getPASSWORDChangedTemplate(user.name, loginLink);
       await resend.emails.send({
         from: 'Jack Essentials Security <updates@thejackessentials.com>',
         to: [user.email],
@@ -713,10 +609,10 @@ router.post('/reset-password', resetLimiter, async (req, res) => {
       });
     }
 
-    return res.json({ message: "Password successfully updated!" });
+    return sendSuccess(res, {}, "Password successfully updated!", 200, req);
   } catch (error) {
-    console.error("Reset Password Error:", error);
-    return res.status(500).json({ error: "Failed to reset password." });
+    logError("Reset Password Error:", error, { requestId: req.requestId });
+    return sendError(res, 'RESET_FAILED', "Failed to reset password.", 500, req);
   }
 });
 
@@ -727,7 +623,7 @@ router.post('/rotate-password', protect, async (req, res) => {
   try {
     const validationResult = rotatePasswordSchema.safeParse(req.body);
     if (!validationResult.success) {
-      return res.status(400).json({ success: false, error: "Validation failed", errors: validationResult.error.format() });
+      return sendError(res, 'VALIDATION_FAILED', "Validation failed", 400, req, validationResult.error.format());
     }
 
     const { currentPassword, newPassword } = validationResult.data;
@@ -735,7 +631,7 @@ router.post('/rotate-password', protect, async (req, res) => {
 
     const isMatch = await bcrypt.compare(currentPassword, user.password);
     if (!isMatch) {
-      return res.status(400).json({ error: "Incorrect current password." });
+      return sendError(res, 'INCORRECT_PASSWORD', "Incorrect current password.", 400, req);
     }
 
     const salt = await bcrypt.genSalt(10);
@@ -744,10 +640,10 @@ router.post('/rotate-password', protect, async (req, res) => {
     user.auditLogs.push({ action: 'PASSWORD_ROTATE', details: 'Password rotated successfully from account settings', ip: req.ip || 'Unknown' });
     await user.save();
 
-    return res.json({ success: true, message: "Password rotated successfully." });
+    return sendSuccess(res, {}, "Password rotated successfully.", 200, req);
   } catch (error) {
-    console.error("Password Rotation Error:", error);
-    return res.status(500).json({ error: "Failed to rotate password." });
+    logError("Password Rotation Error:", error, { requestId: req.requestId });
+    return sendError(res, 'ROTATE_FAILED', "Failed to rotate password.", 500, req);
   }
 });
 
@@ -767,15 +663,13 @@ router.post('/2fa/toggle', protect, async (req, res) => {
     user.auditLogs.push({ action: '2FA_TOGGLE', details: `2FA set to ${user.twoFactorEnabled}`, ip: req.ip || 'Unknown' });
     await user.save();
 
-    return res.json({ 
-      success: true, 
+    return sendSuccess(res, { 
       twoFactorEnabled: user.twoFactorEnabled, 
-      tempSecret: user.twoFactorSecret, 
-      message: `2FA is now ${user.twoFactorEnabled ? 'Enabled' : 'Disabled'}` 
-    });
+      tempSecret: user.twoFactorSecret 
+    }, `2FA is now ${user.twoFactorEnabled ? 'Enabled' : 'Disabled'}`, 200, req);
   } catch (error) {
-    console.error("2FA Toggle Error:", error);
-    return res.status(500).json({ error: "Failed to update 2FA settings." });
+    logError("2FA Toggle Error:", error, { requestId: req.requestId });
+    return sendError(res, '2FA_UPDATE_FAILED', "Failed to update 2FA settings.", 500, req);
   }
 });
 
@@ -785,19 +679,18 @@ router.post('/2fa/toggle', protect, async (req, res) => {
 router.get('/security/audit-center', protect, async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select('activeSessions loginHistory auditLogs twoFactorEnabled isLocked');
-    if (!user) return res.status(404).json({ error: "User not found" });
+    if (!user) return sendError(res, 'USER_NOT_FOUND', "User not found", 404, req);
 
-    return res.json({
-      success: true,
+    return sendSuccess(res, {
       twoFactorEnabled: user.twoFactorEnabled || false,
       isLocked: user.isLocked || false,
       activeSessions: user.activeSessions || [],
       loginHistory: user.loginHistory || [],
       auditLogs: user.auditLogs || []
-    });
+    }, "Security analytics fetched successfully", 200, req);
   } catch (error) {
-    console.error("Fetch Security Center Error:", error);
-    return res.status(500).json({ error: "Failed to fetch security analytics." });
+    logError("Fetch Security Center Error:", error, { requestId: req.requestId });
+    return sendError(res, 'AUDIT_FETCH_FAILED', "Failed to fetch security analytics.", 500, req);
   }
 });
 
@@ -812,10 +705,10 @@ router.post('/sessions/revoke', protect, async (req, res) => {
     user.auditLogs.push({ action: 'SESSION_REVOKE', details: `Revoked session ID: ${sessionId}`, ip: req.ip || 'Unknown' });
     await user.save();
 
-    return res.json({ success: true, message: "Session revoked successfully." });
+    return sendSuccess(res, {}, "Session revoked successfully.", 200, req);
   } catch (error) {
-    console.error("Revoke Session Error:", error);
-    return res.status(500).json({ error: "Failed to revoke session." });
+    logError("Revoke Session Error:", error, { requestId: req.requestId });
+    return sendError(res, 'REVOKE_FAILED', "Failed to revoke session.", 500, req);
   }
 });
 
@@ -833,10 +726,10 @@ router.post('/sessions/logout-all', protect, async (req, res) => {
     res.clearCookie('token', cookieOptions);
     res.clearCookie('admin_token', cookieOptions);
 
-    return res.json({ success: true, message: "All sessions terminated successfully." });
+    return sendSuccess(res, {}, "All sessions terminated successfully.", 200, req);
   } catch (error) {
-    console.error("Logout All Error:", error);
-    return res.status(500).json({ error: "Failed to terminate all sessions." });
+    logError("Logout All Error:", error, { requestId: req.requestId });
+    return sendError(res, 'LOGOUT_ALL_FAILED', "Failed to terminate all sessions.", 500, req);
   }
 });
 
@@ -847,13 +740,13 @@ router.post('/lock-account', async (req, res) => {
   try {
     const validationResult = lockAccountSchema.safeParse(req.body);
     if (!validationResult.success) {
-      return res.status(400).json({ success: false, error: "Validation failed", errors: validationResult.error.format() });
+      return sendError(res, 'VALIDATION_FAILED', "Validation failed", 400, req, validationResult.error.format());
     }
 
     const { token, newSecurityCode } = validationResult.data;
     const user = await User.findOne({ resetPasswordToken: token });
     if (!user || user.resetPasswordExpire < Date.now()) {
-      return res.status(400).json({ error: "Lock link is invalid or expired. Please login again." });
+      return sendError(res, 'INVALID_LOCK_TOKEN', "Lock link is invalid or expired. Please login again.", 400, req);
     }
 
     const salt = await bcrypt.genSalt(10);
@@ -868,10 +761,10 @@ router.post('/lock-account', async (req, res) => {
     user.auditLogs.push({ action: 'EMERGENCY_LOCK', details: 'Account manually locked via security alert link', ip: req.ip || 'Unknown' });
     await user.save();
     
-    return res.json({ success: true, message: "Account locked securely.", userId: user._id });
+    return sendSuccess(res, { userId: user._id }, "Account locked securely.", 200, req);
   } catch (error) { 
-    console.error("Lock Account Error:", error);
-    return res.status(500).json({ error: "Failed to lock account." }); 
+    logError("Lock Account Error:", error, { requestId: req.requestId });
+    return sendError(res, 'LOCK_FAILED', "Failed to lock account.", 500, req); 
   }
 });
 
@@ -882,7 +775,7 @@ router.post('/unlock-account', unlockLimiter, async (req, res) => {
   try {
     const validationResult = unlockAccountSchema.safeParse(req.body);
     if (!validationResult.success) {
-      return res.status(400).json({ success: false, error: "Validation failed", errors: validationResult.error.format() });
+      return sendError(res, 'VALIDATION_FAILED', "Validation failed", 400, req, validationResult.error.format());
     }
 
     const { email, pin } = validationResult.data;
@@ -890,21 +783,25 @@ router.post('/unlock-account', unlockLimiter, async (req, res) => {
 
     const lockoutStatus = checkUnlockLockout(cleanEmail);
     if (lockoutStatus.isLocked) {
-      return res.status(429).json({ 
-        error: `Too many incorrect PIN attempts. Account unlock is temporarily blocked. Try again after ${lockoutStatus.remainingTime} minutes.` 
-      });
+      return sendError(
+        res,
+        'UNLOCK_RATE_LIMIT_EXCEEDED',
+        `Too many incorrect PIN attempts. Account unlock is temporarily blocked. Try again after ${lockoutStatus.remainingTime} minutes.`,
+        429,
+        req
+      );
     }
 
     const user = await User.findOne({ email: cleanEmail }).select('+securityCode');
     if (!user || !user.isLocked) {
       recordFailedUnlock(cleanEmail);
-      return res.status(400).json({ error: "Invalid unlock request or account is not locked." });
+      return sendError(res, 'INVALID_UNLOCK', "Invalid unlock request or account is not locked.", 400, req);
     }
 
     const isMatch = await bcrypt.compare(pin, user.securityCode);
     if (!isMatch) {
       recordFailedUnlock(cleanEmail);
-      return res.status(400).json({ error: "Incorrect Security PIN." });
+      return sendError(res, 'INCORRECT_PIN', "Incorrect Security PIN.", 400, req);
     }
 
     clearFailedUnlock(cleanEmail);
@@ -921,29 +818,30 @@ router.post('/unlock-account', unlockLimiter, async (req, res) => {
     user.auditLogs.push({ action: 'ACCOUNT_UNLOCKED', details: 'Account successfully unlocked via Security PIN', ip });
     await user.save();
 
-    const token = generateSecureToken(user, sessionId);
+    const token = generateToken(user, sessionId);
     setAuthCookie(res, token, user.role);
 
-    return res.json({ success: true, message: "Account Unlocked Successfully!", user: formatSafeUser(user) });
+    return sendSuccess(res, { user: formatSafeUser(user) }, "Account Unlocked Successfully!", 200, req);
   } catch (error) { 
-    console.error("Unlock Account Critical Error:", error);
-    return res.status(500).json({ error: "Failed to process account unlock." }); 
+    logError("Unlock Account Critical Error:", error, { requestId: req.requestId });
+    return sendError(res, 'UNLOCK_CRITICAL_ERROR', "Failed to process account unlock.", 500, req); 
   }
 });
 
 // ==================================================
-// 10. CANONICAL LOGOUT ENDPOINT 🔥
+// 10. 🔥 TASK #53: CANONICAL LOGOUT ENDPOINT WITH SERVER-SIDE SESSION INVALIDATION
 // ==================================================
 router.post('/logout', protect, async (req, res) => {
   try {
     const targetSessionId = req.sessionId || (req.user && req.user.sessionId);
     if (req.user && targetSessionId) {
+      // Server-side session invalidation from User model's activeSessions
       await User.findByIdAndUpdate(req.user._id, {
         $pull: { activeSessions: { sessionId: targetSessionId } }
       });
     }
   } catch (e) {
-    console.error("Logout session pull error:", e);
+    logWarn("Logout session pull warning", { error: e.message });
   }
 
   const cookieOptions = {
@@ -957,32 +855,23 @@ router.post('/logout', protect, async (req, res) => {
   res.clearCookie('token', cookieOptions);
   res.clearCookie('admin_token', cookieOptions);
 
-  return res.json({ success: true, message: "Logged out successfully." });
+  return sendSuccess(res, {}, "Logged out successfully.", 200, req);
 });
 
 // ==================================================
-// 11. CANONICAL SESSION VALIDATION ENDPOINT (/auth/me) 🔥
+// 11. 🔥 TASK #52: CANONICAL SESSION VALIDATION ENDPOINT (/auth/me)
 // ==================================================
 router.get('/me', protect, async (req, res) => {
   try {
     const user = req.user; 
     if (!user || user.isActive === false) {
-      return res.status(401).json({ success: false, message: 'User not found or inactive' });
+      return sendError(res, 'USER_INACTIVE', 'User not found or inactive', 401, req);
     }
 
-    return res.status(200).json({
-      id: user._id || user.id,
-      name: user.name,
-      email: user.email,
-      role: user.role || 'customer',
-      isActive: user.isActive,
-      twoFactorEnabled: user.twoFactorEnabled || false,
-      recentlyViewed: user.recentlyViewed || [],
-      addresses: user.addresses || []
-    });
+    return res.status(200).json(formatSafeUser(user));
   } catch (error) {
-    console.error("Auth /me error:", error);
-    return res.status(500).json({ success: false, message: 'Server error during session validation' });
+    logError("Auth /me error:", error, { requestId: req.requestId });
+    return sendError(res, 'SESSION_VALIDATION_ERROR', 'Server error during session validation', 500, req);
   }
 });
 

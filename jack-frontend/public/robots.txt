@@ -1,0 +1,22 @@
+# ==========================================
+# 🤖 ROBOTS.TXT FOR JACK ESSENTIALS (TASKS #54 & #56)
+# ==========================================
+
+User-agent: *
+Allow: /
+Allow: /shop
+Allow: /product/
+Allow: /about
+Allow: /contact
+
+# 🔥 Block private, transactional, and admin routes from public search engine crawling
+Disallow: /admin
+Disallow: /admin/
+Disallow: /checkout
+Disallow: /cart
+Disallow: /account
+Disallow: /api/
+Disallow: /auth/
+
+# 🔥 Automatic Sitemap Reference for Google & Bing Indexing
+Sitemap: https://thejackessentials.com/sitemap.xml

@@ -1,5 +1,6 @@
 // services/shipping/providers/delhiveryProvider.js
 const { Setting } = require('../../../models');
+const { logInfo, logError } = require('../../../utils/logger'); // 🔥 TASK #45: Sanitized PII Logger
 
 class DelhiveryProvider {
   constructor() {
@@ -86,6 +87,13 @@ class DelhiveryProvider {
       pickup_location: { name: pickupHubName }
     };
 
+    // 🔥 TASK #45: Log sanitized request payload safely without exposing raw PII
+    logInfo("Delhivery AWB generation request dispatched", {
+      orderId: order.id || order._id,
+      pincode: cleanPincode,
+      itemCount: totalQuantity
+    });
+
     const urlEncodedData = new URLSearchParams();
     urlEncodedData.append("format", "json");
     urlEncodedData.append("data", JSON.stringify(payloadData));
@@ -123,15 +131,20 @@ class DelhiveryProvider {
         throw new Error("Delhivery responded successfully, but no AWB was found.");
       }
 
+      // 🔥 TASK #43: Return precise semantic shipping fields
       return {
         success: true,
         provider: 'delhivery',
-        waybill: waybillNo,
+        awb: waybillNo,
+        trackingNumber: waybillNo,
+        carrier: 'Delhivery Surface',
+        courier: 'Delhivery Express',
+        shipmentId: `shp_dlv_${Date.now()}`,
         providerOrderId: dData.packages?.[0]?.refnum || '',
         trackingStatus: 'Manifested'
       };
     } catch (error) {
-      console.error("Delhivery generateAWB Error:", error.message);
+      logError("Delhivery generateAWB Error", error, { orderId: order.id || order._id });
       throw error;
     } finally {
       clearTimeout(timeoutId);
@@ -155,7 +168,7 @@ class DelhiveryProvider {
         return { isHtml: true, htmlContent: rawText };
       }
     } catch (error) {
-      console.error("Delhivery getLabel Error:", error.message);
+      logError("Delhivery getLabel Error", error, { awb });
       throw error;
     } finally {
       clearTimeout(timeoutId);
@@ -197,7 +210,7 @@ class DelhiveryProvider {
         return { success: false, raw: rawText };
       }
     } catch (error) {
-      console.error("Delhivery schedulePickup Error:", error.message);
+      logError("Delhivery schedulePickup Error", error);
       throw error;
     } finally {
       clearTimeout(timeoutId);
@@ -222,7 +235,7 @@ class DelhiveryProvider {
         return { success: false, raw: rawText };
       }
     } catch (error) {
-      console.error("Delhivery cancelShipment Error:", error.message);
+      logError("Delhivery cancelShipment Error", error, { waybill });
       throw error;
     } finally {
       clearTimeout(timeoutId);
@@ -242,7 +255,7 @@ class DelhiveryProvider {
       const data = await response.json();
       return { status: data?.ShipmentData?.[0]?.Shipment?.Status?.Status || 'In Transit' };
     } catch (error) {
-      console.error("Delhivery trackShipment Error:", error.message);
+      logError("Delhivery trackShipment Error", error, { awb });
       throw error;
     } finally {
       clearTimeout(timeoutId);

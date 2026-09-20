@@ -1,30 +1,76 @@
-// backend/routes/authRoutes.js
+// routes/auth.js (or authRoutes.js)
 const express = require('express');
 const router = express.Router();
-const User = require('../models/User'); // Mongoose User model import
-const verifyToken = require('../middleware/verifyToken'); // Tera auth middleware
+const mongoose = require('mongoose');
+
+// ==========================================
+// 🔥 SMART IMPORTS (Prevents MODULE_NOT_FOUND Crashes)
+// ==========================================
+
+// 1. Smart Model Import
+let User;
+try {
+  const models = require('../models');
+  User = models.User;
+} catch (e) {
+  User = require('../models/User'); 
+}
+
+// 2. Smart Auth Middleware Import (Handles both names: verifyToken or protect)
+let verifyToken;
+try {
+  verifyToken = require('../middleware/verifyToken');
+} catch (e) {
+  const authMiddleware = require('../middleware/authMiddleware');
+  verifyToken = authMiddleware.protect || authMiddleware.verifyToken;
+}
+
+// 3. Smart Helper Imports
+let formatSafeUser = null;
+try {
+  const authService = require('../services/authService');
+  formatSafeUser = authService.formatSafeUser;
+} catch (e) {
+  console.warn("⚠️ authService not found, using fallback user formatting.");
+}
+
+const { sendSuccess, sendError } = require('../utils/apiResponse');
+const { logger } = require('../utils/logger');
+
+
+// ==========================================
+// 👤 AUTH ROUTES
+// ==========================================
 
 // @route   GET /api/auth/me
-// @desc    Get current authenticated user session data
-// @access  Private (Requires verifyToken)
+// @desc    Get current authenticated user session data (Task #52 & #53)
+// @access  Private (Requires verifyToken / HTTP-only cookie session)
 router.get('/me', verifyToken, async (req, res) => {
   try {
     // 🔥 UPGRADE: Safe fallback for different token payload structures
     const userId = req.user?.id || req.user?._id || req.user?.userId;
 
     if (!userId) {
-      return res.status(401).json({ success: false, message: 'Invalid token payload, user ID missing' });
+      return sendError(res, 'INVALID_TOKEN_PAYLOAD', 'Invalid token payload, user ID missing', 401, req);
     }
 
     // req.user token se decode hokar middleware se aaya hai
     const user = await User.findById(userId).select('-password');
     
-    if (!user || user.isActive === false) {
-      return res.status(401).json({ success: false, message: 'User not found or inactive' });
+    if (!user || user.isActive === false || user.isLocked) {
+      return sendError(res, 'USER_INACTIVE_OR_LOCKED', 'User not found, inactive, or locked', 401, req);
     }
 
-    res.status(200).json({
-      success: true,
+    // 🔥 TASK #53: Validate server-side active session if sessionId exists on request
+    if (req.sessionId && user.activeSessions && Array.isArray(user.activeSessions) && user.activeSessions.length > 0) {
+      const sessionExists = user.activeSessions.some(s => s.sessionId === req.sessionId);
+      if (!sessionExists) {
+        return sendError(res, 'SESSION_REVOKED', 'Session has been revoked or terminated. Please log in again.', 401, req);
+      }
+    }
+
+    // Return rich, safe user payload required by frontend and Task #52 boot checks
+    const safeUser = formatSafeUser ? formatSafeUser(user) : {
       id: user._id || user.id,
       name: user.name,
       email: user.email,
@@ -32,11 +78,15 @@ router.get('/me', verifyToken, async (req, res) => {
       role: user.role || 'customer',
       isActive: user.isActive,
       addresses: user.addresses || [],
-      avatar: user.avatar || user.profilePic || ''
-    });
+      avatar: user.avatar || user.profilePic || '',
+      recentlyViewed: user.recentlyViewed || [],
+      wishlist: user.wishlist || []
+    };
+
+    return sendSuccess(res, safeUser, 'Session validated successfully', 200, req);
   } catch (error) {
-    console.error("🔥 Error during session validation (/me):", error);
-    res.status(500).json({ success: false, message: 'Server error during session validation' });
+    logger.error("🔥 Error during session validation (/me):", { error: error.message, stack: error.stack, requestId: req.requestId });
+    return sendError(res, 'SESSION_VALIDATION_ERROR', 'Server error during session validation', 500, req);
   }
 });
 

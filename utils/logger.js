@@ -1,13 +1,15 @@
+// utils/logger.js
 const winston = require('winston');
 const crypto = require('crypto');
 
 // ==========================================
-// 🔐 DATA PROTECTION: LOG SANITIZATION HELPER
+// 🔐 DATA PROTECTION: LOG SANITIZATION HELPER (TASK #45)
 // ==========================================
 const SENSITIVE_KEYS = [
   'password', 'pass', 'token', 'jwt', 'otp', 'secret', 'key', 
   'creditcard', 'cardnumber', 'cvv', 'authorization', 'cookie', 
-  'pin', 'securitycode', 'rrn', 'aadhaar', 'mynumber'
+  'pin', 'securitycode', 'rrn', 'aadhaar', 'mynumber',
+  'phone', 'primaryphone', 'mobile', 'email', 'address', 'customerdetails', 'userdetails', 'shippingaddress'
 ];
 
 const sanitizeData = (data) => {
@@ -30,7 +32,7 @@ const sanitizeData = (data) => {
       const lowerKey = key.toLowerCase();
       // Check if key matches any sensitive category
       if (SENSITIVE_KEYS.some(sk => lowerKey.includes(sk))) {
-        clone[key] = '[REDACTED]';
+        clone[key] = '[REDACTED_PII]';
       } else if (typeof data[key] === 'object' && data[key] !== null) {
         clone[key] = sanitizeData(data[key]);
       } else {
@@ -63,12 +65,12 @@ const logger = winston.createLogger({
 });
 
 /**
- * Request tracing middleware to track latency, status, userId, requestId, and route
+ * 🔥 TASK #50: Request tracing middleware to track latency, status, userId, requestId, route, and errorCode
  */
 const requestLoggerMiddleware = (req, res, next) => {
   const start = Date.now();
   
-  // 🔥 UPGRADE: Use crypto.randomUUID() for guaranteed unique request tracking
+  // Use crypto.randomUUID() for guaranteed unique request tracking
   const requestId = req.headers['x-request-id'] || req.headers['X-Request-ID'] || crypto.randomUUID();
   
   req.requestId = requestId;
@@ -77,13 +79,13 @@ const requestLoggerMiddleware = (req, res, next) => {
   res.on('finish', () => {
     const route = req.originalUrl || req.url;
     
-    // 🔥 UPGRADE: Prevent log pollution by ignoring frequent automated health checks
+    // Prevent log pollution by ignoring frequent automated health checks
     if (route === '/health' || route === '/ping' || route === '/') return;
 
     const latency = Date.now() - start;
     const userId = req.user?._id || req.user?.id || req.user?.userId || 'anonymous';
     
-    // 🔥 UPGRADE: Capture IP and Payload size for fraud monitoring and performance analytics
+    // Capture IP and Payload size for fraud monitoring and performance analytics
     const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';
     const contentLength = res.get('Content-Length') || 0;
     
@@ -115,6 +117,7 @@ const logError = (message, error = {}, meta = {}) => {
     message,
     error: error instanceof Error ? error.message : (error || 'Unknown Error'),
     stack: error instanceof Error ? error.stack : null,
+    errorCode: meta.errorCode || error?.code || 'INTERNAL_SERVER_ERROR',
     ...meta
   }));
 };

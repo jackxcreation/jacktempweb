@@ -6,6 +6,7 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto'); // 🔥 ADDED FOR SECURE OTP
 const rateLimit = require('express-rate-limit'); // 🔥 ADDED FOR BRUTE FORCE PROTECTION
 const User = require('../models/User');
+const { JWT_SECRET } = require('../config/env'); // 🔥 STRICT ZERO-FALLBACK JWT SECRET IMPORT
 
 // ==========================================
 // 📧 SECURE EMAIL TRANSPORTER
@@ -152,16 +153,17 @@ router.post('/verify-otp', otpVerifyLimiter, async (req, res) => {
       await user.save();
     }
 
-    // 🔥 SECURITY FIX: Removed Fallback Secret. If env is missing, it MUST crash safely.
-    if (!process.env.JWT_SECRET) {
+    // 🔥 ZERO-FALLBACK CHECK VIA CONFIG/ENV
+    if (!JWT_SECRET) {
       console.error("🚨 CRITICAL ALERT: JWT_SECRET IS MISSING IN ENVIRONMENT VARIABLES!");
       return res.status(500).json({ error: "Server Configuration Error" });
     }
 
-    // Generate Secure JWT Token
+    // Generate Secure JWT Token with session ID tracking
+    const sessionId = crypto.randomBytes(16).toString('hex');
     const token = jwt.sign(
-      { id: user._id, role: user.role }, 
-      process.env.JWT_SECRET, 
+      { id: user._id, role: user.role, sid: sessionId }, 
+      JWT_SECRET, 
       { expiresIn: '7d' }
     );
 

@@ -10,24 +10,9 @@ export const useUser = () => useContext(UserContext);
 const socket = io(API_URL ? API_URL.replace('/api', '') : 'http://localhost:5000', { autoConnect: false, withCredentials: true });
 
 export const UserProvider = ({ children }) => {
-  const [user, setUser] = useState(() => {
-    try {
-      const storedUser = localStorage.getItem('jack_user');
-      return storedUser ? JSON.parse(storedUser) : null;
-    } catch (e) {
-      return null;
-    }
-  });
-
-  const [recentlyViewed, setRecentlyViewed] = useState(() => {
-    try {
-      const storedUser = JSON.parse(localStorage.getItem('jack_user'));
-      return storedUser ? storedUser.recentlyViewed || [] : [];
-    } catch (e) {
-      return [];
-    }
-  });
-
+  // 🔥 TASK #51 & #52: Removed insecure localStorage user parsing on initial boot. Start with null.
+  const [user, setUser] = useState(null);
+  const [recentlyViewed, setRecentlyViewed] = useState([]);
   const [orders, setOrders] = useState([]);
   const [wishlist, setWishlist] = useState([]); 
   const [isLoadingSession, setIsLoadingSession] = useState(true);
@@ -35,54 +20,42 @@ export const UserProvider = ({ children }) => {
   // 🔥 PHASE 4 FIX: Consolidated Admin State into single Auth Context
   const [isAdmin, setIsAdmin] = useState(false);
 
-  // 🔥 UPGRADE: Multi-key token retrieval matching rest of the enterprise app
-  const getToken = () => {
-    if (typeof window === 'undefined') return null;
-    return localStorage.getItem('token') || 
-           localStorage.getItem('adminToken') || 
-           localStorage.getItem('jack_token') || 
-           localStorage.getItem('admin_token');
-  };
+  // 🔥 TASK #51: Auth is now handled purely via HTTP-only secure cookies (`credentials: 'include'`). 
+  // No localStorage token extraction needed. Kept as a dummy helper for legacy compatibility if required.
+  const getToken = () => null;
 
-  // 🔥 CLEAN SESSION VALIDATION VIA /auth/me AT STARTUP
+  // 🔥 TASK #52: CLEAN SESSION VALIDATION VIA /auth/me AT STARTUP USING HTTP-ONLY COOKIES
   useEffect(() => {
     const verifyUserSession = async () => {
       try {
-        const token = getToken();
-        if (!token) {
-          setIsLoadingSession(false);
-          return;
-        }
-
         const res = await fetch(`${API_URL}/auth/me`, {
           method: 'GET',
           headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}` 
+            'Content-Type': 'application/json'
           },
-          credentials: 'include' 
+          credentials: 'include' // 🔥 Crucial for sending HTTP-only cookies
         });
 
         if (res.ok) {
-          const userData = await res.json();
+          const json = await res.json();
+          // 🔥 SMART EXTRACTOR: Handle standardized API response format { success: true, data: {...} }
+          const userData = json.data || json; 
+
           setUser(userData);
           setRecentlyViewed(userData.recentlyViewed || []);
           
           // 🔥 PHASE 4 FIX: Automatically identify if user is Admin
-          setIsAdmin(userData.role === 'admin' || userData.role === 'manager');
-          
-          localStorage.setItem('jack_user', JSON.stringify(userData));
+          setIsAdmin(userData.role === 'admin' || userData.role === 'manager' || userData.role === 'super_admin');
         } else {
           // Session invalid or expired
-          localStorage.removeItem('jack_user');
-          localStorage.removeItem('token');
-          localStorage.removeItem('adminToken'); // Clear legacy token if exists
-          localStorage.removeItem('jack_token');
           setUser(null);
           setIsAdmin(false);
+          setRecentlyViewed([]);
         }
       } catch (error) {
         console.error("Session verification network error:", error);
+        setUser(null);
+        setIsAdmin(false);
       } finally {
         setIsLoadingSession(false);
       }
@@ -95,7 +68,7 @@ export const UserProvider = ({ children }) => {
     if (isLoadingSession) return; 
 
     const userId = user?.id || user?._id;
-    if (userId && getToken()) {
+    if (userId) {
       fetchUserOrders(userId);
       syncRecentlyViewed(userId);
       fetchWishlist(); 
@@ -107,14 +80,14 @@ export const UserProvider = ({ children }) => {
       const res = await fetch(`${API_URL}/wishlist`, {
         method: 'GET',
         headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getToken()}` 
+          'Content-Type': 'application/json'
         },
-        credentials: 'include'
+        credentials: 'include' // 🔥 HTTP-only cookie authentication
       });
-      const data = await res.json();
-      if (data.success) {
-        setWishlist(data.wishlist || []);
+      const json = await res.json();
+      if (json.success || res.ok) {
+        const wishlistData = json.data?.wishlist || json.data || json.wishlist || [];
+        setWishlist(wishlistData);
       }
     } catch (err) {
       console.error("Failed to load wishlist", err);
@@ -126,16 +99,17 @@ export const UserProvider = ({ children }) => {
       const res = await fetch(`${API_URL}/wishlist/toggle`, {
         method: 'POST',
         headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getToken()}`
+          'Content-Type': 'application/json'
         },
         credentials: 'include',
         body: JSON.stringify({ productId })
       });
-      const data = await res.json();
-      if (data.success) {
-        setWishlist(data.wishlist || []);
-        return data.isAdded;
+      const json = await res.json();
+      if (json.success || res.ok) {
+        const wishlistData = json.data?.wishlist || json.data || json.wishlist || [];
+        const isAdded = json.data?.isAdded !== undefined ? json.data.isAdded : json.isAdded;
+        setWishlist(wishlistData);
+        return isAdded;
       }
     } catch (err) {
       console.error("Wishlist toggle error", err);
@@ -147,27 +121,23 @@ export const UserProvider = ({ children }) => {
       const res = await fetch(`${API_URL}/users/get-valid-recently-viewed/${userId}`, {
         method: 'GET',
         headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getToken()}`
+          'Content-Type': 'application/json'
         },
         credentials: 'include' 
       });
       if (res.ok) {
-        const validProducts = await res.json();
+        const json = await res.json();
+        const validProducts = json.data || json;
         setRecentlyViewed(validProducts);
-        const updatedUser = { ...user, recentlyViewed: validProducts };
-        localStorage.setItem('jack_user', JSON.stringify(updatedUser));
+        setUser(prev => prev ? { ...prev, recentlyViewed: validProducts } : null);
       }
     } catch (error) { console.error("Sync Recently Viewed Error:", error); }
   };
 
   const connectSecureSocket = () => {
-    const token = getToken();
-    if (token) {
-      socket.auth = { token }; 
-      if (!socket.connected) {
-        socket.connect();
-      }
+    // Socket automatically transmits cookies if withCredentials is true
+    if (!socket.connected) {
+      socket.connect();
     }
   };
 
@@ -177,31 +147,22 @@ export const UserProvider = ({ children }) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
-        credentials: 'include' 
+        credentials: 'include' // 🔥 Server sets HTTP-only secure cookie
       });
-      const data = await res.json();
-      if (res.ok) {
-        const authToken = data.token || data.accessToken;
-        if (authToken) {
-          localStorage.setItem('token', authToken);
-          localStorage.setItem('jack_token', authToken);
-        }
-
-        // 🔥 PHASE 4 FIX: Centralized Admin Auth Handshake
-        const userIsAdmin = data.user.role === 'admin' || data.user.role === 'manager';
-        if (userIsAdmin && authToken) {
-          localStorage.setItem('adminToken', authToken); // Maintained for backward compatibility in Admin panel
-        }
+      const json = await res.json();
+      if (res.ok || json.success) {
+        // 🔥 SMART EXTRACTOR
+        const loggedInUser = json.data?.user || json.data || json.user;
+        const userIsAdmin = loggedInUser.role === 'admin' || loggedInUser.role === 'manager' || loggedInUser.role === 'super_admin';
+        
         setIsAdmin(userIsAdmin);
-
-        setUser(data.user);
-        setRecentlyViewed(data.user.recentlyViewed || []);
-        localStorage.setItem('jack_user', JSON.stringify(data.user));
+        setUser(loggedInUser);
+        setRecentlyViewed(loggedInUser.recentlyViewed || []);
         
         connectSecureSocket();
         return { success: true };
       }
-      return { success: false, message: data.error || data.message || "Login failed" }; 
+      return { success: false, message: json.error || json.message || "Login failed" }; 
     } catch (error) { return { success: false, message: "Server connection error" }; }
   };
 
@@ -214,29 +175,28 @@ export const UserProvider = ({ children }) => {
         body: JSON.stringify({ name, email, googleId: firebaseId }),
         credentials: 'include' 
       });
-      const data = await res.json();
-      if (res.ok) {
-        const authToken = data.token || data.accessToken;
-        if (authToken) {
-          localStorage.setItem('token', authToken);
-          localStorage.setItem('jack_token', authToken);
-        }
-        setUser(data.user);
-        setIsAdmin(data.user.role === 'admin' || data.user.role === 'manager');
-        setRecentlyViewed(data.user.recentlyViewed || []);
-        localStorage.setItem('jack_user', JSON.stringify(data.user));
+      const json = await res.json();
+      if (res.ok || json.success) {
+        const loggedInUser = json.data?.user || json.data || json.user;
+        setUser(loggedInUser);
+        setIsAdmin(loggedInUser.role === 'admin' || loggedInUser.role === 'manager' || loggedInUser.role === 'super_admin');
+        setRecentlyViewed(loggedInUser.recentlyViewed || []);
+        
         connectSecureSocket();
-        return { success: true, isNewUser: data.isNewUser }; 
+        return { success: true, isNewUser: json.data?.isNewUser || json.isNewUser }; 
       }
-      return { success: false, message: data.message || "Social login failed" };
+      return { success: false, message: json.message || "Social login failed" };
     } catch (error) { return { success: false, message: "Server connection error" }; }
   };
 
+  // ==========================================
+  // 🔥 TASK #53: LOGOUT WITH SERVER SESSION INVALIDATION
+  // ==========================================
   const logoutUser = async () => {
     try {
       await fetch(`${API_URL}/auth/logout`, {
         method: 'POST',
-        credentials: 'include'
+        credentials: 'include' // Tells server to destroy the HTTP-only cookie session
       });
     } catch (err) {
       console.error("Logout API error:", err);
@@ -247,10 +207,13 @@ export const UserProvider = ({ children }) => {
     setOrders([]);
     setWishlist([]);
     setRecentlyViewed([]);
+    
+    // Clear any legacy items if accidentally present
     localStorage.removeItem('jack_user');
     localStorage.removeItem('token'); 
     localStorage.removeItem('adminToken');
     localStorage.removeItem('jack_token');
+
     if (socket.connected) {
       socket.disconnect(); 
     }
@@ -261,14 +224,16 @@ export const UserProvider = ({ children }) => {
       const res = await fetch(`${API_URL}/orders/user/${userId}`, {
         method: 'GET',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getToken()}`
+          'Content-Type': 'application/json'
         },
         credentials: 'include' 
       });
       if (!res.ok) throw new Error("Fetch failed");
-      const data = await res.json();
-      setOrders(Array.isArray(data) ? data : (data.orders || []));
+      const json = await res.json();
+      
+      // 🔥 SMART EXTRACTOR for Orders Array
+      const orderList = json.data?.orders || json.data || json.orders || (Array.isArray(json) ? json : []);
+      setOrders(Array.isArray(orderList) ? orderList : []);
     } catch (error) { console.error("Error fetching orders:", error); }
   };
 
@@ -293,27 +258,28 @@ export const UserProvider = ({ children }) => {
       const res = await fetch(`${API_URL}/orders`, {
         method: 'POST',
         headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getToken()}`
+          'Content-Type': 'application/json'
         },
         credentials: 'include', 
         body: JSON.stringify(orderData)
       });
       
-      const newOrder = await res.json();
+      const json = await res.json();
       
-      if (!res.ok) {
-        console.error("Order API Error:", newOrder);
+      if (!res.ok || !json.success) {
+        console.error("Order API Error:", json);
         throw new Error(
-          newOrder.error || 
-          newOrder.message || 
-          (newOrder.errors ? JSON.stringify(newOrder.errors) : null) || 
+          json.error || 
+          json.message || 
+          (json.errors ? JSON.stringify(json.errors) : null) || 
           "Failed to place order"
         );
       }
       
-      setOrders(prevOrders => [newOrder, ...prevOrders]); 
-      return { success: true, order: newOrder };
+      // 🔥 SMART EXTRACTOR for new order object
+      const finalOrder = json.data?.order || json.data || json.order || json;
+      setOrders(prevOrders => [finalOrder, ...prevOrders]); 
+      return { success: true, order: finalOrder };
     } catch (error) { 
       console.error("Order Place Error:", error);
       return { success: false, error: error.message }; 
@@ -335,15 +301,12 @@ export const UserProvider = ({ children }) => {
       await fetch(`${API_URL}/users/${userId}`, {
         method: 'PUT',
         headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getToken()}`
+          'Content-Type': 'application/json'
         },
         credentials: 'include',
         body: JSON.stringify({ recentlyViewed: newHistory })
       });
-      const updatedUser = { ...user, recentlyViewed: newHistory };
-      setUser(updatedUser);
-      localStorage.setItem('jack_user', JSON.stringify(updatedUser));
+      setUser(prev => prev ? { ...prev, recentlyViewed: newHistory } : null);
     } catch (error) { console.error("Error updating history:", error); }
   };
 
@@ -355,17 +318,16 @@ export const UserProvider = ({ children }) => {
       const res = await fetch(`${API_URL}/users/${userId}`, {
         method: 'PUT',
         headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getToken()}`
+          'Content-Type': 'application/json'
         },
         credentials: 'include',
         body: JSON.stringify(updatedData)
       });
-      const data = await res.json();
+      const json = await res.json();
       if (!res.ok) return false;
-      const newData = { ...user, ...data };
-      setUser(newData);
-      localStorage.setItem('jack_user', JSON.stringify(newData));
+      
+      const updatedUser = json.data || json;
+      setUser(prev => prev ? { ...prev, ...updatedUser } : null);
       return true;
     } catch (error) { return false; }
   };
@@ -380,7 +342,7 @@ export const UserProvider = ({ children }) => {
     if (isLoadingSession) return;
 
     const userId = user?.id || user?._id;
-    if (userId && getToken()) {
+    if (userId) {
       connectSecureSocket(); 
       socket.emit('join_user_room', userId);
       

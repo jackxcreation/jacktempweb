@@ -7,77 +7,55 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken'); // 🔥 ADDED FOR AUTHENTICATION
 const { Resend } = require('resend');
-const rateLimit = require('express-rate-limit'); // 🔥 ADDED FOR OTP BRUTE-FORCE PROTECTION
-const { getLoginAlertTemplate, getWelcomeTemplate } = require('../emailTemplates'); 
 const { z } = require('zod'); // 🔥 ADDED: Zod for strict input validation
+const { userUpdateValidator } = require('../validators/user'); // 🔥 STRICT WHITELIST VALIDATOR FOR MASS-ASSIGNMENT PREVENTION
+const { JWT_SECRET } = require('../config/env'); // 🔥 STRICT ZERO-FALLBACK JWT SECRET IMPORT
+const { generateAndStoreOtp, verifyOtp, issueVerificationToken } = require('../services/otpService'); // 🔥 SECURE DB-BACKED OTP SERVICE & TOKEN ISSUER
+const { otpSendLimiter, otpVerifyLimiter } = require('../middleware/rateLimit'); // 🔥 TASK #14: IP & Abusive Throttling Limiters
+
+// 🔥 TASK #49 & #50: Standardized API response helpers and structured logger
+const { sendSuccess, sendError } = require('../utils/apiResponse');
+const { logger, logInfo, logError, logWarn } = require('../utils/logger');
 
 // 🚨 IMPORT SECURE MIDDLEWARES
 const { protect, admin } = require('../middleware/authMiddleware');
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-const otpStore = new Map();
-
-// ==========================================
-// 🔥 PRO FEATURE: MEMORY LEAK CLEANUP INTERVAL FOR OTP
-// ==========================================
-setInterval(() => {
-  const now = Date.now();
-  for (const [email, record] of otpStore.entries()) {
-    if (now > record.expiresAt) {
-      otpStore.delete(email);
-    }
-  }
-}, 15 * 60 * 1000); // Run every 15 minutes
-
-// 🔥 Generate Secure JWT Token Helper
+// 🔥 Generate Secure JWT Token Helper (Zero Fallback)
 const generateToken = (id) => {
-  if (!process.env.JWT_SECRET) {
-    console.error("🚨 CRITICAL: JWT_SECRET is missing in .env!");
-    throw new Error("Server Configuration Error");
+  if (!JWT_SECRET) {
+    logError("🚨 CRITICAL: JWT_SECRET is missing!");
+    throw new Error("Server Configuration Error: JWT_SECRET is required");
   }
-  return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '30d' });
+  return jwt.sign({ id }, JWT_SECRET, { expiresIn: '30d' });
 };
 
 // ==========================================
-// 🛡️ ZOD VALIDATION SCHEMAS FOR USERS & AUTH
+// 🛡️ ZOD VALIDATION SCHEMAS FOR USERS & AUTH (TASK #48)
 // ==========================================
 const otpSchema = z.object({
   email: z.string().email("Invalid email address"),
   otp: z.string().regex(/^\d{6}$/, "Invalid OTP format. Must be 6 digits").optional()
 });
 
-const userUpdateSchema = z.object({
-  name: z.string().min(2).max(100).optional(),
-  mobile: z.string().regex(/^\d{10}$/).optional(),
-  addresses: z.array(z.any()).optional(),
-  role: z.string().optional()
+const registerSchema = z.object({
+  name: z.string().min(2, "Name is required").max(100, "Name is too long"),
+  email: z.string().email("Invalid email address"),
+  password: z.string().min(6, "Password must be at least 6 characters long"),
+  phone: z.string().regex(/^\d{10}$/, "Invalid mobile number format").optional(),
+  verificationToken: z.string().min(1, "Verification token is required. Complete OTP verification first.")
 });
 
 // ==========================================
-// 🛡️ ANTI-BRUTE-FORCE OTP LIMITERS
-// ==========================================
-const otpSendLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 3, // Limit each IP to 3 OTP requests per window
-  message: { message: "Too many OTP requests from this IP, please try again after 15 minutes." }
-});
-
-const otpVerifyLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000, // 5 minutes
-  max: 5, // Max 5 wrong attempts
-  message: { message: "Too many failed attempts. Please request a new OTP." }
-});
-
-// ==========================================
-// 🔓 1. PUBLIC APIs (OTP & Verification)
+// 🔓 1. PUBLIC APIs (OTP, Verification & Mandatory Registration Flow)
 // ==========================================
 
 router.post('/api/public/send-otp', otpSendLimiter, async (req, res) => {
   try {
     const validationResult = otpSchema.pick({ email: true }).safeParse(req.body);
     if (!validationResult.success) {
-      return res.status(400).json({ success: false, message: "Invalid email format", errors: validationResult.error.format() });
+      return sendError(res, 'VALIDATION_FAILED', "Invalid email format", 400, req, validationResult.error.format());
     }
 
     const { email } = validationResult.data;
@@ -85,15 +63,16 @@ router.post('/api/public/send-otp', otpSendLimiter, async (req, res) => {
 
     const existingUser = await User.findOne({ email: cleanEmail });
     if (existingUser) {
-      return res.status(400).json({ message: "User already available. Please login." });
+      return sendError(res, 'USER_ALREADY_EXISTS', "User already available. Please login.", 400, req);
     }
 
-    const otp = crypto.randomInt(100000, 999999).toString();
+    // 🔥 Secure OTP generation via otpService (60s cooldown & max 5 OTPs/hour enforced)
+    const otpResult = await generateAndStoreOtp(cleanEmail);
+    if (!otpResult.success) {
+      return sendError(res, otpResult.code || 'OTP_LIMIT_EXCEEDED', otpResult.message, 429, req);
+    }
 
-    otpStore.set(cleanEmail, {
-      otp,
-      expiresAt: Date.now() + 5 * 60 * 1000 
-    });
+    const otp = otpResult.otp;
 
     const htmlContent = `
       <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px;">
@@ -113,10 +92,10 @@ router.post('/api/public/send-otp', otpSendLimiter, async (req, res) => {
       });
     }
 
-    return res.status(200).json({ message: "OTP sent successfully!" });
+    return sendSuccess(res, {}, "OTP sent successfully!", 200, req);
   } catch (error) {
-    console.error("Send OTP Error:", error);
-    return res.status(500).json({ message: "Server error while sending OTP" });
+    logError("Send OTP Error:", error, { requestId: req.requestId });
+    return sendError(res, 'OTP_SEND_FAILED', "Server error while sending OTP", 500, req);
   }
 });
 
@@ -124,31 +103,87 @@ router.post('/api/public/verify-otp', otpVerifyLimiter, async (req, res) => {
   try {
     const validationResult = otpSchema.safeParse(req.body);
     if (!validationResult.success) {
-      return res.status(400).json({ success: false, message: "Validation failed", errors: validationResult.error.format() });
+      return sendError(res, 'VALIDATION_FAILED', "Validation failed", 400, req, validationResult.error.format());
     }
 
     const { email, otp } = validationResult.data;
     const cleanEmail = email.toLowerCase().trim();
-    const record = otpStore.get(cleanEmail);
 
-    if (!record) {
-      return res.status(400).json({ message: "No OTP requested or it has expired." });
-    }
-    
-    if (Date.now() > record.expiresAt) {
-      otpStore.delete(cleanEmail); 
-      return res.status(400).json({ message: "OTP has expired. Please resend." });
-    }
-    
-    if (record.otp !== String(otp).trim()) {
-      return res.status(400).json({ message: "Invalid OTP." });
+    // 🔥 Secure verification via otpService (bcrypt compare + max 5 attempts invalidation)
+    const verifyResult = await verifyOtp(cleanEmail, otp);
+    if (!verifyResult.success) {
+      return sendError(res, verifyResult.code || 'OTP_VERIFY_FAILED', verifyResult.message, 400, req);
     }
 
-    otpStore.delete(cleanEmail);
-    return res.status(200).json({ message: "OTP verified successfully." });
+    // 🔥 Task #15: Issue short-lived verification token upon successful OTP verification
+    const verificationToken = issueVerificationToken(cleanEmail);
+
+    return sendSuccess(res, { verificationToken }, "OTP verified successfully.", 200, req);
   } catch (error) {
-    console.error("Verify OTP Error:", error);
-    return res.status(500).json({ message: "Server error during verification" });
+    logError("Verify OTP Error:", error, { requestId: req.requestId });
+    return sendError(res, 'VERIFICATION_FAILED', "Server error during verification", 500, req);
+  }
+});
+
+// 🔥 Task #15: Mandatory Registration Flow (Send OTP ➔ Verify OTP ➔ Issue Token ➔ Register)
+router.post('/api/public/register', otpVerifyLimiter, async (req, res) => {
+  try {
+    const validationResult = registerSchema.safeParse(req.body);
+    if (!validationResult.success) {
+      return sendError(res, 'VALIDATION_FAILED', "Validation failed", 400, req, validationResult.error.format());
+    }
+
+    const { name, email, password, phone, verificationToken } = validationResult.data;
+    const cleanEmail = email.toLowerCase().trim();
+
+    // 1. Strictly verify short-lived verification token
+    try {
+      const decoded = jwt.verify(verificationToken, JWT_SECRET);
+      if (!decoded.verified || decoded.identifier !== cleanEmail || decoded.purpose !== 'registration') {
+        return sendError(res, 'INVALID_VERIFICATION_TOKEN', "Invalid or expired verification session. Please verify OTP again.", 400, req);
+      }
+    } catch (err) {
+      return sendError(res, 'TOKEN_EXPIRED', "Verification token expired or tampered. Please restart registration.", 400, req);
+    }
+
+    // 2. Check if user already exists
+    const existingUser = await User.findOne({ email: cleanEmail });
+    if (existingUser) {
+      return sendError(res, 'EMAIL_REGISTERED', "Email is already registered. Please login.", 400, req);
+    }
+
+    // 3. Hash password and create user securely
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    const user = new User({
+      name,
+      email: cleanEmail,
+      password: hashedPassword,
+      phone: phone || undefined,
+      role: 'customer',
+      isPhoneVerified: !!phone,
+      activeSessions: [],
+      auditLogs: [{ action: 'REGISTER', details: 'User registered successfully via verified OTP token', ip: req.ip || 'Unknown' }]
+    });
+
+    await user.save();
+
+    // 4. Issue Auth Token
+    const token = generateToken(user._id);
+
+    return sendSuccess(res, {
+      token,
+      user: {
+        id: user._id.toString(),
+        name: user.name,
+        email: user.email,
+        role: user.role
+      }
+    }, "Welcome to Jack Essentials! Account created successfully.", 201, req);
+  } catch (error) {
+    logError("Secure Registration Error:", error, { requestId: req.requestId });
+    return sendError(res, 'REGISTRATION_FAILED', "Internal server error during registration.", 500, req);
   }
 });
 
@@ -160,10 +195,10 @@ router.post('/api/public/verify-otp', otpVerifyLimiter, async (req, res) => {
 router.get('/api/users', protect, admin, async (req, res) => {
   try {
     const users = await User.find({}, 'name email createdAt role').lean();
-    return res.json(users);
+    return sendSuccess(res, users, "Users fetched successfully", 200, req);
   } catch (error) { 
-    console.error("Fetch Users Error:", error);
-    return res.status(500).json({ message: "Error fetching users" }); 
+    logError("Fetch Users Error:", error, { requestId: req.requestId });
+    return sendError(res, 'SERVER_ERROR', "Error fetching users", 500, req); 
   }
 });
 
@@ -174,12 +209,12 @@ router.get('/api/users/:id/360-profile', protect, admin, async (req, res) => {
   try {
     const userId = req.params.id;
     if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({ success: false, message: "Invalid Customer ID format" });
+      return sendError(res, 'INVALID_USER_ID', "Invalid Customer ID format", 400, req);
     }
 
     const user = await User.findById(userId).populate('wishlist').populate('recentlyViewed').lean();
     if (!user) {
-      return res.status(404).json({ success: false, message: "Customer not found" });
+      return sendError(res, 'USER_NOT_FOUND', "Customer not found", 404, req);
     }
 
     // Fetch customer orders
@@ -211,8 +246,7 @@ router.get('/api/users/:id/360-profile', protect, admin, async (req, res) => {
     }
     timeline.sort((a, b) => new Date(b.date) - new Date(a.date));
 
-    return res.json({
-      success: true,
+    return sendSuccess(res, {
       profile: user,
       metrics: {
         lifetimeValue: `₹${(lifetimeValuePaise / 100).toLocaleString('en-IN')}`,
@@ -227,10 +261,10 @@ router.get('/api/users/:id/360-profile', protect, admin, async (req, res) => {
       tickets,
       reviews,
       timeline
-    });
+    }, "Customer 360 profile fetched successfully", 200, req);
   } catch (error) {
-    console.error("Customer 360 Error:", error);
-    return res.status(500).json({ success: false, message: "Failed to generate Customer 360 profile" });
+    logError("Customer 360 Error:", error, { requestId: req.requestId });
+    return sendError(res, 'SERVER_ERROR', "Failed to generate Customer 360 profile", 500, req);
   }
 });
 
@@ -241,22 +275,22 @@ router.get('/api/users/verify-lock-link', async (req, res) => {
   try {
     const { token } = req.query;
     if (!token) {
-      return res.json({ valid: false, reason: 'expired' });
+      return res.json({ valid: false, reason: 'expired', requestId: req.requestId });
     }
 
     const user = await User.findOne({ resetPasswordToken: token });
     if (!user || user.resetPasswordExpire < Date.now()) {
-      return res.json({ valid: false, reason: 'expired' });
+      return res.json({ valid: false, reason: 'expired', requestId: req.requestId });
     }
     
     if (user.isLocked) {
-      return res.json({ valid: false, reason: 'used' });
+      return res.json({ valid: false, reason: 'used', requestId: req.requestId });
     }
 
-    return res.json({ valid: true, email: user.email });
+    return res.json({ valid: true, email: user.email, requestId: req.requestId });
   } catch (error) {
-    console.error("Verify Lock Link Error:", error);
-    return res.json({ valid: false, reason: 'expired' });
+    logError("Verify Lock Link Error:", error, { requestId: req.requestId });
+    return res.json({ valid: false, reason: 'expired', requestId: req.requestId });
   }
 });
 
@@ -267,12 +301,12 @@ router.post('/api/users/lock-account', async (req, res) => {
   try {
     const { token, newSecurityCode } = req.body;
     if (!token || !newSecurityCode) {
-      return res.status(400).json({ message: "Token and new Security PIN are required." });
+      return sendError(res, 'MISSING_FIELDS', "Token and new Security PIN are required.", 400, req);
     }
 
     const user = await User.findOne({ resetPasswordToken: token });
     if (!user || user.resetPasswordExpire < Date.now()) {
-      return res.status(400).json({ message: "Link has expired. Please login again to get a new link." });
+      return sendError(res, 'TOKEN_EXPIRED', "Link has expired. Please login again to get a new link.", 400, req);
     }
 
     const salt = await bcrypt.genSalt(10);
@@ -284,10 +318,10 @@ router.post('/api/users/lock-account', async (req, res) => {
     user.resetPasswordExpire = undefined;
     await user.save();
 
-    return res.json({ success: true, message: "Account locked securely.", userId: user._id });
+    return sendSuccess(res, { userId: user._id }, "Account locked securely.", 200, req);
   } catch (error) { 
-    console.error("Lock Account Error:", error);
-    return res.status(500).json({ message: "Failed to lock account." }); 
+    logError("Lock Account Error:", error, { requestId: req.requestId });
+    return sendError(res, 'SERVER_ERROR', "Failed to lock account.", 500, req); 
   }
 });
 
@@ -298,13 +332,13 @@ router.post('/api/users/unlock-account', async (req, res) => {
   try {
     const { email, securityCode } = req.body;
     if (!email || !securityCode) {
-      return res.status(400).json({ error: "Email and security PIN are required." });
+      return sendError(res, 'MISSING_FIELDS', "Email and security PIN are required.", 400, req);
     }
 
     const cleanEmail = email.toLowerCase().trim();
     const user = await User.findOne({ email: cleanEmail }).select('+securityCode');
     if (!user || !user.isLocked) {
-      return res.status(400).json({ error: "Account is not locked or not found." });
+      return sendError(res, 'NOT_LOCKED', "Account is not locked or not found.", 400, req);
     }
 
     let isMatch = false;
@@ -315,61 +349,52 @@ router.post('/api/users/unlock-account', async (req, res) => {
     }
 
     if (!isMatch) {
-      return res.status(400).json({ error: "Incorrect Security PIN." });
+      return sendError(res, 'INCORRECT_PIN', "Incorrect Security PIN.", 400, req);
     }
 
     user.isLocked = false;
     user.securityCode = undefined;
     await user.save();
 
-    return res.json({ success: true, message: "Account Unlocked" });
+    return sendSuccess(res, {}, "Account Unlocked", 200, req);
   } catch (error) {
-    console.error("Unlock Account Error:", error);
-    return res.status(500).json({ error: "Failed to unlock account." });
+    logError("Unlock Account Error:", error, { requestId: req.requestId });
+    return sendError(res, 'SERVER_ERROR', "Failed to unlock account.", 500, req);
   }
 });
 
 // ==========================================
-// 🔥 SECURED: UPDATE USER (IDOR FIXED & ZOD VALIDATED)
+// 🔥 SECURED: UPDATE USER (IDOR FIXED & STRICT WHITELIST ZOD VALIDATED)
 // ==========================================
 router.put('/api/users/:id', protect, async (req, res) => {
   try {
     const targetUserId = req.params.id;
     if (!mongoose.Types.ObjectId.isValid(targetUserId)) {
-      return res.status(400).json({ success: false, message: "Invalid User ID format" });
+      return sendError(res, 'INVALID_USER_ID', "Invalid User ID format", 400, req);
     }
 
     // Only the user themselves OR an admin can update the profile
     if (req.user._id.toString() !== targetUserId && req.user.role !== 'admin' && req.user.role !== 'super_admin') {
-      return res.status(403).json({ message: "Access Denied: You cannot update someone else's profile." });
+      return sendError(res, 'ACCESS_DENIED', "Access Denied: You cannot update someone else's profile.", 403, req);
     }
 
-    // 🔥 Strict Zod Validation
-    const validationResult = userUpdateSchema.safeParse(req.body);
+    // 🔥 Strict Whitelist Zod Validation (Prevents Mass-Assignment of role, isLocked, etc.)
+    const validationResult = userUpdateValidator.safeParse(req.body);
     if (!validationResult.success) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Validation failed", 
-        errors: validationResult.error.format() 
-      });
+      return sendError(res, 'VALIDATION_FAILED', "Validation failed", 400, req, validationResult.error.format());
     }
 
     const updateData = validationResult.data;
 
-    // Protect role modification (only admins can make other admins)
-    if (updateData.role && req.user.role !== 'admin' && req.user.role !== 'super_admin') {
-      delete updateData.role; 
-    }
-
     const updatedUser = await User.findByIdAndUpdate(targetUserId, updateData, { new: true, runValidators: true }).lean();
     if (!updatedUser) {
-      return res.status(404).json({ message: "User not found" });
+      return sendError(res, 'USER_NOT_FOUND', "User not found", 404, req);
     }
 
-    return res.json({ ...updatedUser, id: updatedUser._id.toString() });
+    return sendSuccess(res, { ...updatedUser, id: updatedUser._id.toString() }, "User updated successfully", 200, req);
   } catch (error) { 
-    console.error("Update User Error:", error);
-    return res.status(500).json({ message: "Update failed" }); 
+    logError("Update User Error:", error, { requestId: req.requestId });
+    return sendError(res, 'SERVER_ERROR', "Update failed", 500, req); 
   }
 });
 
@@ -380,24 +405,25 @@ router.get('/api/users/get-valid-recently-viewed/:userId', protect, async (req, 
   try {
     const targetUserId = req.params.userId;
     if (!mongoose.Types.ObjectId.isValid(targetUserId)) {
-      return res.status(400).json({ success: false, message: "Invalid User ID format" });
+      return sendError(res, 'INVALID_USER_ID', "Invalid User ID format", 400, req);
     }
 
     // IDOR Check
     if (req.user._id.toString() !== targetUserId && req.user.role !== 'admin' && req.user.role !== 'super_admin') {
-      return res.status(403).json({ message: "Access Denied" });
+      return sendError(res, 'ACCESS_DENIED', "Access Denied", 403, req);
     }
 
     const user = await User.findById(targetUserId).lean();
     if (!user || !user.recentlyViewed || user.recentlyViewed.length === 0) {
-      return res.json([]);
+      return sendSuccess(res, [], "Recently viewed fetched successfully", 200, req);
     }
 
     const validProducts = await Product.find({ _id: { $in: user.recentlyViewed } }).lean();
-    return res.json(validProducts.map(p => ({ ...p, id: p._id.toString() })));
+    const mapped = validProducts.map(p => ({ ...p, id: p._id.toString() }));
+    return sendSuccess(res, mapped, "Recently viewed fetched successfully", 200, req);
   } catch (error) {
-    console.error("Get Recently Viewed Error:", error);
-    return res.status(500).json({ message: "Error fetching recently viewed products" });
+    logError("Get Recently Viewed Error:", error, { requestId: req.requestId });
+    return sendError(res, 'SERVER_ERROR', "Error fetching recently viewed products", 500, req);
   }
 });
 

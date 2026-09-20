@@ -13,6 +13,9 @@ import { useProducts } from '../context/ProductContext';
 import { useCompare } from '../context/CompareContext';
 import { getOptimizedImageUrl } from '../utils/imageOptimizer';
 import axiosInstance from '../api/axiosInstance';
+import SEOManager from '../components/SEOManager'; // 🔥 TASK #54: Dynamic SEO Manager
+import ProductImage from '../components/ProductImage'; // 🔥 TASK #57: WebP/AVIF Responsive Optimized Images
+import SmartImage from '../components/SmartImage'; // 🔥 TASK #58: Universal Broken-Image Fallback Component
 
 // 🔥 CANONICAL CURRENCY FORMATTER UTILITY
 const formatCurrency = (paise) => {
@@ -110,8 +113,8 @@ const CompareModal = ({ isOpen, onClose }) => {
                       </button>
 
                       {/* Image & Title */}
-                      <div className="h-36 bg-white rounded-2xl p-3 flex items-center justify-center mb-4 shadow-sm">
-                        <img src={getOptimizedImageUrl(rawImg, 200)} alt={product.title} className="max-h-full object-contain" />
+                      <div className="h-36 bg-white rounded-2xl p-3 flex items-center justify-center mb-4 shadow-sm overflow-hidden">
+                        <SmartImage src={getOptimizedImageUrl(rawImg, 200)} alt={product.title} width={200} height={140} className="max-h-full object-contain" />
                       </div>
                       <h3 className="text-sm font-bold text-slate-800 line-clamp-2 mb-6 h-10">{product.title}</h3>
 
@@ -180,7 +183,6 @@ const ProductCard = memo(({ product }) => {
   const { addToCart } = useCart();
   const { addToCompare } = useCompare(); 
   const { user, toggleWishlist, wishlist } = useUser(); 
-  const [imgError, setImgError] = useState(false);
 
   if (!product) return null;
 
@@ -245,29 +247,28 @@ const ProductCard = memo(({ product }) => {
           <FiHeart size={14} className={`sm:w-4 sm:h-4 transition-transform active:scale-75 ${isInWishlist ? 'fill-current text-red-500' : ''}`} />
         </button>
 
-        {/* Image Container */}
-        <div className="w-full h-32 sm:h-52 md:h-64 bg-transparent sm:bg-slate-50/60 rounded-lg sm:rounded-2xl overflow-hidden mb-2 sm:mb-4 relative p-2 sm:p-4 flex items-center justify-center mix-blend-multiply transition-colors group-hover:bg-slate-50">
-          <img 
-            src={imgError ? "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 24 24' fill='none' stroke='%23cbd5e1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='3' width='18' height='18' rx='2' ry='2'/><circle cx='8.5' cy='8.5' r='1.5'/><polyline points='21 15 16 10 5 21'/></svg>" : getOptimizedImageUrl(rawImg, 320)} 
+        {/* Image Container with WebP/AVIF Responsive Optimization (Task #57 & #58) */}
+        <div className="w-full h-32 sm:h-52 md:h-64 bg-transparent sm:bg-slate-50/60 rounded-lg sm:rounded-2xl overflow-hidden mb-2 sm:mb-4 relative p-2 sm:p-4 flex items-center justify-center transition-colors group-hover:bg-slate-50">
+          <ProductImage 
+            src={rawImg} 
             alt={product.title} 
-            loading="lazy"
-            decoding="async"
-            onError={() => setImgError(true)}
-            className="max-w-full max-h-full object-contain group-hover:scale-105 transition-transform duration-500 ease-out will-change-transform" 
+            width={320}
+            height={256}
+            className="w-full h-full max-w-full max-h-full object-contain mix-blend-multiply group-hover:scale-105 transition-transform duration-500 ease-out will-change-transform" 
           />
           
           {/* Desktop Hover Quick Add & Compare Buttons */}
           <div className="absolute bottom-0 left-0 w-full p-2 translate-y-full group-hover:translate-y-0 transition-transform duration-300 ease-out hidden md:flex gap-1">
             <button 
               onClick={(e) => { e.preventDefault(); e.stopPropagation(); addToCart(product); }}
-              className="flex-1 bg-slate-900/95 backdrop-blur-sm text-white font-bold py-2.5 rounded-xl flex items-center justify-center gap-1 hover:bg-[#FF4500] transition-all shadow-lg text-xs outline-none"
+              className="flex-1 bg-slate-900/95 backdrop-blur-sm text-white font-bold py-2.5 rounded-xl flex items-center justify-center gap-1 hover:bg-[#FF4500] transition-all shadow-lg text-xs outline-none cursor-pointer"
               aria-label={`Quick add ${product.title} to cart`}
             >
               <FiShoppingCart size={14} /> Add
             </button>
             <button 
               onClick={(e) => { e.preventDefault(); e.stopPropagation(); addToCompare(product); }}
-              className="bg-white/95 backdrop-blur-sm text-slate-900 font-bold px-3 py-2.5 rounded-xl hover:bg-slate-900 hover:text-white transition-colors shadow-lg text-xs outline-none"
+              className="bg-white/95 backdrop-blur-sm text-slate-900 font-bold px-3 py-2.5 rounded-xl hover:bg-slate-900 hover:text-white transition-colors shadow-lg text-xs outline-none cursor-pointer"
               aria-label={`Compare ${product.title}`}
             >
               Compare
@@ -301,14 +302,14 @@ const ProductCard = memo(({ product }) => {
             <div className="flex gap-1 md:hidden">
               <button 
                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); addToCompare(product); }}
-                className="bg-slate-100 text-slate-700 hover:bg-slate-900 hover:text-white p-2 rounded-xl transition-colors text-[10px] font-bold outline-none"
+                className="bg-slate-100 text-slate-700 hover:bg-slate-900 hover:text-white p-2 rounded-xl transition-colors text-[10px] font-bold outline-none cursor-pointer"
                 aria-label={`Compare ${product.title}`}
               >
                 Comp
               </button>
               <button 
                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); addToCart(product); }}
-                className="p-1.5 sm:p-2.5 bg-slate-100 text-slate-900 hover:bg-[#FF4500] hover:text-white rounded-lg sm:rounded-xl transition-colors outline-none"
+                className="p-1.5 sm:p-2.5 bg-slate-100 text-slate-900 hover:bg-[#FF4500] hover:text-white rounded-lg sm:rounded-xl transition-colors outline-none cursor-pointer"
                 aria-label={`Add ${product.title} to cart`}
               >
                 <FiShoppingCart size={14} className="sm:w-[18px] sm:h-[18px]" />
@@ -352,10 +353,9 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
   const products = productContext?.products || [];
   const { compareList } = useCompare(); 
 
-  // 🔥 Scroll to top on mount & set professional SEO title
+  // 🔥 Scroll to top on mount
   useEffect(() => {
     window.scrollTo(0, 0);
-    document.title = "Jack Essentials — Premium Lifestyle, Electronics & More";
   }, []);
 
   const dealOfTheDayProducts = useMemo(() => {
@@ -426,6 +426,13 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
   return (
     <div className="min-h-screen bg-[#F8F9FA] font-sans selection:bg-[#FF4500] selection:text-white text-slate-900 antialiased overflow-x-hidden">
 
+      {/* 🔥 TASK #54: Dynamic SEO Manager integration */}
+      <SEOManager 
+        title="Jack Essentials — Premium Lifestyle, Electronics & More"
+        description="Shop premium products, electronics, home decor, and fashion at Jack Essentials with secure payments, cashfree gateway, and fast pan-India delivery."
+        canonicalUrl={typeof window !== 'undefined' ? window.location.href : "https://thejackessentials.com"}
+      />
+
       <main className="max-w-[1440px] mx-auto pb-24 px-2 sm:px-4 md:px-6 outline-none" tabIndex="-1">
         
         {/* Categories Navigation */}
@@ -451,20 +458,26 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
           </div>
         </nav>
 
-        {/* Hero Banner */}
+        {/* Hero Banner with Optimized Responsive Image (Task #57 & #58) */}
         <section className="mt-4 md:mt-6 relative h-[160px] sm:h-[280px] md:h-[400px] lg:h-[480px] rounded-2xl md:rounded-[2rem] overflow-hidden shadow-md group border border-slate-200/40">
           <AnimatePresence mode="wait">
-            <motion.img 
-              key={currentSlide} 
-              src={getOptimizedImageUrl(BANNERS[currentSlide], 1200)} 
+            <motion.div 
+              key={currentSlide}
               initial={{ opacity: 0, scale: 1.02 }} 
               animate={{ opacity: 1, scale: 1 }} 
               exit={{ opacity: 0 }} 
               transition={{ duration: 0.6, ease: [0.25, 1, 0.5, 1] }} 
-              className="absolute inset-0 w-full h-full object-cover select-none pointer-events-none" 
-              alt="ECommerce Spotlight Promotion" 
-              fetchPriority="high"
-            />
+              className="absolute inset-0 w-full h-full"
+            >
+              <ProductImage 
+                src={BANNERS[currentSlide]} 
+                alt="ECommerce Spotlight Promotion" 
+                width={1200}
+                height={480}
+                priority={currentSlide === 0}
+                className="w-full h-full object-cover select-none pointer-events-none" 
+              />
+            </motion.div>
           </AnimatePresence>
 
           <div className="absolute inset-0 bg-gradient-to-r from-slate-950/80 via-slate-900/30 to-transparent flex flex-col justify-center px-4 sm:px-12 md:px-20 pointer-events-none">
@@ -610,7 +623,7 @@ const Home = ({ isLoggedIn, setIsLoggedIn }) => {
           <span className="text-xs font-bold">Comparing ({compareList.length}/2)</span>
           <button 
             onClick={() => setIsCompareModalOpen(true)}
-            className="bg-[#FF4500] text-white text-xs font-black px-4 py-2 rounded-full shadow-md active:scale-95 transition-transform outline-none"
+            className="bg-[#FF4500] text-white text-xs font-black px-4 py-2 rounded-full shadow-md active:scale-95 transition-transform outline-none cursor-pointer"
           >
             View Comparison
           </button>

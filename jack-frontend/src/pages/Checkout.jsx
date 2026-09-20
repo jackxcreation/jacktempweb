@@ -21,7 +21,7 @@ const formatCurrency = (paise) => {
 // 🔥 HELPER TO GET TOKEN
 const getToken = () => localStorage.getItem('token');
 
-// 🔥 HELPER FOR IDEMPOTENCY KEY GENERATION
+// 🔥 TASK #62: HELPER FOR UNIQUE IDEMPOTENCY KEY GENERATION
 const generateIdempotencyKey = () => {
   return 'idemp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 11);
 };
@@ -63,7 +63,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
   const [isAddingNew, setIsAddingNew] = useState(true);
 
   const [showCodAlert, setShowCodAlert] = useState(false); 
-  const [isProcessing, setIsProcessing] = useState(false); 
+  const [isProcessing, setIsProcessing] = useState(false); // 🔥 TASK #62: Submit Lock & Double-Click Protection
 
   // 🔥 Toast State for Beautiful Error Reporting
   const [toast, setToast] = useState({ show: false, message: '', type: 'error' });
@@ -159,7 +159,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
     }
   }, [user, checkCodIntelligence]);
 
-  // Memoized Order Calculations (Working purely with Paise integers)
+  // Memoized Order Calculations (Working purely with Paise integers & Server authority)
   const { cartTotalPaiseMetric, discountPaise, appliedCodFeePaise, finalTotalPaise } = useMemo(() => {
     const totalPaise = Number(cartTotalPaise) || 0;
     
@@ -214,7 +214,6 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
 
   const handleAddressSubmit = useCallback((e) => {
     e.preventDefault();
-    // 🔥 Ensure primaryPhone is strictly included in new address submission
     const formattedNewAddr = {
       ...newAddress,
       primaryPhone: newAddress.primaryPhone || user?.phone || '9999999999'
@@ -247,8 +246,9 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
     });
   }, []);
 
-  // FINAL ORDER SUBMISSION (With Idempotency Header Support)
+  // FINAL ORDER SUBMISSION (With Idempotency Key & Submit Lock - Task #62)
   const handleFinalOrderSubmission = useCallback(async (finalPaymentMethod, gatewayOrderId) => {
+    if (isProcessing) return; // Prevent double-click
     setIsProcessing(true);
     const savedTraffic = localStorage.getItem('jack_traffic_source');
     const trafficSource = savedTraffic ? JSON.parse(savedTraffic) : { source: 'Direct/Unknown', medium: 'organic', campaign: 'none' };
@@ -260,7 +260,6 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
           quantity: Number(item.quantity),
         }));
 
-        // 🔥 Final safety check on selectedAddress to guarantee primaryPhone exists
         const safeAddress = {
           name: selectedAddress?.name || user?.name || 'Customer',
           flat: selectedAddress?.flat || 'N/A',
@@ -271,7 +270,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
           primaryPhone: selectedAddress?.primaryPhone || selectedAddress?.phone || user?.phone || '9999999999'
         };
 
-        // 🔥 Idempotency protected request payload with unique header
+        // 🔥 TASK #62: Unique Idempotency Key Injection
         const idempotencyKey = generateIdempotencyKey();
         const orderResult = await placeOrder(orderItems, finalTotalPaise, safeAddress, finalPaymentMethod, trafficSource, idempotencyKey);
         
@@ -302,10 +301,11 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
       showToast("❌ " + parseBackendError(err), "error");
       setIsProcessing(false);
     }
-  }, [user, cart, finalTotalPaise, selectedAddress, placeOrder, clearCart, navigate, parseBackendError, showToast]);
+  }, [isProcessing, user, cart, finalTotalPaise, selectedAddress, placeOrder, clearCart, navigate, parseBackendError, showToast]);
 
-  // RAZORPAY PAYMENT INITIATION (Idempotent Flow)
+  // RAZORPAY PAYMENT INITIATION (Idempotent Flow & Submit Lock - Task #62)
   const initiateRazorpayPayment = useCallback(async () => {
+    if (isProcessing) return; // Prevent double-click
     setIsProcessing(true);
     const isLoaded = await loadRazorpayScript();
     
@@ -324,7 +324,6 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
         quantity: Number(item.quantity),
       }));
 
-      // 🔥 Final safety check on selectedAddress to guarantee primaryPhone exists
       const safeAddress = {
         name: selectedAddress?.name || user?.name || 'Customer',
         flat: selectedAddress?.flat || 'N/A',
@@ -377,14 +376,13 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
         return;
       }
 
-      // 🔥 STRICT TYPE CASTING TO PREVENT 'undefined' CRASHES IN RAZORPAY SCRIPT
       const options = {
         key: import.meta.env.VITE_RAZORPAY_KEY_ID || "rzp_test_Sx5dYj7qO20PEX",
         amount: Number(orderData.amount), 
         currency: String(orderData.currency || "INR"),
         name: STORE_NAME,
         description: "Order Payment",
-        order_id: String(orderData.order_id), // 🔥 Bulletproof order_id passing
+        order_id: String(orderData.order_id), 
         handler: async function (response) {
           try {
             setIsProcessing(true);
@@ -428,8 +426,6 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
         modal: { ondismiss: function () { setIsProcessing(false); } }
       };
 
-      console.log("🚀 INITIATING RAZORPAY POPUP WITH OPTIONS:", options);
-
       const rzp = new window.Razorpay(options);
       rzp.on('payment.failed', function (response) {
         console.error("❌ RAZORPAY PAYMENT FAILED:", response.error);
@@ -443,10 +439,11 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
       showToast(`❌ ${parseBackendError(error)}`, "error");
       setIsProcessing(false);
     }
-  }, [cart, finalTotalPaise, selectedAddress, user, clearCart, navigate, loadRazorpayScript, placeOrder, parseBackendError, showToast]);
+  }, [isProcessing, cart, finalTotalPaise, selectedAddress, user, clearCart, navigate, loadRazorpayScript, placeOrder, parseBackendError, showToast]);
 
   const handlePreCheckout = useCallback((e) => {
     e.preventDefault();
+    if (isProcessing) return; // Submit lock protection
     if (!selectedAddress && !isAddingNew) return showToast("Please select or add a delivery address first!", "error");
 
     if (paymentMethod === 'online') {
@@ -458,7 +455,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
       }
       handleFinalOrderSubmission('Cash on Delivery', `COD_${Date.now()}`); 
     }
-  }, [selectedAddress, isAddingNew, paymentMethod, codIntelligence, initiateRazorpayPayment, handleFinalOrderSubmission, showToast]);
+  }, [isProcessing, selectedAddress, isAddingNew, paymentMethod, codIntelligence, initiateRazorpayPayment, handleFinalOrderSubmission, showToast]);
 
   if (!user) return null;
 
@@ -500,7 +497,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
               </p>
               <button 
                 onClick={() => setShowCodAlert(false)} 
-                className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-4 rounded-xl shadow-lg shadow-slate-900/20 active:scale-[0.98] transition-all tracking-wide outline-none focus-visible:ring-4 focus-visible:ring-slate-300"
+                className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-4 rounded-xl shadow-lg shadow-slate-900/20 active:scale-[0.98] transition-all tracking-wide outline-none focus-visible:ring-4 focus-visible:ring-slate-300 cursor-pointer"
               >
                 ACCEPT & CONTINUE
               </button>
@@ -558,7 +555,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                       </div>
                       Delivery Address
                     </h2>
-                    {step === 2 && <span className="text-[#FF4500] font-bold text-sm bg-[#FF4500]/10 px-3 py-1 rounded-full">Change</span>}
+                    {step === 2 && <span className="text-[#FF4500] font-bold text-sm bg-[#FF4500]/10 px-3 py-1 rounded-full cursor-pointer">Change</span>}
                   </div>
 
                   <AnimatePresence>
@@ -606,13 +603,13 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                               <button 
                                 onClick={() => { setStep(2); window.scrollTo({ top: 0, behavior: 'smooth' }); }} 
                                 disabled={!selectedAddress} 
-                                className="flex-1 bg-[#FF4500] hover:bg-[#E8004C] disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-black py-4 rounded-xl transition-all shadow-lg shadow-orange-500/20 active:scale-[0.98] flex justify-center items-center"
+                                className="flex-1 bg-[#FF4500] hover:bg-[#E8004C] disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-black py-4 rounded-xl transition-all shadow-lg shadow-orange-500/20 active:scale-[0.98] flex justify-center items-center cursor-pointer"
                               >
                                 DELIVER HERE <FiChevronRight className="ml-2" size={20}/>
                               </button>
                               <button 
                                 onClick={() => setIsAddingNew(true)} 
-                                className="flex-1 bg-white border-2 border-slate-200 hover:border-slate-400 hover:bg-slate-50 text-slate-700 font-bold py-4 rounded-xl transition-all active:scale-[0.98]"
+                                className="flex-1 bg-white border-2 border-slate-200 hover:border-slate-400 hover:bg-slate-50 text-slate-700 font-bold py-4 rounded-xl transition-all active:scale-[0.98] cursor-pointer"
                               >
                                 + Add New Address
                               </button>
@@ -700,7 +697,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                             <div className="flex flex-col sm:flex-row gap-4 pt-6 mt-6 border-t border-slate-100">
                               <button 
                                 type="submit" 
-                                className="flex-1 bg-[#FF4500] hover:bg-[#E8004C] text-white font-black py-4 rounded-xl transition-all shadow-lg shadow-orange-500/20 active:scale-[0.98]"
+                                className="flex-1 bg-[#FF4500] hover:bg-[#E8004C] text-white font-black py-4 rounded-xl transition-all shadow-lg shadow-orange-500/20 active:scale-[0.98] cursor-pointer"
                               >
                                 SAVE & CONTINUE
                               </button>
@@ -708,7 +705,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                                 <button 
                                   type="button" 
                                   onClick={() => setIsAddingNew(false)} 
-                                  className="px-10 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-4 rounded-xl transition-all active:scale-[0.98]"
+                                  className="px-10 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-4 rounded-xl transition-all active:scale-[0.98] cursor-pointer"
                                 >
                                   Cancel
                                 </button>
@@ -830,7 +827,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
                           <button 
                             onClick={handlePreCheckout} 
                             disabled={isProcessing}
-                            className="w-full bg-slate-950 disabled:bg-slate-400 hover:bg-slate-800 text-white font-black py-4 sm:py-5 rounded-xl shadow-xl shadow-slate-900/20 active:scale-[0.98] transition-all text-base sm:text-lg flex justify-center items-center gap-3"
+                            className="w-full bg-slate-950 disabled:bg-slate-400 hover:bg-slate-800 text-white font-black py-4 sm:py-5 rounded-xl shadow-xl shadow-slate-900/20 active:scale-[0.98] transition-all text-base sm:text-lg flex justify-center items-center gap-3 cursor-pointer"
                           >
                             {isProcessing ? (
                               <><FiLoader className="animate-spin" size={20} /> SECURING PAYMENT...</>

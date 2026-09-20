@@ -8,6 +8,20 @@ const mongoose = require('mongoose');
  * @desc    Basic liveness probe for load balancers and uptime monitors
  * @access  Public
  */
+router.get('/health', (req, res) => {
+  return res.status(200).json({
+    success: true,
+    status: 'UP',
+    service: 'Jack Essentials API',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    environment: process.env.NODE_ENV || 'development',
+    version: process.env.npm_package_version || '1.0.0',
+    requestId: req.requestId || 'N/A'
+  });
+});
+
+// Alias for root health check compatibility
 router.get('/', (req, res) => {
   return res.status(200).json({
     success: true,
@@ -23,7 +37,7 @@ router.get('/', (req, res) => {
 
 /**
  * @route   GET /api/health/ready
- * @desc    Readiness probe verifying database and external dependency health
+ * @desc    Readiness probe verifying database and external dependency health (Task #73)
  * @access  Public
  */
 router.get('/ready', async (req, res) => {

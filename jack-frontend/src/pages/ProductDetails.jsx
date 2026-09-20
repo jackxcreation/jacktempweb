@@ -12,6 +12,10 @@ import { getOptimizedImageUrl } from '../utils/imageOptimizer';
 // 🔥 PHASE 1 FIX: Use canonical axiosInstance for ALL backend calls
 import axiosInstance from '../api/axiosInstance'; 
 import { ProductInternalGraph } from '../components/ProductInternalGraph';
+import SmartImage from '../components/SmartImage'; // 🔥 TASK #58: Universal Broken-Image Fallback Component
+import ProductImage from '../components/ProductImage'; // 🔥 TASK #57: WebP/AVIF Responsive Optimized Images
+import SEOManager from '../components/SEOManager'; // 🔥 TASK #54: Dynamic SEO Manager
+import ProductSchema from '../components/ProductSchema'; // 🔥 TASK #55: Google-friendly Structured Data Schema
 
 // 🔥 CANONICAL CURRENCY FORMATTER UTILITY
 const formatCurrency = (paise) => {
@@ -34,10 +38,11 @@ const SimilarProductCard = ({ product }) => {
           {product.discount && <span className="bg-[#FF4500] text-white text-[9px] font-black px-2.5 py-1 rounded-sm uppercase tracking-widest">{product.discount}</span>}
         </div>
         <div className="w-full h-40 bg-slate-50/50 rounded-2xl overflow-hidden mb-4 relative p-3 flex items-center justify-center">
-          <img 
-            src={getOptimizedImageUrl(product.image, 320)} 
+          <ProductImage 
+            src={product.image} 
             alt={product.title} 
-            loading="lazy"
+            width={320}
+            height={160}
             className="max-w-full max-h-full object-contain mix-blend-multiply group-hover:scale-105 transition-transform duration-500" 
           />
         </div>
@@ -71,7 +76,6 @@ const NotifyMeButton = ({ productId }) => {
     if (!productId || loading || subscribed) return;
     setLoading(true);
     try {
-      // 🔥 PHASE 1 FIX: Removed `/api` prefix because axiosInstance already maps to /api
       const res = await axiosInstance.post('/stock-alerts/subscribe', { productId });
       if (res?.data?.success) {
         setSubscribed(true);
@@ -234,70 +238,6 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
 
       addRecentlyViewed(product);
       setMainImage((product.images && product.images.length > 0) ? product.images[0] : product.image);
-      
-      const currentTitle = `${product.title} | Jack Essentials`;
-      const currentDesc = product.description ? product.description.substring(0, 160) : `Buy ${product.title} at best price on Jack Essentials. Free delivery & secure payments.`;
-      
-      document.title = currentTitle;
-
-      let metaDesc = document.querySelector("meta[name='description']");
-      if (!metaDesc) {
-        metaDesc = document.createElement('meta');
-        metaDesc.name = 'description';
-        document.head.appendChild(metaDesc);
-      }
-      metaDesc.content = currentDesc;
-
-      let canonicalLink = document.querySelector("link[rel='canonical']");
-      if (!canonicalLink) {
-        canonicalLink = document.createElement('link');
-        canonicalLink.rel = 'canonical';
-        document.head.appendChild(canonicalLink);
-      }
-      canonicalLink.href = window.location.href;
-
-      const productPriceNum = product.pricePaise ? product.pricePaise / 100 : (product.price || 0);
-      const skuCode = product.sku || `JCK-${String(productIdSafeguard).slice(-6).toUpperCase()}`;
-
-      const jsonLdData = {
-        "@context": "https://schema.org/",
-        "@type": "Product",
-        "name": product.title,
-        "image": product.images || [product.image],
-        "description": currentDesc,
-        "sku": skuCode,
-        "brand": {
-          "@type": "Brand",
-          "name": product.brand || "Jack Essentials"
-        },
-        "offers": {
-          "@type": "Offer",
-          "url": window.location.href,
-          "priceCurrency": "INR",
-          "price": productPriceNum,
-          "priceValidUntil": "2027-12-31",
-          "itemCondition": "https://schema.org/NewCondition",
-          "availability": parseInt(product.inventory || 1) > 0 ? "https://schema.org/InStock" : "https://schema.org/OutOfStock",
-          "seller": {
-            "@type": "Organization",
-            "name": "Jack Essentials"
-          }
-        },
-        "aggregateRating": {
-          "@type": "AggregateRating",
-          "ratingValue": product.rating || "4.8",
-          "reviewCount": product.reviews || "124"
-        }
-      };
-
-      let scriptTag = document.querySelector("#product-jsonld-schema");
-      if (!scriptTag) {
-        scriptTag = document.createElement('script');
-        scriptTag.id = "product-jsonld-schema";
-        scriptTag.type = 'application/ld+json';
-        document.head.appendChild(scriptTag);
-      }
-      scriptTag.text = JSON.stringify(jsonLdData);
 
       axiosInstance.get(`/products/${productIdSafeguard}`).catch(err => console.log("View tracking failed"));
 
@@ -314,11 +254,6 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
           setIsLoadingSimilar(false);
         });
     }
-
-    return () => {
-      const scriptTag = document.querySelector("#product-jsonld-schema");
-      if (scriptTag) scriptTag.remove();
-    };
   }, [productIdSafeguard, product, addRecentlyViewed]); 
 
   // 🔥 Robust Token Check for Sockets supporting multi-storage keys
@@ -475,8 +410,25 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
   const productMrpPaise = product.mrpPaise || (product.mrp ? product.mrp * 100 : 0);
   const productImages = (product.images && product.images.length > 0) ? product.images : [product.image];
 
+  const seoTitle = `${product.title} | Jack Essentials`;
+  const seoDescription = product.description ? product.description.substring(0, 160) : `Buy ${product.title} at best price on Jack Essentials. Free delivery & secure payments.`;
+  const seoCanonical = typeof window !== 'undefined' ? window.location.href : `https://thejackessentials.com/product/${product.id || product._id}`;
+  const seoOgImage = productImages[0] || "https://thejackessentials.com/og-banner.jpg";
+
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-24 md:pb-20 relative">
+      {/* 🔥 TASK #54: Dynamic SEO Manager integration */}
+      <SEOManager 
+        title={seoTitle}
+        description={seoDescription}
+        canonicalUrl={seoCanonical}
+        ogImage={seoOgImage}
+        ogType="product"
+      />
+
+      {/* 🔥 TASK #55: Google-friendly Product Structured Data Schema Component */}
+      <ProductSchema product={product} />
+
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 md:mt-10">
         
         <div className="text-xs md:text-sm text-slate-500 mb-6 flex items-center space-x-2 font-medium">
@@ -498,10 +450,11 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
                     aria-label={`View image ${idx + 1}`}
                     className={`w-16 h-16 md:w-20 md:h-20 rounded-xl overflow-hidden border-2 transition-all flex-shrink-0 bg-slate-50 cursor-pointer ${mainImage === img ? 'border-slate-900 ring-2 ring-slate-900/10' : 'border-transparent hover:border-slate-300'}`}
                   >
-                    <img 
-                      src={getOptimizedImageUrl(img, 100)} 
+                    <ProductImage 
+                      src={img} 
                       alt={`thumbnail-${idx}`} 
-                      loading="lazy"
+                      width={80}
+                      height={80}
                       className="w-full h-full object-contain mix-blend-multiply p-1" 
                     />
                   </button>
@@ -524,13 +477,20 @@ const ProductDetails = ({ isLoggedIn, setIsLoggedIn }) => {
 
               <AnimatePresence mode="wait">
                 {mainImage ? (
-                  <motion.img 
+                  <motion.div 
                     key={mainImage}
                     initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}
-                    src={getOptimizedImageUrl(mainImage, 800)} 
-                    alt={product.title} 
-                    className="w-full h-full object-contain mix-blend-multiply group-hover:scale-110 transition-transform duration-700 ease-out"
-                  />
+                    className="w-full h-full flex items-center justify-center"
+                  >
+                    <ProductImage 
+                      src={mainImage} 
+                      alt={product.title} 
+                      width={600}
+                      height={600}
+                      priority={true}
+                      className="w-full h-full object-contain mix-blend-multiply group-hover:scale-110 transition-transform duration-700 ease-out"
+                    />
+                  </motion.div>
                 ) : (
                   <motion.div 
                     key="loading"

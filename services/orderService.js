@@ -3,19 +3,65 @@ const mongoose = require('mongoose');
 const { Order, Product, Warehouse, PaymentIntent } = require('../../models'); // Adjust relative path if models folder is at root
 const { logger } = require('../../utils/logger');
 const { trackEvent } = require('../analyticsQueue');
+const { calculateOrderTotal } = require('./orderPricingService'); // 🔥 TASK #16 & #23: Server-side authoritative pricing engine
 
 /**
- * Enterprise-grade Atomic Order Creation & Inventory Deduction Service
- * Prevents race-conditions and overselling using Mongoose Transactions.
+ * Enterprise-grade Atomic Order Creation & Inventory Deduction Service (Task #65)
+ * Enforces server-side authoritative pricing, stock validation, explicit payment intent binding, and idempotency key check.
+ * Prevents race-conditions and overselling using ACID Mongoose Multi-Document Transactions.
  */
 const createOrderService = async (userId, orderPayload, reqInstance = null) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const { items, address, paymentMethod, userDetails, trafficSource, couponCode } = orderPayload;
+    const { items, address, paymentMethod, userDetails, trafficSource, couponCode, idempotencyKey } = orderPayload;
     const safeStatus = 'Pending'; 
     const customerPincode = address.pincode;
+
+    // ==========================================
+    // 🔥 TASK #25 & #62: ORDER CREATION IDEMPOTENCY CHECK
+    // ==========================================
+    if (idempotencyKey) {
+      const existingOrder = await Order.findOne({ idempotencyKey }).session(session);
+      if (existingOrder) {
+        await session.abortTransaction();
+        session.endSession();
+        logger.info(`ℹ️ Idempotent Order Replay: Order #${existingOrder._id} already created for idempotencyKey ${idempotencyKey}`);
+        return { success: true, order: { ...existingOrder._doc, id: existingOrder._id.toString() } };
+      }
+    }
+
+    // ==========================================
+    // 🔥 TASK #23 & #59: SERVER-SIDE AUTHORITATIVE PRICING
+    // ==========================================
+    const pricingResult = await calculateOrderTotal(items, couponCode);
+    if (!pricingResult.success) {
+      await session.abortTransaction();
+      session.endSession();
+      throw new Error(pricingResult.message || "Failed to calculate secure order pricing");
+    }
+
+    const calculatedServerTotalPaise = pricingResult.subtotalPaise;
+    const taxAmountPaise = pricingResult.taxPaise;
+    const shippingCostPaise = pricingResult.shippingPaise;
+    const discountPaise = pricingResult.discountPaise;
+    let finalTotalPaise = pricingResult.totalPaise;
+
+    const payString = String(paymentMethod || '').toLowerCase();
+    const isCod = payString.includes('cod') || payString.includes('cash');
+
+    let paymentFeePaise = 0;
+    let codFeePaise = 0;
+
+    if (!isCod) {
+      paymentFeePaise = Math.round(finalTotalPaise * 0.02); 
+    }
+    
+    if (isCod) {
+      codFeePaise = 5000; 
+      finalTotalPaise += codFeePaise;
+    }
 
     // ==========================================
     // 1. SMART MULTI-WAREHOUSE ROUTING & SELECTION
@@ -59,18 +105,17 @@ const createOrderService = async (userId, orderPayload, reqInstance = null) => {
       selectedWarehouse = activeWarehouses[0];
     }
 
-    let calculatedServerTotalPaise = 0;
     let totalCogsPaise = 0; 
     const verifiedOrderItems = [];
 
     // ==========================================
-    // 2. ATOMIC STOCK VERIFICATION & RESERVATION
+    // 2. ATOMIC STOCK VERIFICATION & RESERVATION (TASK #65 ACID)
     // ==========================================
     for (const rawItem of items) {
       const productId = rawItem.productId;
       const orderQty = rawItem.quantity;
 
-      // Atomic query to prevent race condition overselling
+      // Atomic query to prevent race condition overselling within transaction
       const product = await Product.findOne({
         _id: productId,
         $or: [
@@ -151,8 +196,6 @@ const createOrderService = async (userId, orderPayload, reqInstance = null) => {
       }
 
       const unitPricePaise = product.pricePaise || Math.round(parseFloat(product.price || 0) * 100);
-      calculatedServerTotalPaise += unitPricePaise * orderQty;
-
       const unitCogsPaise = product.cogsPaise || Math.round(parseFloat(product.cogs || 0) * 100);
       totalCogsPaise += unitCogsPaise * orderQty;
 
@@ -170,47 +213,25 @@ const createOrderService = async (userId, orderPayload, reqInstance = null) => {
       await Warehouse.findByIdAndUpdate(selectedWarehouse._id, { $inc: { currentLoad: 1 } }, { session });
     }
 
-    // ==========================================
-    // 3. FINANCIAL CALCULATIONS & PAISIFICATION
-    // ==========================================
-    const payString = String(paymentMethod || '').toLowerCase();
-    const isCod = payString.includes('cod') || payString.includes('cash');
-
-    let shippingCostPaise = 6000; 
-    let discountPaise = 0;
-    let paymentFeePaise = 0;
-    let codFeePaise = 0;
-    let taxAmountPaise = Math.round(calculatedServerTotalPaise * 0.18); 
-
-    let finalTotalPaise = calculatedServerTotalPaise;
-    
-    if (!isCod) {
-      discountPaise = Math.round(calculatedServerTotalPaise * 0.10); 
-      finalTotalPaise -= discountPaise;
-      paymentFeePaise = Math.round(finalTotalPaise * 0.02); 
-    }
-    
-    if (isCod) {
-      codFeePaise = 5000; 
-      finalTotalPaise += codFeePaise;
-    }
-
     let contributionPaise = finalTotalPaise - totalCogsPaise - shippingCostPaise - paymentFeePaise;
     const deviceInfo = reqInstance ? (reqInstance.headers['user-agent']?.includes('Mobile') ? 'Mobile Device' : 'Desktop / PC') : 'Web Browser / API';
 
     // ==========================================
-    // 4. ORDER CREATION & PAYMENT INTENT PERSISTENCE
+    // 4. ORDER CREATION & EXPLICIT PAYMENT INTENT BINDING (TASK #65 ACID)
     // ==========================================
     const newOrder = new Order({ 
       userId, 
       items: verifiedOrderItems, 
+      totalAmount: (finalTotalPaise / 100).toString(), 
       totalPaise: finalTotalPaise, 
+      subtotalPaise: calculatedServerTotalPaise,
       status: safeStatus, 
       address, 
       paymentMethod, 
       userDetails, 
       deviceInfo, 
       trafficSource,
+      idempotencyKey: idempotencyKey || undefined, 
       fulfilledFromWarehouse: selectedWarehouse ? selectedWarehouse._id : null,
       cogsPaise: totalCogsPaise,
       shippingCostPaise,
@@ -234,7 +255,9 @@ const createOrderService = async (userId, orderPayload, reqInstance = null) => {
     }
 
     const dummyGatewayOrderId = `pending_tx_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-    await PaymentIntent.create([{
+    
+    // Create explicit PaymentIntent and link its ID back to the order within the same transaction
+    const createdIntent = await PaymentIntent.create([{
       userId,
       orderId: savedOrder._id,
       gatewayOrderId: dummyGatewayOrderId,
@@ -244,9 +267,13 @@ const createOrderService = async (userId, orderPayload, reqInstance = null) => {
       paymentGateway: 'razorpay'
     }], { session });
 
-    savedOrder.paymentDetails = { gatewayOrderId: dummyGatewayOrderId };
+    savedOrder.paymentDetails = { 
+      gatewayOrderId: dummyGatewayOrderId,
+      paymentIntentId: createdIntent[0]._id 
+    };
     await savedOrder.save({ session });
     
+    // Commit transaction successfully
     await session.commitTransaction();
     session.endSession();
 

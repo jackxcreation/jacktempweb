@@ -4,6 +4,7 @@ const crypto = require('crypto');
 /**
  * Enterprise Request ID Middleware
  * Assigns a unique X-Request-ID correlation tracer to every incoming request.
+ * (Supports Tasks #49 & #50 for standardized structured tracing and error reporting)
  */
 const requestIdMiddleware = (req, res, next) => {
   // Check if request already has an incoming ID from client, gateway, or load balancer
@@ -23,5 +24,9 @@ const requestIdMiddleware = (req, res, next) => {
   
   next();
 };
+
+// 🔥 Add dual compatibility so both object destructuring and direct imports work seamlessly
+requestIdMiddleware.requestIdMiddleware = requestIdMiddleware;
+requestIdMiddleware.requestContextMiddleware = requestIdMiddleware; // Added compatibility alias for Task #50
 
 module.exports = { requestIdMiddleware };

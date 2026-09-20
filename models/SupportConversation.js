@@ -1,4 +1,5 @@
-﻿const mongoose = require('mongoose');
+﻿// models/SupportConversation.js
+const mongoose = require('mongoose');
 
 const supportConversationSchema = new mongoose.Schema({
   conversationId: { type: String, required: true, unique: true, index: true },
@@ -31,9 +32,11 @@ const supportConversationSchema = new mongoose.Schema({
   priority: { type: String, uppercase: true, enum: ['LOW', 'MEDIUM', 'HIGH', 'URGENT'], default: 'MEDIUM' },
   sentiment: { type: String, default: 'NEUTRAL', uppercase: true, trim: true },
   
-  // 🔥 FIX: Added missing Agent fields for Admin UI display
+  // 🔥 TASK #41: Added missing Agent and Assignment tracking fields for Admin UI display & SLA consistency
   assignedAgentId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true, default: null },
   assignedAgentName: { type: String, trim: true, default: null },
+  assignedAt: { type: Date, default: null },
+  lastCustomerMessageAt: { type: Date, default: Date.now },
   
   aiResolved: { type: Boolean, default: false },
   escalated: { type: Boolean, default: false },
@@ -52,6 +55,7 @@ const supportConversationSchema = new mongoose.Schema({
 supportConversationSchema.index({ status: 1, lastMessageAt: -1 });
 supportConversationSchema.index({ assignedAgentId: 1, status: 1 });
 supportConversationSchema.index({ mode: 1, lastMessageAt: -1 });
+supportConversationSchema.index({ customerId: 1, status: 1 }); // 🔥 TASK #39: Customer session continuity index
 
 // ==========================================
 // 🔥 BULLETPROOF PRE-SAVE HOOK
@@ -59,7 +63,7 @@ supportConversationSchema.index({ mode: 1, lastMessageAt: -1 });
 supportConversationSchema.pre('save', function(next) {
   // Automatically sync status with mode changes
   if (this.isModified('mode')) {
-    if (this.mode === 'HUMAN_ACTIVE' || this.mode === 'WAITING_FOR_AGENT') {
+    if (this.mode === 'HUMAN_ACTIVE' || this.mode === 'WAITING_FOR_AGENT' || this.mode === 'ESCALATION_REQUESTED') {
       this.escalated = true;
       if (this.status !== 'RESOLVED' && this.status !== 'CLOSED') {
         this.status = 'ESCALATED';
@@ -74,6 +78,12 @@ supportConversationSchema.pre('save', function(next) {
       if (!this.resolvedAt) this.resolvedAt = Date.now();
     }
   }
+
+  // 🔥 TASK #41: Automatically timestamp assignment when assignedAgentId changes
+  if (this.isModified('assignedAgentId') && this.assignedAgentId && !this.assignedAt) {
+    this.assignedAt = new Date();
+  }
+
   next();
 });
 
@@ -81,7 +91,7 @@ supportConversationSchema.pre('save', function(next) {
 // 🔥 HELPER INSTANCE METHODS
 // ==========================================
 supportConversationSchema.methods.isHumanActive = function() {
-  return this.mode === 'HUMAN_ACTIVE' || this.mode === 'WAITING_FOR_AGENT';
+  return this.mode === 'HUMAN_ACTIVE' || this.mode === 'WAITING_FOR_AGENT' || this.mode === 'ESCALATION_REQUESTED';
 };
 
 supportConversationSchema.methods.isAIActive = function() {
@@ -94,6 +104,7 @@ supportConversationSchema.methods.markAsEscalated = function(agentId = null, age
   this.escalated = true;
   if (agentId) {
     this.assignedAgentId = agentId;
+    this.assignedAt = new Date();
   }
   if (agentName) {
     this.assignedAgentName = agentName;

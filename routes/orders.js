@@ -1,68 +1,36 @@
-// routes/orderRouter.js
+// routes/orders.js
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose'); 
 const { Order, Product, Setting, User, Warehouse, PaymentIntent, PaymentAttempt, Refund } = require('../models'); 
-const { z } = require('zod'); // 🔥 Zod for strict input validation
-const { logger } = require('../utils/logger'); // 🔥 Production Winston Logger
+const { logger } = require('../utils/logger'); // Production Winston Logger with redaction
+const { calculateOrderTotal } = require('../services/orderPricingService'); // Server-side authoritative pricing engine (Task #59)
+const { reserveInventoryAtomic } = require('../services/inventoryService'); // Atomic stock reservation service
+const { isValidTransition } = require('../services/orderStateMachine'); // Strict state machine validator
+const { queryOrders } = require('../services/orderQueryService'); // Advanced pagination & query service
+const { serializeOrder, serializeOrderList } = require('../serializers/orderSerializer'); // Response sanitizer serializer
+
+// 🔥 TASK #48: IMPORT CENTRALIZED ZOD VALIDATORS FOR ORDERS
+const { orderCreationValidator, orderUpdateValidator } = require('../validators/order');
+
+// 🔥 TASK #49: IMPORT STANDARDIZED API RESPONSE HELPERS
+const { sendSuccess, sendError } = require('../utils/apiResponse');
 
 // 🚨 IMPORT AUTH & ZERO-TRUST RBAC MIDDLEWARES
 const { protect } = require('../middleware/authMiddleware');
 const { checkPermission } = require('../middleware/rbacMiddleware');
 
-// 🛡️ IMPORT IDEMPOTENCY MIDDLEWARE
+// 🛡️ IMPORT IDEMPOTENCY MIDDLEWARE (Task #62)
 const { requireIdempotency } = require('../middleware/idempotencyMiddleware');
 
-// 🚚 IMPORT UNIFIED SHIPPING ENGINE ABSTRACTION
+// 🔥 TASK #47: IMPORT GRANULAR RATE LIMITERS
+const { paymentLimiter } = require('../middleware/rateLimit');
+
+// 🔥 TASK #44: IMPORT SEPARATED UNIFIED SHIPPING ENGINE (Task #61)
 const shippingEngine = require('../services/shipping/shippingEngine');
 
 // 📊 IMPORT ANALYTICS QUEUE PRODUCER
 const { trackEvent } = require('../services/analyticsQueue');
-
-// ==========================================
-// 🛡️ ZOD VALIDATION SCHEMAS FOR ORDERS
-// ==========================================
-const orderCreationSchema = z.object({
-  items: z.array(z.object({
-    productId: z.string().min(1, "Product ID is required"),
-    quantity: z.number().int().positive("Quantity must be at least 1")
-  })).min(1, "Order must contain at least one item"),
-  address: z.object({
-    name: z.string().min(1, "Name is required"),
-    flat: z.string().optional().default("N/A"), 
-    street: z.string().optional().default("N/A"), 
-    city: z.string().min(1, "City is required"),
-    state: z.string().min(1, "State is required"),
-    pincode: z.string().regex(/^\d{6}$/, "Invalid pincode. Must be 6 digits"),
-    primaryPhone: z.string()
-      .regex(/^\d{10}$/, "Invalid phone number. Must be 10 digits")
-      .or(z.string().min(10).max(15)) 
-      .default("N/A") 
-  }),
-  paymentMethod: z.string().min(1, "Payment method is required"),
-  couponCode: z.string().optional(),
-  userDetails: z.object({
-    name: z.string().optional(),
-    email: z.string().email().optional()
-  }).optional(),
-  trafficSource: z.any().optional()
-});
-
-const orderUpdateSchema = z.object({
-  status: z.enum([
-    'Pending Review', 'Pending', 'Paid', 'Processing', 'Packed', 
-    'Shipped', 'OutForDelivery', 'Delivered', 'Cancelled', 
-    'Refunded', 'ReturnRequested', 'ReturnApproved', 'Returned', 'RTO'
-  ]).optional(),
-  adminNotes: z.string().max(500).optional(),
-  refundStatus: z.string().optional(),
-  auditReason: z.string().max(300).optional() // 🔥 Audit Reason for enterprise compliance
-});
-
-// Helper for secure regex escaping to prevent ReDoS attacks
-const escapeRegex = (text) => {
-  return text.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
-};
 
 const sendErrorResponse = (res, req, error, defaultMessage = "Internal Server Error", statusCode = 500) => {
   logger.error({
@@ -70,18 +38,22 @@ const sendErrorResponse = (res, req, error, defaultMessage = "Internal Server Er
     requestId: req.requestId,
     error: error.message,
     stack: error.stack,
-    route: req.originalUrl
+    route: req.originalUrl,
+    errorCode: error.code || 'ORDER_OPERATION_FAILED'
   });
 
-  return res.status(statusCode).json({
-    success: false,
-    message: process.env.NODE_ENV === 'production' ? defaultMessage : error.message,
-    requestId: req.requestId
-  });
+  return sendError(
+    res, 
+    error.code || 'ORDER_OPERATION_FAILED', 
+    process.env.NODE_ENV === 'production' ? defaultMessage : error.message, 
+    statusCode, 
+    req, 
+    error.errors || error.issues || null
+  );
 };
 
 // ==========================================
-// 🛡️ CENTRALIZED AUDIT HELPER (WHO, WHAT, WHEN, WHERE, BEFORE, AFTER, WHY)
+// 🛡️ CENTRALIZED AUDIT HELPER
 // ==========================================
 const logAdminAction = async (req, action, details, beforeState = null, afterState = null) => {
   try {
@@ -114,106 +86,97 @@ const logAdminAction = async (req, action, details, beforeState = null, afterSta
 };
 
 // ==========================================
-// 🛒 3. ORDER & SHIPPING APIs (Multi-Warehouse Routing & Inventory Enabled)
+// 🛒 ORDER & SHIPPING APIs (🔥 TASK #43 & #44 INTEGRATED)
 // ==========================================
 
-// ==========================================
-// 🔥 1. AWB GENERATION ROUTE - DELEGATED TO SHIPPING ENGINE, AUDIT LOGGED & IDEMPOTENCY PROTECTED
-// ==========================================
 router.post('/api/orders/:id/generate-awb', protect, checkPermission('orders:ship'), requireIdempotency, async (req, res) => {
   try {
     const { id } = req.params;
     const { provider } = req.body; 
     
-    const order = await Order.findById(id);
+    // 🔥 TASK #64: Lean query with precise projection for AWB generation
+    const order = await Order.findById(id).lean();
     
     if (!order) {
-      return res.status(404).json({ success: false, message: "Order not found", requestId: req.requestId });
+      return sendError(res, 'ORDER_NOT_FOUND', "Order not found", 404, req);
     }
 
     if (order.shipment && order.shipment.awb) {
-      return res.status(200).json({ 
-        success: true, 
-        message: "AWB already exists (Idempotent Replay)", 
+      return sendSuccess(res, { 
         waybill: order.shipment.awb,
         provider: order.shipment.provider,
-        order: order.toJSON()
-      });
+        order: serializeOrder(order, req.user)
+      }, "AWB already exists (Idempotent Replay)", 200, req);
     }
 
-    const orderPayload = order.toObject();
-    const shipmentResult = await shippingEngine.generateAWB(orderPayload, provider);
+    const shipmentResult = await shippingEngine.generateAWB(order, provider);
 
     const previousShipment = order.shipment ? { ...order.shipment } : {};
-    
-    order.shipment = {
-        provider: shipmentResult.provider || provider || 'unknown',
-        awb: shipmentResult.waybill || shipmentResult.awb,
+    const newShipmentData = {
+        provider: shipmentResult.provider || provider || 'delhivery',
+        awb: shipmentResult.awb || shipmentResult.waybill || '',
+        trackingNumber: shipmentResult.trackingNumber || shipmentResult.awb || '',
+        carrier: shipmentResult.carrier || 'Delhivery Surface',
+        courier: shipmentResult.courier || 'Delhivery Express',
+        shipmentId: shipmentResult.shipmentId || '',
         providerOrderId: shipmentResult.providerOrderId || '',
         trackingStatus: shipmentResult.trackingStatus || 'Manifested',
         lastSyncedAt: new Date(),
         cancellationStatus: false
     };
     
-    await order.save();
+    const updatedOrderDoc = await Order.findByIdAndUpdate(
+      id,
+      { $set: { shipment: newShipmentData } },
+      { new: true }
+    ).lean();
 
     await logAdminAction(
       req,
       'GENERATE_AWB',
-      `Generated AWB via [${String(order.shipment.provider).toUpperCase()}] - AWB: ${order.shipment.awb} for Order #${order._id}`,
+      `Generated AWB via [${String(newShipmentData.provider).toUpperCase()}] - AWB: ${newShipmentData.awb} for Order #${order._id}`,
       { shipment: previousShipment?.awb ? `Existing AWB: ${previousShipment.awb}` : 'No AWB assigned' },
-      { shipment: order.shipment.awb, provider: order.shipment.provider }
+      { shipment: newShipmentData.awb, provider: newShipmentData.provider }
     );
 
     const io = req.app.get("io");
     if (io) {
       try {
-        io.to('orders').emit('shipment.created', { orderId: order._id, awb: order.shipment.awb, provider: order.shipment.provider });
+        io.to('orders').emit('shipment.created', { orderId: order._id, awb: newShipmentData.awb, provider: newShipmentData.provider });
       } catch (e) {}
     }
 
-    return res.status(200).json({ 
-        success: true, 
-        message: "AWB Generated Successfully", 
-        waybill: order.shipment.awb,
-        provider: order.shipment.provider,
-        order: order.toJSON()
-    });
+    return sendSuccess(res, { 
+        waybill: newShipmentData.awb,
+        provider: newShipmentData.provider,
+        order: serializeOrder(updatedOrderDoc, req.user)
+    }, "AWB Generated Successfully", 200, req);
 
   } catch (error) {
     return sendErrorResponse(res, req, error, error.message || "Network or Server Error while generating AWB");
   }
 });
 
-// ==========================================
-// 🖨️ FETCH DELIVERY LABEL VIA SHIPPING ENGINE
-// ==========================================
 router.get('/api/orders/label/:awb', protect, checkPermission('orders:ship'), async (req, res) => {
   try {
     const { awb } = req.params;
     const labelData = await shippingEngine.getLabel(awb);
-    return res.status(200).json(labelData);
+    return sendSuccess(res, labelData, "Label fetched successfully", 200, req);
   } catch (error) {
     return sendErrorResponse(res, req, error, "Server error fetching label");
   }
 });
 
-// ==========================================
-// 🚚 SCHEDULE PICKUP VIA SHIPPING ENGINE & IDEMPOTENCY PROTECTED
-// ==========================================
 router.post('/api/orders/pickup', protect, checkPermission('warehouse:all'), requireIdempotency, async (req, res) => {
   try {
     const { package_count, location_name } = req.body;
     const responseData = await shippingEngine.schedulePickup(package_count, location_name);
-    return res.status(200).json(responseData);
+    return sendSuccess(res, responseData, "Pickup scheduled successfully", 200, req);
   } catch (error) {
     return sendErrorResponse(res, req, error, "Error scheduling pickup");
   }
 });
 
-// ==========================================
-// 🚫 CANCEL SHIPMENT VIA SHIPPING ENGINE - AUDIT LOGGED & IDEMPOTENCY PROTECTED
-// ==========================================
 router.post('/api/orders/:id/cancel-shipment', protect, checkPermission('orders:cancel'), requireIdempotency, async (req, res) => {
   try {
     const { waybill, auditReason } = req.body;
@@ -227,195 +190,69 @@ router.post('/api/orders/:id/cancel-shipment', protect, checkPermission('orders:
       { waybill, status: 'Cancelled' }
     );
 
-    return res.status(200).json(responseData);
+    return sendSuccess(res, responseData, "Shipment cancelled successfully", 200, req);
   } catch (error) {
     return sendErrorResponse(res, req, error, "Error cancelling shipment");
   }
 });
 
 // ==========================================
-// 🛒 MAIN ORDER CREATION ROUTE - ZOD VALIDATED, ATOMIC INVENTORY & IDEMPOTENCY PROTECTED 🔥
+// 🛒 MAIN ORDER CREATION ROUTE (TASKS #59 - #65)
 // ==========================================
-router.post('/api/orders', protect, requireIdempotency, async (req, res) => {
-  const validationResult = orderCreationSchema.safeParse(req.body);
+router.post('/api/orders', protect, paymentLimiter, requireIdempotency, async (req, res) => {
+  const validationResult = orderCreationValidator.safeParse(req.body);
   if (!validationResult.success) {
-    console.error("❌ ZOD VALIDATION FAILED on /api/orders:", JSON.stringify(validationResult.error.format(), null, 2));
-    return res.status(400).json({ 
-      success: false, 
-      message: "Validation failed", 
-      errors: validationResult.error.format(),
-      requestId: req.requestId
-    });
+    return sendError(
+      res, 
+      'VALIDATION_FAILED', 
+      "Validation failed", 
+      400, 
+      req, 
+      validationResult.error.format()
+    );
   }
 
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const { items, address, paymentMethod, userDetails, trafficSource, couponCode } = validationResult.data;
+    const { items, address, paymentMethod, userDetails, trafficSource, couponCode, idempotencyKey } = validationResult.data;
     const secureUserId = req.user._id; 
     const safeStatus = 'Pending'; 
-    const customerPincode = address.pincode;
 
-    // 🔥 SMART MULTI-WAREHOUSE ROUTING & SELECTION 🔥
-    const activeWarehouses = await Warehouse.find({ isActive: true }).sort({ priority: 1 }).session(session);
-    let selectedWarehouse = null;
-
-    for (const wh of activeWarehouses) {
-      if (wh.currentLoad >= wh.dailyCapacity) continue;
-
-      let isServiceable = true;
-      if (wh.serviceablePincodes && wh.serviceablePincodes.length > 0) {
-        isServiceable = wh.serviceablePincodes.includes(customerPincode);
-      }
-      if (!isServiceable) continue;
-
-      let hasAllStock = true;
-      for (const rawItem of items) {
-        const product = await Product.findById(rawItem.productId).session(session);
-        if (!product) {
-          hasAllStock = false;
-          break;
-        }
-
-        const whInv = product.warehouseInventories?.find(w => w.warehouse.toString() === wh._id.toString());
-        const availableInWh = whInv ? (whInv.inventoryState?.available || whInv.inventory) : (product.inventoryState?.available || product.inventory);
-
-        if (availableInWh < rawItem.quantity) {
-          hasAllStock = false;
-          break;
-        }
-      }
-
-      if (hasAllStock) {
-        selectedWarehouse = wh;
-        break;
-      }
-    }
-
-    if (!selectedWarehouse && activeWarehouses.length > 0) {
-      selectedWarehouse = activeWarehouses[0];
-    }
-
-    let calculatedServerTotalPaise = 0;
-    let totalCogsPaise = 0; 
-    const verifiedOrderItems = [];
-
-    for (const rawItem of items) {
-      const productId = rawItem.productId;
-      const orderQty = rawItem.quantity;
-
-      // 🔥 ATOMIC RACE-CONDITION SAFE STOCK CHECK 🔥
-      const product = await Product.findOne({
-        _id: productId,
-        $or: [
-          { 'inventoryState.available': { $gte: orderQty } },
-          { inventory: { $gte: orderQty } }
-        ]
-      }).session(session);
-
-      if (!product) {
+    // 🔥 TASK #62 & #63: Idempotency Duplicate Request Prevention with lean check
+    if (idempotencyKey) {
+      const existingOrder = await Order.findOne({ idempotencyKey }).select('_id userId status totalPaise createdAt').lean().session(session);
+      if (existingOrder) {
         await session.abortTransaction();
         session.endSession();
-        return res.status(400).json({ success: false, message: `Insufficient available stock or product not found for ID: ${productId}`, requestId: req.requestId });
+        return sendSuccess(res, { 
+          order: serializeOrder(existingOrder, req.user) 
+        }, "Order already created (Idempotent Replay)", 200, req);
       }
-
-      if (!product.inventoryState) {
-        product.inventoryState = { available: product.inventory || 0, sellable: product.inventory || 0 };
-      }
-
-      let prevAvailable = product.inventoryState.available;
-      if (selectedWarehouse) {
-        let whInv = product.warehouseInventories?.find(w => w.warehouse.toString() === selectedWarehouse._id.toString());
-        if (whInv) {
-          prevAvailable = whInv.inventoryState?.available !== undefined ? whInv.inventoryState.available : whInv.inventory;
-        }
-      }
-
-      if (prevAvailable < orderQty) {
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(400).json({ success: false, message: `Insufficient available stock for product: ${product.title}`, requestId: req.requestId });
-      }
-
-      const newAvailable = prevAvailable - orderQty;
-
-      product.inventoryState.available = newAvailable;
-      product.inventoryState.reserved = (product.inventoryState.reserved || 0) + orderQty;
-      product.inventory = newAvailable;
-
-      if (selectedWarehouse) {
-        let whInvIndex = product.warehouseInventories?.findIndex(w => w.warehouse.toString() === selectedWarehouse._id.toString());
-        if (whInvIndex !== -1 && whInvIndex !== undefined) {
-          product.warehouseInventories[whInvIndex].inventoryState.available = newAvailable;
-          product.warehouseInventories[whInvIndex].inventoryState.reserved = (product.warehouseInventories[whInvIndex].inventoryState.reserved || 0) + orderQty;
-        } else {
-          product.warehouseInventories.push({
-            warehouse: selectedWarehouse._id,
-            inventory: newAvailable,
-            inventoryState: { available: newAvailable, reserved: orderQty, sellable: newAvailable }
-          });
-        }
-      }
-
-      product.stockLedger.push({
-        type: 'RESERVED',
-        quantity: orderQty,
-        previousAvailable: prevAvailable,
-        newAvailable: newAvailable,
-        source: 'Order',
-        referenceId: 'PENDING_ORDER',
-        reason: `Order routed to warehouse ${selectedWarehouse ? selectedWarehouse.name : 'Default'} - stock reserved`,
-        warehouseId: selectedWarehouse ? selectedWarehouse._id : null,
-        performedBy: secureUserId,
-        timestamp: new Date()
-      });
-
-      await product.save({ session });
-
-      const ioInstance = req.app.get("io");
-      if (ioInstance) {
-        if (newAvailable === 0) {
-          ioInstance.to('inventory').emit('inventory.out', { productId: product._id, title: product.title, sku: product.sku });
-        } else if (newAvailable < 5) {
-          ioInstance.to('inventory').emit('inventory.low', { productId: product._id, title: product.title, remaining: newAvailable, sku: product.sku });
-        }
-      }
-
-      const unitPricePaise = product.pricePaise || Math.round(parseFloat(product.price || 0) * 100);
-      calculatedServerTotalPaise += unitPricePaise * orderQty;
-
-      const unitCogsPaise = product.cogsPaise || Math.round(parseFloat(product.cogs || 0) * 100);
-      totalCogsPaise += unitCogsPaise * orderQty;
-
-      verifiedOrderItems.push({
-        productId: product._id,
-        title: product.title,
-        pricePaise: unitPricePaise,
-        cogsPaise: unitCogsPaise,
-        quantity: orderQty,
-        image: product.image || (product.images ? product.images[0] : '')
-      });
     }
 
-    if (selectedWarehouse) {
-      await Warehouse.findByIdAndUpdate(selectedWarehouse._id, { $inc: { currentLoad: 1 } }, { session });
+    // 🔥 TASK #59, #60, #61: Authoritative Server-Side Pricing, Coupon & Shipping Calculation
+    const pricingResult = await calculateOrderTotal(items, couponCode);
+    if (!pricingResult.success) {
+      await session.abortTransaction();
+      session.endSession();
+      return sendError(res, 'PRICING_CALCULATION_FAILED', pricingResult.message, 400, req);
     }
+
+    const calculatedServerTotalPaise = pricingResult.subtotalPaise;
+    const taxAmountPaise = pricingResult.taxPaise;
+    const shippingCostPaise = pricingResult.shippingPaise; 
+    const discountPaise = pricingResult.discountPaise; 
+    let finalTotalPaise = pricingResult.totalPaise; 
 
     const payString = String(paymentMethod || '').toLowerCase();
     const isCod = payString.includes('cod') || payString.includes('cash');
 
-    let shippingCostPaise = 6000; 
-    let discountPaise = 0;
     let paymentFeePaise = 0;
     let codFeePaise = 0;
-    let taxAmountPaise = Math.round(calculatedServerTotalPaise * 0.18); 
 
-    let finalTotalPaise = calculatedServerTotalPaise;
-    
     if (!isCod) {
-      discountPaise = Math.round(calculatedServerTotalPaise * 0.10); 
-      finalTotalPaise -= discountPaise;
       paymentFeePaise = Math.round(finalTotalPaise * 0.02); 
     }
     
@@ -424,6 +261,12 @@ router.post('/api/orders', protect, requireIdempotency, async (req, res) => {
       finalTotalPaise += codFeePaise;
     }
 
+    // 🔥 TASK #65: Atomic Inventory Reservation & Stock Validation inside ACID Transaction
+    const inventoryReservation = await reserveInventoryAtomic(items, null, secureUserId, session);
+    const verifiedOrderItems = inventoryReservation.verifiedItems;
+    const selectedWarehouseId = inventoryReservation.selectedWarehouseId;
+
+    let totalCogsPaise = verifiedOrderItems.reduce((acc, item) => acc + (item.cogsPaise * item.quantity), 0);
     let contributionPaise = finalTotalPaise - totalCogsPaise - shippingCostPaise - paymentFeePaise;
 
     const deviceInfo = req.headers['user-agent']?.includes('Mobile') ? 'Mobile Device' : 'Desktop / PC';
@@ -432,22 +275,25 @@ router.post('/api/orders', protect, requireIdempotency, async (req, res) => {
     const newOrder = new Order({ 
       userId: secureUserId, 
       items: verifiedOrderItems, 
+      totalAmount: (finalTotalPaise / 100).toString(),
       totalPaise: finalTotalPaise, 
+      subtotalPaise: calculatedServerTotalPaise,
       status: safeStatus, 
       address, 
       paymentMethod, 
       userDetails, 
       deviceInfo, 
       trafficSource,
-      fulfilledFromWarehouse: selectedWarehouse ? selectedWarehouse._id : null,
+      idempotencyKey: idempotencyKey || undefined, 
+      fulfilledFromWarehouse: selectedWarehouseId,
 
       cogsPaise: totalCogsPaise,
-      shippingCostPaise: shippingCostPaise,
-      paymentFeePaise: paymentFeePaise,
-      codFeePaise: codFeePaise,
-      taxAmountPaise: taxAmountPaise,
-      discountPaise: discountPaise,
-      contributionPaise: contributionPaise,
+      shippingCostPaise,
+      paymentFeePaise,
+      codFeePaise,
+      taxAmountPaise,
+      discountPaise,
+      contributionPaise,
       refundAmountPaise: 0,
       rtoCostPaise: 0
     });
@@ -463,7 +309,8 @@ router.post('/api/orders', protect, requireIdempotency, async (req, res) => {
     }
 
     const dummyGatewayOrderId = `pending_tx_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-    await PaymentIntent.create([{
+    
+    const createdIntent = await PaymentIntent.create([{
       userId: secureUserId,
       orderId: savedOrder._id,
       gatewayOrderId: dummyGatewayOrderId,
@@ -473,69 +320,55 @@ router.post('/api/orders', protect, requireIdempotency, async (req, res) => {
       paymentGateway: 'razorpay'
     }], { session });
 
-    savedOrder.paymentDetails = { gatewayOrderId: dummyGatewayOrderId };
+    savedOrder.paymentDetails = { 
+      gatewayOrderId: dummyGatewayOrderId,
+      paymentIntentId: createdIntent[0]._id 
+    };
     await savedOrder.save({ session });
     
     await session.commitTransaction();
     session.endSession();
 
-    const orderResponse = { ...savedOrder._doc, id: savedOrder._id.toString() };
-
     trackEvent('ORDER_COMPLETED', {
       orderId: savedOrder._id,
       totalPaise: finalTotalPaise,
       cogsPaise: totalCogsPaise,
-      contributionPaise: contributionPaise,
+      contributionPaise,
       items: verifiedOrderItems,
       trafficSource,
       userId: secureUserId
     });
 
+    const serializedResponse = serializeOrder(savedOrder, req.user);
+
     if (io) {
         try { 
-          io.to('orders').emit('order.created', orderResponse);
-          io.emit("new_order", orderResponse); 
+          io.to('orders').emit('order.created', serializedResponse);
+          io.emit("new_order", serializedResponse); 
         } catch(e){}
     }
 
-    return res.status(201).json(orderResponse);
+    return sendSuccess(res, serializedResponse, "Order created successfully", 201, req);
   } catch (error) { 
     if (session.inTransaction()) await session.abortTransaction();
     session.endSession();
-    return sendErrorResponse(res, req, error, "Order creation failed");
+    return sendErrorResponse(res, req, error, error.message || "Order creation failed");
   }
 });
 
 // ==========================================
-// ✏️ UPDATE ORDER STATUS & MULTI-STATE INVENTORY TRANSITIONS - AUDIT LOGGED 🔥
+// ✏️ UPDATE ORDER STATUS & STRICT STATE MACHINE VALIDATION
 // ==========================================
-const ALLOWED_STATE_TRANSITIONS = {
-  'Pending Review': ['Pending', 'Paid', 'Processing', 'Cancelled'],
-  'Pending': ['Paid', 'Processing', 'Packed', 'Cancelled'],
-  'Paid': ['Processing', 'Packed', 'Shipped', 'Refunded', 'Cancelled'],
-  'Processing': ['Packed', 'Shipped', 'Cancelled', 'Refunded'],
-  'Packed': ['Shipped', 'Cancelled'],
-  'Shipped': ['OutForDelivery', 'Delivered', 'RTO', 'Refunded'],
-  'OutForDelivery': ['Delivered', 'RTO'],
-  'Delivered': ['ReturnRequested', 'Returned', 'Refunded'],
-  'ReturnRequested': ['ReturnApproved', 'Returned', 'Cancelled', 'Delivered'],
-  'ReturnApproved': ['Returned', 'Refunded'],
-  'Returned': ['Refunded'],
-  'RTO': ['Refunded', 'Returned'],
-  'Cancelled': ['Refunded'],
-  'Refunded': []
-};
-
 router.put('/api/orders/:id', protect, checkPermission('orders:edit'), async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const validationResult = orderUpdateSchema.safeParse(req.body);
+    const validationResult = orderUpdateValidator.safeParse(req.body);
     if (!validationResult.success) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(400).json({ success: false, message: "Validation failed", errors: validationResult.error.format(), requestId: req.requestId });
+      return sendError(res, 'VALIDATION_FAILED', "Validation failed", 400, req, validationResult.error.format());
     }
 
     const { status, adminNotes, refundStatus, auditReason } = validationResult.data;
@@ -546,7 +379,7 @@ router.put('/api/orders/:id', protect, checkPermission('orders:edit'), async (re
       if (!canRefund) {
         await session.abortTransaction();
         session.endSession();
-        return res.status(403).json({ success: false, message: "Access Denied: Your role lacks permission to process refunds." });
+        return sendError(res, 'ACCESS_DENIED', "Access Denied: Your role lacks permission to process refunds.", 403, req);
       }
     }
 
@@ -554,15 +387,14 @@ router.put('/api/orders/:id', protect, checkPermission('orders:edit'), async (re
     if (!existingOrder) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(404).json({ success: false, message: "Order not found", requestId: req.requestId });
+      return sendError(res, 'ORDER_NOT_FOUND', "Order not found", 404, req);
     }
 
     if (status && status !== existingOrder.status) {
-      const validNextStates = ALLOWED_STATE_TRANSITIONS[existingOrder.status] || [];
-      if (!validNextStates.includes(status)) {
+      if (!isValidTransition(existingOrder.status, status)) {
         await session.abortTransaction();
         session.endSession();
-        return res.status(400).json({ success: false, message: `Invalid state transition. Cannot move order from '${existingOrder.status}' to '${status}'.`, requestId: req.requestId });
+        return sendError(res, 'INVALID_STATE_TRANSITION', `Invalid state transition. Cannot move order from '${existingOrder.status}' to '${status}'.`, 400, req);
       }
     }
 
@@ -730,16 +562,16 @@ router.put('/api/orders/:id', protect, checkPermission('orders:edit'), async (re
       { status: updatedOrder.status, refundStatus: updatedOrder.refundStatus }
     );
 
-    const orderResponse = { ...updatedOrder._doc, id: updatedOrder._id.toString() };
+    const serializedResponse = serializeOrder(updatedOrder, req.user);
     
     if(io) { 
       try { 
-        io.to('orders').emit('order.status.changed', orderResponse);
-        io.emit("order_status_updated", orderResponse); 
+        io.to('orders').emit('order.status.changed', serializedResponse);
+        io.emit("order_status_updated", serializedResponse); 
       } catch(e){} 
     }
 
-    return res.json(orderResponse);
+    return sendSuccess(res, serializedResponse, "Order updated successfully", 200, req);
   } catch (error) { 
     if (session.inTransaction()) await session.abortTransaction();
     session.endSession();
@@ -748,18 +580,22 @@ router.put('/api/orders/:id', protect, checkPermission('orders:edit'), async (re
 });
 
 // ==========================================
-// 👤 GET SPECIFIC ORDER BY ID (WITH STRICT OWNERSHIP VERIFICATION) 🔥
+// 👤 GET SPECIFIC ORDER BY ID (TASK #64: Lean + Projection)
 // ==========================================
 router.get('/api/orders/:id', protect, async (req, res) => {
   try {
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Order ID format", requestId: req.requestId });
+      return sendError(res, 'INVALID_ID_FORMAT', "Invalid Order ID format", 400, req);
     }
 
-    const order = await Order.findById(id).lean();
+    // 🔥 TASK #64: Lean query with targeted field projection for optimal memory performance
+    const order = await Order.findById(id)
+      .select('userId orderNumber items totalAmount totalPaise status paymentMethod paymentDetails address userDetails shipment createdAt updatedAt')
+      .lean();
+
     if (!order) {
-      return res.status(404).json({ success: false, message: "Order not found", requestId: req.requestId });
+      return sendError(res, 'ORDER_NOT_FOUND', "Order not found", 404, req);
     }
 
     const privilegedRoles = [
@@ -772,24 +608,23 @@ router.get('/api/orders/:id', protect, async (req, res) => {
     const isPrivilegedStaff = privilegedRoles.includes(req.user.role);
     const isOwner = order.userId && order.userId.toString() === req.user._id.toString();
 
-    // 🔥 STRICT RESOURCE-LEVEL OWNERSHIP ENFORCEMENT
     if (!isOwner && !isPrivilegedStaff) {
       logger.warn({
-        message: `UNAUTHORIZED ACCESS ATTEMPT: User ${req.user.email} tried to access Order #${id} owned by User ${order.userId}`,
+        message: `UNAUTHORIZED ACCESS ATTEMPT: User tried to access Order #${id}`,
         requestId: req.requestId,
         userId: req.user._id
       });
-      return res.status(403).json({ success: false, message: "Access Denied: You do not own this order.", requestId: req.requestId });
+      return sendError(res, 'ACCESS_DENIED', "Access Denied: You do not own this order.", 403, req);
     }
 
-    return res.status(200).json({ success: true, order: { ...order, id: order._id.toString() } });
+    return sendSuccess(res, { order: serializeOrder(order, req.user) }, "Order fetched successfully", 200, req);
   } catch (error) {
     return sendErrorResponse(res, req, error, "Failed to fetch order details");
   }
 });
 
 // ==========================================
-// 👤 GET USER ORDERS
+// 👤 GET USER ORDERS (TASK #64: Lean + Projection)
 // ==========================================
 router.get('/api/orders/user/:userId', protect, async (req, res) => {
   try {
@@ -802,20 +637,27 @@ router.get('/api/orders/user/:userId', protect, async (req, res) => {
     const isPrivilegedStaff = privilegedRoles.includes(req.user.role);
 
     if (req.user._id.toString() !== req.params.userId && !isPrivilegedStaff) {
-       return res.status(403).json({ success: false, message: "Access Denied: You can only view your own orders.", requestId: req.requestId });
+       logger.warn({
+         message: `IDOR VIOLATION ATTEMPT: User attempted to view orders for another userId`,
+         requestId: req.requestId,
+         authUserId: req.user._id
+       });
+       return sendError(res, 'ACCESS_DENIED', "Access Denied: You can only view your own orders.", 403, req);
     }
 
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(50, parseInt(req.query.limit) || 10);
     const skip = (page - 1) * limit;
 
+    // 🔥 TASK #64: Lean query with targeted field projection for high-speed list rendering
     const orders = await Order.find({ userId: req.params.userId })
+      .select('userId orderNumber items totalAmount totalPaise status paymentMethod shipment createdAt')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
       .lean();
 
-    return res.json(orders.map(o => ({ ...o, id: o._id.toString() })));
+    return sendSuccess(res, serializeOrderList(orders, req.user), "User orders fetched successfully", 200, req);
   } catch (error) { 
     return sendErrorResponse(res, req, error, "Failed to fetch orders"); 
   }
@@ -826,72 +668,9 @@ router.get('/api/orders/user/:userId', protect, async (req, res) => {
 // ==========================================
 router.get('/api/orders', protect, checkPermission('orders:view'), async (req, res) => {
   try {
-    const { status, payment, search, dateFrom, dateTo } = req.query;
-
-    const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), 100);
-    const page = Math.max(parseInt(req.query.page) || 1, 1);
-    const skip = (page - 1) * limit;
-
-    const query = {};
-
-    if (status) {
-      if (status === 'pending') {
-        query.status = { $in: ['Pending Review', 'Processing'] };
-      } else if (status === 'rto') {
-        query.status = 'RTO';
-      } else if (status === 'returns') {
-        query.$or = [
-          { status: 'Returned' },
-          { refundStatus: { $ne: 'N/A' } }
-        ];
-      } else {
-        query.status = status;
-      }
-    }
-
-    if (payment) {
-      query.paymentMethod = new RegExp(escapeRegex(payment), 'i');
-    }
-
-    if (dateFrom || dateTo) {
-      query.createdAt = {};
-      if (dateFrom) query.createdAt.$gte = new Date(dateFrom);
-      if (dateTo && !isNaN(new Date(dateTo).getTime())) {
-        const endDate = new Date(dateTo);
-        endDate.setHours(23, 59, 59, 999);
-        query.createdAt.$lte = endDate;
-      }
-    }
-
-    if (search && search.trim().length > 0) {
-      const cleanSearch = search.trim();
-      const safeRegex = new RegExp(escapeRegex(cleanSearch), 'i');
-
-      const searchConditions = [
-        { 'address.name': safeRegex },
-        { 'userDetails.name': safeRegex },
-        { 'address.primaryPhone': safeRegex }
-      ];
-
-      if (mongoose.Types.ObjectId.isValid(cleanSearch)) {
-        searchConditions.push({ _id: cleanSearch });
-      }
-
-      query.$or = searchConditions;
-    }
-
-    const [orders, totalCount] = await Promise.all([
-      Order.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-      Order.countDocuments(query)
-    ]);
-
-    return res.json({
-      success: true,
-      total: totalCount,
-      page,
-      pages: Math.ceil(totalCount / limit) || 1,
-      orders: orders.map(o => ({ ...o, id: o._id.toString() }))
-    });
+    const queryResult = await queryOrders(req.query);
+    queryResult.orders = serializeOrderList(queryResult.orders, req.user);
+    return sendSuccess(res, queryResult, "Orders queried successfully", 200, req);
   } catch (error) { 
     return sendErrorResponse(res, req, error, "Failed to fetch paginated orders"); 
   }

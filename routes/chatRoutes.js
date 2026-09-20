@@ -4,18 +4,50 @@ const { GoogleGenerativeAI } = require('@google/generative-ai'); // 🔥 FIXED: 
 
 const router = express.Router();
 
-router.post('/', async (req, res) => {
+// 🔥 TASK #49: IMPORT STANDARDIZED API RESPONSE HELPERS
+const { sendSuccess, sendError } = require('../utils/apiResponse');
+
+// 🔥 TASK #50 & #45: IMPORT STRUCTURED LOGGER & SANITIZER
+const { logger, logInfo, logError, logWarn } = require('../utils/logger');
+
+// 🔥 TASK #47: IMPORT GRANULAR CHAT RATE LIMITER
+const { chatLimiter } = require('../middleware/rateLimit');
+
+// 🔥 TASK #48: IMPORT CENTRALIZED ZOD VALIDATORS FOR SUPPORT/CHAT
+const { supportMessageValidator } = require('../validators/support');
+
+router.post('/', chatLimiter, async (req, res) => {
   try {
+    // 🔥 TASK #48: Strict Zod Input Validation
+    const validationResult = supportMessageValidator.safeParse({
+      conversationId: req.body.conversationId || 'default-conv',
+      content: req.body.message || ''
+    });
+
+    if (!validationResult.success) {
+      return sendError(
+        res, 
+        'VALIDATION_FAILED', 
+        "Validation failed", 
+        400, 
+        req, 
+        validationResult.error.format()
+      );
+    }
+
     const { message, chatHistory, systemInstruction, languageStyle } = req.body;
 
     // Check if Gemini API key is configured properly
     if (!process.env.GEMINI_API_KEY) {
-      console.error("GEMINI_API_KEY is missing in environment variables!");
+      logError("GEMINI_API_KEY is missing in environment variables!", null, { requestId: req.requestId });
       return res.status(500).json({ 
+        success: false,
+        code: 'AI_CONFIG_MISSING',
         error: "Gemini API key not configured on server", 
         reply: languageStyle === 'hinglish' 
           ? "Bhai, server par AI key configure nahi hai. Main aapko human agent se connect kar raha hoon. [TRANSFER_TO_AGENT]" 
-          : "AI service configuration error. Let me connect you with a human agent. [TRANSFER_TO_AGENT]" 
+          : "AI service configuration error. Let me connect you with a human agent. [TRANSFER_TO_AGENT]",
+        requestId: req.requestId
       });
     }
 
@@ -80,19 +112,22 @@ router.post('/', async (req, res) => {
     const result = await chat.sendMessage(message);
     const replyText = result.response.text().trim() || "[TRANSFER_TO_AGENT]";
 
-    return res.status(200).json({ reply: replyText });
+    return sendSuccess(res, { reply: replyText }, "AI response generated successfully", 200, req);
 
   } catch (error) {
-    console.error("Gemini Chat API Error on Server:", error);
+    logError("Gemini Chat API Error on Server:", error, { requestId: req.requestId });
     
     return res.status(500).json({ 
+      success: false,
+      code: 'AI_CHAT_FAILED',
       error: error.message || "Failed to fetch AI response", 
       reply: req.body?.languageStyle === 'hinglish' 
         ? "Bhai, abhi thoda technical issue aa raha hai. Main aapko human agent se connect kar raha hoon. [TRANSFER_TO_AGENT]" 
-        : "I'm experiencing a minor glitch. Let me connect you with a human agent. [TRANSFER_TO_AGENT]" 
-    });
+        : "I'm experiencing a minor glitch. Let me connect you with a human agent. [TRANSFER_TO_AGENT]",
+      requestId: req.requestId
+    }); 
   }
 });
 
-// 🔥 FIXED: CommonJS Export Export
+// 🔥 FIXED: CommonJS Export
 module.exports = router;

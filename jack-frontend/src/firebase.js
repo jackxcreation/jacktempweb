@@ -1,6 +1,6 @@
-// jack-frontend/src/firebase.js (or config/firebase.js)
+// jack-frontend/src/firebase.js
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { getAuth, GoogleAuthProvider } from "firebase/auth";
+import { getAuth, GoogleAuthProvider, setPersistence, browserLocalPersistence } from "firebase/auth";
 
 // 🔥 PRODUCTION SECURITY: Using Environment Variables with fallback to avoid crashes
 const firebaseConfig = {
@@ -17,6 +17,11 @@ const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
 // Initialize Authentication exports
 export const auth = getAuth(app);
+
+// 🔥 Pro feature: Enforce local session persistence across browser reloads
+setPersistence(auth, browserLocalPersistence).catch((error) => {
+  console.error("Firebase Auth Persistence Error:", error);
+});
 
 export const googleProvider = new GoogleAuthProvider();
 // 🔥 Pro feature: Force account selection prompt on Google Sign-In

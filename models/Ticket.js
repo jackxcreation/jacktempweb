@@ -1,3 +1,4 @@
+// models/Ticket.js
 const mongoose = require('mongoose');
 
 const ticketSchema = new mongoose.Schema({
@@ -19,6 +20,13 @@ const ticketSchema = new mongoose.Schema({
     trim: true, 
     index: true 
   },
+  // 🔥 TASK #39: Added conversationId for persistent ticket and chat continuity
+  conversationId: {
+    type: String,
+    index: true,
+    trim: true,
+    default: null
+  },
   ticketNumber: {
     type: String,
     index: true,
@@ -27,7 +35,7 @@ const ticketSchema = new mongoose.Schema({
   status: { 
     type: String, 
     uppercase: true, // Forces standardization
-    enum: ['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED', 'PENDING'],
+    enum: ['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED', 'PENDING', 'ESCALATED'],
     default: 'OPEN',
     index: true 
   },
@@ -67,6 +75,10 @@ const ticketSchema = new mongoose.Schema({
     index: true 
   },
   
+  // 🔥 TASK #41: Required Assignment & SLA Tracking Fields
+  assignedAt: { type: Date, default: null },
+  lastCustomerMessageAt: { type: Date, default: Date.now },
+  
   slaDeadline: { 
     type: Date, 
     default: () => new Date(Date.now() + 24 * 60 * 60 * 1000) 
@@ -90,6 +102,19 @@ const ticketSchema = new mongoose.Schema({
       maxlength: [2000, "Message cannot exceed 2000 characters"]
     },
     timestamp: { type: Date, default: Date.now }
+  }],
+
+  // 🔥 TASK #68: Dedicated internal notes schema strictly isolated from customer viewing
+  internalNotes: [{
+    agentId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    agentName: { type: String, required: true, trim: true },
+    text: { 
+      type: String, 
+      required: [true, "Internal note text cannot be empty"],
+      trim: true,
+      maxlength: [2000, "Internal note cannot exceed 2000 characters"]
+    },
+    timestamp: { type: Date, default: Date.now }
   }]
 }, { 
   timestamps: true,
@@ -99,11 +124,12 @@ const ticketSchema = new mongoose.Schema({
 });
 
 // ==========================================
-// 🔥 ADVANCED COMPOUND INDEXES FOR DASHBOARD & SLA
+// 🔥 ADVANCED COMPOUND INDEXES FOR DASHBOARD & SLA (TASK #63)
 // ==========================================
 ticketSchema.index({ userId: 1, status: 1, createdAt: -1 });
 ticketSchema.index({ status: 1, slaDeadline: 1 });
 ticketSchema.index({ assignedAgentId: 1, status: 1 });
+ticketSchema.index({ conversationId: 1, status: 1 }); // 🔥 TASK #39 Index
 
 // ==========================================
 // 🔥 BULLETPROOF PRE-SAVE LIFECYCLE HOOKS
@@ -112,6 +138,11 @@ ticketSchema.pre('save', function(next) {
   if (!this.ticketNumber) {
     const randomStr = Math.random().toString(36).substring(2, 6).toUpperCase();
     this.ticketNumber = `TKT-${Date.now().toString().slice(-6)}-${randomStr}`;
+  }
+
+  // 🔥 TASK #41: Automatically timestamp assignment when assignedAgentId is updated
+  if (this.isModified('assignedAgentId') && this.assignedAgentId && !this.assignedAt) {
+    this.assignedAt = new Date();
   }
 
   if (!this.firstResponseAt && this.messages && this.messages.length > 0) {
@@ -141,8 +172,25 @@ ticketSchema.virtual('isSlaBreached').get(function() {
 // 🔥 HELPER INSTANCE METHODS
 // ==========================================
 ticketSchema.methods.addMessage = function(sender, text) {
+  const upperSender = sender.toUpperCase();
   this.messages.push({
-    sender: sender.toUpperCase(),
+    sender: upperSender,
+    text,
+    timestamp: new Date()
+  });
+
+  // 🔥 TASK #41: Update last customer message timestamp if sender is user/customer
+  if (upperSender === 'USER' || upperSender === 'CUSTOMER') {
+    this.lastCustomerMessageAt = new Date();
+  }
+
+  return this.save();
+};
+
+ticketSchema.methods.addInternalNote = function(agentId, agentName, text) {
+  this.internalNotes.push({
+    agentId,
+    agentName,
     text,
     timestamp: new Date()
   });

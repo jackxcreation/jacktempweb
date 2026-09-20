@@ -1,15 +1,18 @@
 // services/otpService.js
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken'); // 🔥 ADDED FOR SHORT-LIVED VERIFICATION TOKENS
 const mongoose = require('mongoose');
 const { logger } = require('../utils/logger');
+const { JWT_SECRET } = require('../config/env'); // 🔥 ZERO-FALLBACK JWT SECRET
 
 // ==========================================
 // 🛡️ OTP SECURITY CONFIGURATION CONSTANTS
 // ==========================================
-const OTP_EXPIRY_MS = 5 * 60 * 1000;      // 5 Minutes
+const OTP_EXPIRY_MS = 5 * 60 * 1000;      // 5 Minutes Expiry
 const RESEND_COOLDOWN_MS = 60 * 1000;     // 60 Seconds Cooldown
-const MAX_ATTEMPTS = 5;                   // Max wrong guesses allowed
+const MAX_HOURLY_OTPS = 5;                // Max 5 OTP requests per hour per identifier
+const MAX_ATTEMPTS = 5;                   // Max wrong guesses allowed per OTP
 
 // ==========================================
 // 📦 OTP MONGOOSE SCHEMA & MODEL
@@ -19,6 +22,7 @@ const otpSchema = new mongoose.Schema({
   otpHash: { type: String, required: true },
   attempts: { type: Number, default: 0 },
   lastResentAt: { type: Date, default: Date.now },
+  requestTimestamps: { type: [Date], default: [] }, // Tracks request times for hourly limit abuse prevention
   expiresAt: { type: Date, required: true, index: { expires: 0 } } // TTL Index for automatic DB cleanup
 }, { timestamps: true });
 
@@ -26,19 +30,18 @@ const OtpModel = mongoose.models.Otp || mongoose.model('Otp', otpSchema);
 
 /**
  * Generate and store a secure OTP for a given phone or email identifier.
- * Enforces resend cooldown to prevent spamming.
- * 
- * @param {string} identifier - Phone number or email address
- * @returns {Promise<{ success: boolean, otp?: string, message?: string, waitSeconds?: number }>}
+ * Enforces 60-second resend cooldown and Max 5 OTPs per hour per identifier.
  */
 const generateAndStoreOtp = async (identifier) => {
   try {
     const cleanIdentifier = identifier.toString().toLowerCase().trim();
+    const now = Date.now();
 
-    // Check existing active OTP record for cooldown enforcement
-    const existingRecord = await OtpModel.findOne({ identifier: cleanIdentifier });
-    if (existingRecord) {
-      const elapsed = Date.now() - new Date(existingRecord.lastResentAt).getTime();
+    let record = await OtpModel.findOne({ identifier: cleanIdentifier });
+
+    if (record) {
+      // 1. Check 60-Second Resend Cooldown
+      const elapsed = now - new Date(record.lastResentAt).getTime();
       if (elapsed < RESEND_COOLDOWN_MS) {
         const waitSeconds = Math.ceil((RESEND_COOLDOWN_MS - elapsed) / 1000);
         return {
@@ -48,14 +51,31 @@ const generateAndStoreOtp = async (identifier) => {
           waitSeconds
         };
       }
+
+      // 2. Filter request timestamps to keep only those within the last 1 hour (3600000ms)
+      const oneHourAgo = now - 60 * 60 * 1000;
+      const recentRequests = (record.requestTimestamps || []).filter(ts => new Date(ts).getTime() > oneHourAgo);
+
+      // 3. Check 5 OTPs / Hour Limit per Identifier (Abuse Prevention)
+      if (recentRequests.length >= MAX_HOURLY_OTPS) {
+        logger.warn(`⚠️ Hourly OTP limit exceeded for identifier: [${cleanIdentifier.slice(0, 4)}****]`);
+        return {
+          success: false,
+          code: 'HOURLY_LIMIT_EXCEEDED',
+          message: 'Maximum 5 OTP requests per hour allowed for this account. Please try again later.'
+        };
+      }
+
+      recentRequests.push(new Date(now));
+      record.requestTimestamps = recentRequests;
     }
 
-    // Generate secure 6-digit random number
-    const rawOtp = crypto.randomInt(100000, 999999).toString();
+    // 🔥 Generate cryptographically secure 6-digit random number (100000 to 999999)
+    const rawOtp = crypto.randomInt(100000, 1000000).toString();
     const salt = await bcrypt.genSalt(10);
     const otpHash = await bcrypt.hash(rawOtp, salt);
 
-    const expiresAt = new Date(Date.now() + OTP_EXPIRY_MS);
+    const expiresAt = new Date(now + OTP_EXPIRY_MS);
 
     // Upsert OTP record in database
     await OtpModel.findOneAndUpdate(
@@ -63,7 +83,8 @@ const generateAndStoreOtp = async (identifier) => {
       {
         otpHash,
         attempts: 0,
-        lastResentAt: new Date(),
+        lastResentAt: new Date(now),
+        requestTimestamps: record ? record.requestTimestamps : [new Date(now)],
         expiresAt
       },
       { upsert: true, new: true }
@@ -71,7 +92,6 @@ const generateAndStoreOtp = async (identifier) => {
 
     logger.info(`🔐 OTP generated successfully for identifier: [${cleanIdentifier.slice(0, 4)}****]`);
 
-    // Return raw OTP so the caller service (WhatsApp / Email service) can dispatch it
     return {
       success: true,
       otp: rawOtp,
@@ -85,10 +105,6 @@ const generateAndStoreOtp = async (identifier) => {
 
 /**
  * Verify candidate OTP against stored hash with brute-force protection (MAX_ATTEMPTS).
- * 
- * @param {string} identifier - Phone number or email address
- * @param {string} candidateOtp - User provided OTP
- * @returns {Promise<{ success: boolean, message: string }>}
  */
 const verifyOtp = async (identifier, candidateOtp) => {
   try {
@@ -139,8 +155,30 @@ const verifyOtp = async (identifier, candidateOtp) => {
   }
 };
 
+/**
+ * 🔥 TASK #15: Issue a short-lived verification token (10 mins) after successful OTP verification.
+ * This token acts as proof-of-verification required during registration.
+ */
+const issueVerificationToken = (identifier) => {
+  if (!JWT_SECRET) {
+    throw new Error("Server Configuration Error: JWT_SECRET is required");
+  }
+  const cleanIdentifier = identifier.toLowerCase().trim();
+  return jwt.sign(
+    { identifier: cleanIdentifier, verified: true, purpose: 'registration' },
+    JWT_SECRET,
+    { expiresIn: '10m' } // Short-lived
+  );
+};
+
+// 🔥 Add alias export support for maximum compatibility
+generateAndStoreOtp.generateAndStoreOtp = generateAndStoreOtp;
+verifyOtp.verifyOtp = verifyOtp;
+issueVerificationToken.issueVerificationToken = issueVerificationToken;
+
 module.exports = {
   generateAndStoreOtp,
   verifyOtp,
+  issueVerificationToken,
   OtpModel
 };
