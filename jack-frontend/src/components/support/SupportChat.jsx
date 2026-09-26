@@ -25,9 +25,14 @@ const SupportChat = ({ isOpen, onClose, contextData, user }) => {
   const [supportStatus, setSupportStatus] = useState(SUPPORT_STATUS.AI_ACTIVE);
   const [agent, setAgent] = useState(null);
   
+  // 🔥 FIX: Added ticketId state to persistently save human-agent conversation
+  const [ticketId, setTicketId] = useState(null);
+  
   const chatEndRef = useRef(null);
   const abortControllerRef = useRef(null);
-  const BACKEND_API_URL = `${API_URL}/chat`;
+  
+  // 🔥 CRITICAL FIX: Re-routed from legacy '/chat' to the NEW Support Helpdesk AI route
+  const BACKEND_API_URL = `${API_URL}/support/message`;
 
   // 🔥 UPGRADE: Persistent conversation session tracking
   const { conversationId, resetConversation } = useConversation(user);
@@ -57,6 +62,10 @@ const SupportChat = ({ isOpen, onClose, contextData, user }) => {
       if (event.type === 'agent_joined') {
         setAgent(event.agent);
         setSupportStatus(SUPPORT_STATUS.HUMAN_ACTIVE);
+        
+        // 🔥 Capture ticketId when agent joins
+        if (event.ticketId) setTicketId(event.ticketId);
+
         setMessages(prev => [...prev, { 
           id: `sys-${Date.now()}`, 
           type: 'agent_joined', 
@@ -133,6 +142,20 @@ const SupportChat = ({ isOpen, onClose, contextData, user }) => {
         orderId: contextData?.id || contextData?._id || null,
         history: [{ sender: 'user', text: trimmedText }]
       });
+
+      // 🔥 FIX: Persistently save message via backend ticket route if ticketId is available
+      if (ticketId) {
+        try {
+          await fetch(`${API_URL}/support/tickets/${ticketId}/messages`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: trimmedText, sender: 'USER' })
+          });
+        } catch (apiErr) {
+          console.error("Failed to persist escalated message:", apiErr);
+        }
+      }
+
       return;
     }
 
@@ -147,7 +170,7 @@ const SupportChat = ({ isOpen, onClose, contextData, user }) => {
           messages,
           contextData,
           user,
-          BACKEND_API_URL,
+          BACKEND_API_URL, // 🔥 Uses the updated /support/message URL
           token: null,
           signal: abortControllerRef.current.signal
         });
@@ -160,6 +183,11 @@ const SupportChat = ({ isOpen, onClose, contextData, user }) => {
     if (rawBotResponse === null) {
       setIsTyping(false);
       return; 
+    }
+
+    // 🔥 Capture ticketId if returned by backend for conversation & session continuity
+    if (rawBotResponse?.ticketId || rawBotResponse?.data?.ticketId) {
+      setTicketId(rawBotResponse.ticketId || rawBotResponse.data.ticketId);
     }
 
     let { finalBotText, triggerEscalation, structuredData } = processBotResponse(rawBotResponse);
@@ -214,6 +242,7 @@ const SupportChat = ({ isOpen, onClose, contextData, user }) => {
     setMessages([]);
     setSupportStatus(SUPPORT_STATUS.AI_ACTIVE);
     setAgent(null);
+    setTicketId(null);
     // Re-trigger greeting
     setTimeout(() => {
       setMessages([{

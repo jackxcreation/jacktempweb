@@ -1,5 +1,6 @@
-﻿// jack-frontend/src/hooks/support/useConversation.js
+﻿// src/hooks/support/useConversation.js
 import { useState, useCallback, useEffect } from 'react';
+import axiosInstance from "../api/axiosInstance"; // 🔥 Backend API connection
 
 /**
  * 🔥 UPGRADE: Added `contextId` parameter. 
@@ -35,6 +36,20 @@ export const useConversation = (user, contextId = 'general') => {
     return generateConversationId();
   });
 
+  // 🔥 ENHANCEMENT: Dynamically sync and load the correct session when contextId changes
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const cached = sessionStorage.getItem(storageKey);
+      if (cached) {
+        setConversationId(cached);
+      } else {
+        const newId = generateConversationId();
+        sessionStorage.setItem(storageKey, newId);
+        setConversationId(newId);
+      }
+    }
+  }, [storageKey, generateConversationId]);
+
   // Sync sessionStorage whenever conversationId updates
   useEffect(() => {
     if (typeof window !== 'undefined' && conversationId) {
@@ -53,9 +68,45 @@ export const useConversation = (user, contextId = 'general') => {
     return newId;
   }, [generateConversationId, storageKey]);
 
+  // 🔥 NEW FUNCTION: Fetch Active Conversation from Backend
+  // Prevents losing chat history if the user clears storage or logs in from another device.
+  const fetchActiveConversation = useCallback(async () => {
+    // Guest users rely purely on sessionStorage
+    if (!user || user.isGuest) return null; 
+
+    try {
+      // Connects to the actual mounted backend route: /api/support/conversations/active
+      const response = await axiosInstance.get(`/support/conversations/active?contextId=${contextId}`);
+      
+      if (response.data?.success && response.data?.conversationId) {
+        const activeId = response.data.conversationId;
+        setConversationId(activeId);
+        
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem(storageKey, activeId);
+        }
+        return activeId;
+      }
+    } catch (error) {
+      // It's normal to not have an active conversation, so we just log a warning, not an error.
+      console.warn("No active conversation found on backend or fetch failed.", error.message);
+    }
+    return null;
+  }, [user, contextId, storageKey]);
+
+  // Auto-fetch active conversation on mount if user is logged in
+  useEffect(() => {
+    if (user && !user.isGuest) {
+      fetchActiveConversation();
+    }
+  }, [user, fetchActiveConversation]);
+
   return {
     conversationId,
     resetConversation,
-    setConversationId
+    setConversationId,
+    fetchActiveConversation // 🔥 Exported the new backend sync function
   };
 };
+
+export default useConversation;

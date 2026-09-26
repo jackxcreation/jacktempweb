@@ -24,8 +24,11 @@ export const getOptimizedImageUrl = (url, width = 400) => {
     return `${baseUrl}?w=${width}&auto=format&fit=crop&q=80`;
   }
 
-  // 3. 🔥 NEW: ImageKit CDN Optimization Support
+  // 3. ImageKit CDN Optimization Support (Upgraded to handle existing transforms safely)
   if (trimmedUrl.includes('ik.imagekit.io')) {
+    if (trimmedUrl.includes('tr=')) {
+      return trimmedUrl.replace(/tr=([^&]+)/, `tr=w-${width},f-auto,q-80`);
+    }
     const separator = trimmedUrl.includes('?') ? '&' : '?';
     return `${trimmedUrl}${separator}tr=w-${width},f-auto,q-80`;
   }
@@ -35,7 +38,7 @@ export const getOptimizedImageUrl = (url, width = 400) => {
 };
 
 /**
- * 🔥 NEW HELPER: Generates a tiny, highly compressed blurred placeholder for lazy loading/LQIP effects.
+ * Generates a tiny, highly compressed blurred placeholder for lazy loading/LQIP effects.
  */
 export const getLowQualityImageUrl = (url) => {
   if (!url || typeof url !== 'string') return '/logo.png';
@@ -53,9 +56,22 @@ export const getLowQualityImageUrl = (url) => {
   }
 
   if (trimmedUrl.includes('ik.imagekit.io')) {
+    if (trimmedUrl.includes('tr=')) {
+      return trimmedUrl.replace(/tr=([^&]+)/, `tr=w-40,f-auto,q-20,bl-30`);
+    }
     const separator = trimmedUrl.includes('?') ? '&' : '?';
     return `${trimmedUrl}${separator}tr=w-40,f-auto,q-20,bl-30`;
   }
 
   return trimmedUrl;
+};
+
+/**
+ * 🔥 NEW HELPER: Generates a responsive srcset string for high-performance responsive image rendering across devices.
+ */
+export const generateSrcSet = (url, widths = [300, 600, 900, 1200]) => {
+  if (!url || typeof url !== 'string') return '';
+  return widths
+    .map(w => `${getOptimizedImageUrl(url, w)} ${w}w`)
+    .join(', ');
 };

@@ -13,6 +13,17 @@ export const normalizeError = (error) => {
     };
   }
 
+  // 0. 🔥 NEW: Handle case where a raw Error string is passed
+  if (typeof error === 'string') {
+    return {
+      success: false,
+      code: 'STRING_ERROR',
+      message: error,
+      requestId: 'client-local',
+      retryable: false
+    };
+  }
+
   // 1. If error is from Axios with standard envelope
   if (error.response && error.response.data) {
     const data = error.response.data;
@@ -25,7 +36,7 @@ export const normalizeError = (error) => {
     };
   }
 
-  // 2. 🔥 UPGRADE: Handle Fetch API Response errors or custom thrown error objects with status
+  // 2. Handle Fetch API Response errors or custom thrown error objects with status
   if (error.status || (error.message && error.message.includes('HTTP error'))) {
     return {
       success: false,
@@ -86,7 +97,7 @@ export const notifyUser = (normalizedError) => {
   if (typeof window !== 'undefined') {
     console.error(`[UI Toast Error] (${normalizedError.code}): ${normalizedError.message}`);
     
-    // 🔥 UPGRADE: Dispatch a custom browser event so any UI toast component can listen & display it
+    // Dispatch a custom browser event so any UI toast component can listen & display it
     try {
       const toastEvent = new CustomEvent('app:toast', {
         detail: {
@@ -103,12 +114,29 @@ export const notifyUser = (normalizedError) => {
 };
 
 /**
- * 🔥 NEW HELPER: Streamlines API calls with automatic error normalization & reporting
+ * Streamlines API calls with automatic error normalization, reporting, 
+ * and backend success envelope validation.
  */
 export const handleApiCall = async (apiPromise) => {
   try {
     const response = await apiPromise;
-    return { success: true, data: response.data || response, error: null };
+    
+    // 🔥 UPGRADE: Check if backend returned HTTP 200 but contained a failure envelope { success: false, error: '...' }
+    const responseData = response?.data || response;
+    if (responseData && responseData.success === false) {
+      const normalized = normalizeError({
+        response: {
+          data: responseData,
+          status: response?.status || 400,
+          headers: response?.headers || {}
+        }
+      });
+      reportTelemetry(normalized);
+      notifyUser(normalized);
+      return { success: false, data: null, error: normalized };
+    }
+
+    return { success: true, data: responseData, error: null };
   } catch (err) {
     const normalized = normalizeError(err);
     reportTelemetry(normalized);

@@ -78,9 +78,10 @@ export const CartProvider = ({ children }) => {
     const syncCartToBackend = async () => {
       try {
         const storedUser = JSON.parse(localStorage.getItem('jack_user'));
-        const token = localStorage.getItem('token') || localStorage.getItem('jack_token') || localStorage.getItem('admin_token');
         
-        if (storedUser && storedUser.id && token) {
+        // 🔥 FIX: Removed dependency on localStorage token.
+        // We now rely solely on HTTP-only secure cookies via credentials: 'include'
+        if (storedUser && storedUser.id) {
           const optimizedPayloadItems = cart.map(item => ({
             productId: item.id || item._id,
             quantity: item.quantity
@@ -89,9 +90,9 @@ export const CartProvider = ({ children }) => {
           await fetch(`${API_URL}/sync-cart`, {
             method: 'POST',
             headers: { 
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${token}` 
+              'Content-Type': 'application/json'
             },
+            credentials: 'include', // 🔥 SECURITY UPGRADE: Automatically sends HttpOnly auth cookie
             body: JSON.stringify({
               userId: storedUser.id, 
               items: optimizedPayloadItems 

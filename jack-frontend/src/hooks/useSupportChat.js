@@ -1,5 +1,6 @@
-﻿// jack-frontend/src/hooks/support/useSupportChat.js
+﻿// src/hooks/support/useSupportChat.js
 import { useState, useCallback, useRef, useEffect } from 'react';
+import axiosInstance from "../api/axiosInstance"; // 🔥 Backend API connection
 
 export const useSupportChat = () => {
   const [messages, setMessages] = useState([]);
@@ -100,6 +101,78 @@ export const useSupportChat = () => {
     return abortControllerRef.current.signal;
   }, []);
 
+  // =========================================================================
+  // 🔥 AI FUNCTIONS (MATCHING ACTUAL BACKEND ROUTES)
+  // =========================================================================
+
+  /**
+   * Generates a suggested reply for agents using the backend AI analysis route.
+   */
+  const generateSuggestedReply = useCallback(async (ticketId, messageText) => {
+    if (!messageText) return "";
+    try {
+      setIsTyping(true);
+      const response = await axiosInstance.post('/ai/ticket-analysis', {
+        ticketId: ticketId,
+        messageText: messageText
+      }, { signal: createAbortSignal() });
+
+      return response.data?.analysis?.suggestedResponse || "";
+    } catch (error) {
+      if (error.name !== 'CanceledError' && error.name !== 'AbortError') {
+        console.error("AI Suggestion failed:", error);
+      }
+      return "";
+    } finally {
+      setIsTyping(false);
+    }
+  }, [createAbortSignal]);
+
+  /**
+   * Performs full ticket analysis (Category, Priority, Sentiment)
+   */
+  const analyzeTicket = useCallback(async (ticketId, messageText) => {
+    try {
+      const response = await axiosInstance.post('/ai/ticket-analysis', {
+        ticketId,
+        messageText
+      });
+      return response.data?.analysis || null;
+    } catch (error) {
+      console.error("Ticket Analysis failed:", error);
+      return null;
+    }
+  }, []);
+
+  /**
+   * Sends a message to the AI Chatbot directly (Useful for Bot-Testing in Admin or Customer Portal)
+   */
+  const sendToAIBot = useCallback(async (messageText, chatHistory = [], languageStyle = 'english') => {
+    try {
+      setIsTyping(true);
+      const response = await axiosInstance.post('/chat', {
+        message: messageText,
+        chatHistory: chatHistory,
+        languageStyle: languageStyle
+      });
+      
+      const replyText = response.data?.reply || response.data?.message || response.data?.data?.reply;
+      if (response.data?.success || replyText) {
+        addMessage({
+          senderType: 'AI',
+          content: replyText || "I'm here to help!",
+          timestamp: new Date().toISOString()
+        });
+      }
+      return response.data;
+    } catch (error) {
+      console.error("AI Chat failed:", error);
+      return { success: false, message: "AI connection failed." };
+    } finally {
+      setIsTyping(false);
+    }
+  }, [addMessage]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -115,9 +188,14 @@ export const useSupportChat = () => {
     setIsTyping,
     addMessage,
     updateMessage, 
-    removeMessage, // Exported the new helper
+    removeMessage, 
     loadMessages,
     clearMessages,
-    createAbortSignal
+    createAbortSignal,
+    generateSuggestedReply,
+    analyzeTicket,
+    sendToAIBot
   };
 };
+
+export default useSupportChat;

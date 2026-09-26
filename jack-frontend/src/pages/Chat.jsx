@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL } from '../config'; 
 import { fetchAIResponse, processBotResponse } from '../utils/chatBrain'; 
 
-// 🔥 BULLETPROOF HOOKS IMPORTS (Fixed Paths & Duplicates based on your Folder Structure)
+// 🔥 BULLETPROOF HOOKS IMPORTS 
+// (Ensure these hooks exist in your jack-frontend/src/hooks/ directory)
 import { useSupportChat } from "../hooks/useSupportChat";
 import { useConversation } from "../hooks/useConversation";
 import { useSupportSocket } from "../hooks/useSupportSocket"; 
@@ -21,7 +22,7 @@ const Chat = ({ isOpen, onClose, contextData, user }) => {
   // 1. Context-Aware Conversation (Prevents Chat Bleeding between orders)
   const { conversationId, resetConversation } = useConversation(user, contextData?.id || contextData?._id || 'general');
   
-  // 🔥 TASK #39 & #41: Track persistent ticketId & assignment state for conversation & thread continuity
+  // 🔥 Track persistent ticketId & assignment state for conversation & thread continuity
   const [ticketId, setTicketId] = useState(null);
 
   // 2. Centralized State Manager (Prevents UI bugs)
@@ -35,9 +36,10 @@ const Chat = ({ isOpen, onClose, contextData, user }) => {
     messages, isTyping, setIsTyping, addMessage, clearMessages, createAbortSignal 
   } = useSupportChat();
 
-  // 🔥 TASK #37: Track detected language state for multi-language response matching
+  // 🔥 Track detected language state for multi-language response matching
   const [currentLanguage, setCurrentLanguage] = useState('english');
 
+  // 🔥 FIXED API URL: Re-routed to the NEW Support Backend Architecture instead of legacy AI
   const BACKEND_API_URL = `${API_URL}/support/message`;
 
   // 4. Secure Socket Connection (No Infinite Re-renders)
@@ -125,7 +127,7 @@ const Chat = ({ isOpen, onClose, contextData, user }) => {
 
     addMessage(userMsg);
 
-    // 🔥 TASK #40 & #41: Human Escalation & Persistent Message Saving Loop
+    // 🔥 Human Escalation & Persistent Message Saving Loop
     if (isEscalated || isHumanActive) {
       escalate({
         conversationId,
@@ -139,7 +141,8 @@ const Chat = ({ isOpen, onClose, contextData, user }) => {
       // Persistently save message via backend ticket route if ticketId is available
       if (ticketId) {
         try {
-          await fetch(`${API_URL}/tickets/${ticketId}/messages`, {
+          // 🔥 FIXED: Pointed to the new Support Ticket Architecture
+          await fetch(`${API_URL}/support/tickets/${ticketId}/messages`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: trimmedText, sender: 'USER' })
@@ -163,7 +166,7 @@ const Chat = ({ isOpen, onClose, contextData, user }) => {
           messages,
           contextData,
           user,
-          BACKEND_API_URL,
+          BACKEND_API_URL, // Passes the updated NEW support URL
           token: null, 
           signal: activeSignal
         });
@@ -178,19 +181,19 @@ const Chat = ({ isOpen, onClose, contextData, user }) => {
       return; 
     }
 
-    // 🔥 TASK #37: Capture detected language if provided by backend response brain
+    // Capture detected language if provided by backend response brain
     if (rawBotResponse?.detectedLanguage || rawBotResponse?.data?.detectedLanguage) {
       setCurrentLanguage(rawBotResponse.detectedLanguage || rawBotResponse.data.detectedLanguage);
     }
 
-    // 🔥 TASK #39 & #41: Capture ticketId if returned by backend for conversation & session continuity
+    // Capture ticketId if returned by backend for conversation & session continuity
     if (rawBotResponse?.ticketId || rawBotResponse?.data?.ticketId) {
       setTicketId(rawBotResponse.ticketId || rawBotResponse.data.ticketId);
     }
 
     let { finalBotText, triggerEscalation, structuredData } = processBotResponse(rawBotResponse);
 
-    // 🔥 TASK #38: Deterministic Escalation Trigger from backend intelligence policy
+    // Deterministic Escalation Trigger from backend intelligence policy
     const backendShouldEscalate = rawBotResponse?.shouldEscalate || rawBotResponse?.data?.shouldEscalate;
     if (backendShouldEscalate) {
       triggerEscalation = true;
@@ -233,7 +236,8 @@ const Chat = ({ isOpen, onClose, contextData, user }) => {
 
       if (ticketId) {
         try {
-          await fetch(`${API_URL}/tickets/${ticketId}/messages`, {
+          // 🔥 FIXED: Pointed to the new Support Ticket Architecture
+          await fetch(`${API_URL}/support/tickets/${ticketId}/messages`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: trimmedText, sender: 'USER' })

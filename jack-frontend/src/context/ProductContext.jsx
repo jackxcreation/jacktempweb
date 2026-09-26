@@ -19,7 +19,7 @@ export const ProductProvider = ({ children }) => {
   };
 
   // ==========================================
-  // 1. DATABASE SE LIGHTWEIGHT INITIAL PRODUCTS (GET) - 🔥 OPTIMIZED TO PREVENT MEMORY CHOKE
+  // 1. DATABASE SE LIGHTWEIGHT INITIAL PRODUCTS (GET) - 🔥 SMART DATA EXTRACTOR ADDED
   // ==========================================
   const { 
     data: productsData = [], 
@@ -32,8 +32,15 @@ export const ProductProvider = ({ children }) => {
       const response = await fetch(`${API_URL}/products?limit=20&paginated=true`, { signal });
       if (!response.ok) throw new Error('Network response was not ok');
       const result = await response.json();
-      // Handle both paginated object structure and legacy array response safely
-      return Array.isArray(result) ? result : (result.products || []);
+      
+      // 🔥 SMART EXTRACTOR: Unwrap the standardized backend response { success: true, data: { products: [...] } }
+      const payload = result?.data ?? result;
+      
+      // Handle both raw array and paginated object structure safely
+      if (Array.isArray(payload)) {
+        return payload;
+      }
+      return Array.isArray(payload?.products) ? payload.products : [];
     },
     staleTime: 1000 * 60 * 5, // 5 minutes caching
   });
@@ -62,7 +69,20 @@ export const ProductProvider = ({ children }) => {
       if (!response.ok) throw new Error('Failed to fetch server-side paginated products');
       const result = await response.json();
       
-      return Array.isArray(result) ? { products: result, total: result.length, page: 1, pages: 1 } : result;
+      // 🔥 SMART EXTRACTOR FOR FILTERED PRODUCTS
+      const payload = result?.data ?? result;
+      
+      if (Array.isArray(payload)) {
+        return { products: payload, total: payload.length, page: 1, pages: 1 };
+      }
+      
+      // If it's the paginated object { total, page, pages, products: [] }
+      return {
+        products: Array.isArray(payload?.products) ? payload.products : [],
+        total: payload?.total || 0,
+        page: payload?.page || 1,
+        pages: payload?.pages || 1
+      };
     } catch (error) {
       console.error("❌ Error fetching server-side filtered products:", error);
       return { products: [], total: 0, page: 1, pages: 1 };
@@ -87,7 +107,7 @@ export const ProductProvider = ({ children }) => {
     },
     onSuccess: (savedResponse) => {
       // Safely extract product object from various backend response wrappers
-      const savedProduct = savedResponse?.product || savedResponse?.data || savedResponse;
+      const savedProduct = savedResponse?.data?.product || savedResponse?.data || savedResponse?.product || savedResponse;
       if (!savedProduct) return;
 
       // Turant UI update bina refresh ke (Optimistic Update)

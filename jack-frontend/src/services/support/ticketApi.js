@@ -1,18 +1,16 @@
-﻿import { API_URL } from '../../config';
+﻿// src/utils/support/ticketApi.js
+import { API_URL } from '../../config';
 
+// 🔥 FIX: Removed insecure localStorage token extraction. 
+// We now rely purely on HTTP-Only cookies sent automatically via credentials: 'include'.
 const getHeaders = () => {
-  const token = typeof window !== 'undefined' 
-    ? (localStorage.getItem('token') || localStorage.getItem('jack_token') || localStorage.getItem('admin_token') || localStorage.getItem('jwt')) 
-    : null;
-
   return {
-    'Content-Type': 'application/json',
-    ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+    'Content-Type': 'application/json'
   };
 };
 
 /**
- * 🔥 NEW HELPER: Robust Error Parser
+ * 🔥 NEW HELPER: Robust Error Parser & Smart Data Extractor
  * Safely extracts exact error messages from the backend (e.g., Mongoose validation errors)
  * instead of throwing a generic "Failed to fetch" error.
  */
@@ -28,7 +26,10 @@ const handleResponse = async (response) => {
     }
     throw new Error(errorMessage);
   }
-  return await response.json();
+  const responseData = await response.json();
+  
+  // 🔥 SMART EXTRACTOR: Unwrap the standardized backend response { success: true, data: {...} }
+  return responseData?.data || responseData;
 };
 
 export const ticketApi = {
@@ -37,10 +38,11 @@ export const ticketApi = {
    */
   getTicketStatus: async (ticketId, signal) => {
     try {
-      const response = await fetch(`${API_URL}/support/tickets/${ticketId}`, {
+      // 🔥 FIX: Changed /support/tickets to /tickets to match backend ticket.js
+      const response = await fetch(`${API_URL}/tickets/${ticketId}`, {
         method: 'GET',
         headers: getHeaders(),
-        credentials: 'include',
+        credentials: 'include', // 🔥 Enforces HttpOnly Cookie
         signal
       });
       return await handleResponse(response);
@@ -56,10 +58,11 @@ export const ticketApi = {
    */
   createTicket: async (ticketPayload, signal) => {
     try {
-      const response = await fetch(`${API_URL}/support/tickets`, {
+      // 🔥 FIX: Changed /support/tickets to /tickets
+      const response = await fetch(`${API_URL}/tickets`, {
         method: 'POST',
         headers: getHeaders(),
-        credentials: 'include',
+        credentials: 'include', 
         signal,
         body: JSON.stringify(ticketPayload)
       });
@@ -75,15 +78,20 @@ export const ticketApi = {
    */
   getUserTickets: async (signal) => {
     try {
-      const response = await fetch(`${API_URL}/support/tickets`, {
+      // 🔥 FIX: Changed /support/tickets to /tickets
+      const response = await fetch(`${API_URL}/tickets`, {
         method: 'GET',
         headers: getHeaders(),
         credentials: 'include',
         signal
       });
-      const data = await handleResponse(response);
-      // 🔥 FIX: Ensures we always return an array to prevent UI map() crashes
-      return data.tickets ? data : { success: true, tickets: data }; 
+      
+      const payload = await handleResponse(response);
+      
+      // 🔥 FIX & SMART EXTRACTOR: Ensures we always return an array to prevent UI map() crashes
+      const ticketsArray = Array.isArray(payload) ? payload : (payload?.tickets || []);
+      
+      return { success: true, tickets: ticketsArray }; 
     } catch (error) {
       console.error('ticketApi.getUserTickets error:', error);
       return { success: false, tickets: [], error: error.message };
@@ -95,13 +103,14 @@ export const ticketApi = {
    */
   addTicketMessage: async (ticketId, messageText, signal) => {
     try {
-      const response = await fetch(`${API_URL}/support/tickets/${ticketId}/messages`, {
+      // 🔥 FIX: Changed /support/tickets/:id/messages to /tickets/:id/messages
+      const response = await fetch(`${API_URL}/tickets/${ticketId}/messages`, {
         method: 'POST',
         headers: getHeaders(),
-        credentials: 'include',
+        credentials: 'include', 
         signal,
-        // 🔥 FIX: Sends both 'text' and 'content' to perfectly align with the SupportMessage backend schema
-        body: JSON.stringify({ text: messageText, content: messageText })
+        // 🔥 FIX: Backend ticketMessageSchema specifically expects 'text'
+        body: JSON.stringify({ text: messageText })
       });
       return await handleResponse(response);
     } catch (error) {
@@ -111,12 +120,33 @@ export const ticketApi = {
   },
 
   /**
+   * 🔥 NEW: Update Ticket Status and Assign Agents
+   * Direct connection to PUT /api/tickets/:id/status in backend
+   */
+  updateTicketStatus: async (ticketId, updateData, signal) => {
+    try {
+      const response = await fetch(`${API_URL}/tickets/${ticketId}/status`, {
+        method: 'PUT',
+        headers: getHeaders(),
+        credentials: 'include',
+        signal,
+        // updateData can include: status, priority, assignedAgent, assignedAgentId
+        body: JSON.stringify(updateData) 
+      });
+      return await handleResponse(response);
+    } catch (error) {
+      console.error('ticketApi.updateTicketStatus error:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  /**
    * Submit CSAT (Customer Satisfaction) rating for a resolved ticket
    */
   updateCSAT: async (ticketId, csatRating, signal) => {
     try {
-      // 🔥 FIX: Aligned with the unified PATCH endpoint for ticket updates
-      const response = await fetch(`${API_URL}/support/tickets/${ticketId}`, {
+      // 🔥 FIX: Changed /support/tickets to /tickets
+      const response = await fetch(`${API_URL}/tickets/${ticketId}`, {
         method: 'PATCH',
         headers: getHeaders(),
         credentials: 'include',
@@ -135,10 +165,10 @@ export const ticketApi = {
    */
   closeTicket: async (ticketId, signal) => {
     try {
-      // 🔥 CRITICAL FIX: Changed from PUT /close to standard PATCH /:id 
-      // This exactly matches the router.patch('/:id') endpoint we built in the backend!
-      const response = await fetch(`${API_URL}/support/tickets/${ticketId}`, {
-        method: 'PATCH',
+      // 🔥 CRITICAL FIX: Changed from PATCH to PUT /tickets/:id/status 
+      // Exactly matches the router.put('/api/tickets/:id/status') in backend
+      const response = await fetch(`${API_URL}/tickets/${ticketId}/status`, {
+        method: 'PUT',
         headers: getHeaders(),
         credentials: 'include',
         signal,
@@ -147,6 +177,25 @@ export const ticketApi = {
       return await handleResponse(response);
     } catch (error) {
       console.error('ticketApi.closeTicket error:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  /**
+   * 🔥 NEW: Add Internal Note for Agents
+   */
+  addInternalNote: async (ticketId, noteText, signal) => {
+    try {
+      const response = await fetch(`${API_URL}/tickets/${ticketId}/notes`, {
+        method: 'POST',
+        headers: getHeaders(),
+        credentials: 'include',
+        signal,
+        body: JSON.stringify({ note: noteText })
+      });
+      return await handleResponse(response);
+    } catch (error) {
+      console.error('ticketApi.addInternalNote error:', error);
       return { success: false, error: error.message };
     }
   }

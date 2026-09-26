@@ -1,4 +1,4 @@
-﻿// jack-frontend/src/utils/support/supportSocketService.js
+﻿// src/utils/support/supportSocketService.js
 import { io } from 'socket.io-client';
 import { API_URL } from '../../config';
 
@@ -25,7 +25,6 @@ const getSocketUrl = () => {
 export const supportSocketService = {
   /**
    * Connects to the Socket Server.
-   * Enforces Task #31 secure token handshake and authentication binding.
    * @param {string} userId - ID of the logged-in user
    * @param {string} role - 'customer' or 'admin' (vital for receiving dashboard events)
    */
@@ -38,20 +37,20 @@ export const supportSocketService = {
         reconnectionAttempts: 7, // Slightly higher for mobile stability
         reconnectionDelay: 2000,
         transports: ['websocket', 'polling'], // Fallback to polling if corporate firewall blocks WSS
-        auth: token ? { token } : {} // 🔥 TASK #31: Secure JWT handshake authentication
+        auth: token ? { token } : {},
+        withCredentials: true // 🔥 CRITICAL FIX: Ensures HttpOnly cookies are sent in the handshake
       });
 
       socketInstance.on('connect', () => {
         console.log(`Support Socket connected as ${role} [${socketInstance.id}]`);
         
-        // 1. Join personal room for private alerts (Validated server-side against socket.user._id)
+        // 1. Join personal room for private alerts
         if (userId) {
           socketInstance.emit('join_user_room', userId);
         }
 
-        // 2. 🔥 TASK #30 & #31: Admins subscribe to privileged admin channels and rooms
-        if (role === 'admin' || role === 'super_admin' || role === 'support') {
-          socketInstance.emit('subscribe_admin_channels');
+        // 2. 🔥 UPGRADE: Admins must join the admin room to receive webhook alerts & live ticket updates
+        if (role === 'admin') {
           socketInstance.emit('join_admin_room');
         }
       });

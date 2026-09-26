@@ -1,5 +1,5 @@
-// jack-frontend/src/App.js
-import React, { useState, useEffect, Suspense, lazy, Component } from 'react';
+// jack-frontend/src/App.jsx
+import React, { useState, useEffect, Suspense, lazy, Component, useContext } from 'react';
 import { BrowserRouter as Router, Routes, Route, useLocation, Navigate, Outlet } from 'react-router-dom';
 import { motion } from 'framer-motion';
 
@@ -9,11 +9,10 @@ import { Analytics } from "@vercel/analytics/react";
 
 // 🔥 PHASE 8: TANSTACK QUERY FOR CACHING & STALE TIME
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { API_URL } from './config'; // Needed for real session verification
 
 // Providers
 import { CartProvider } from './context/CartContext';
-import { UserProvider } from './context/UserContext';
+import { UserProvider, UserContext } from './context/UserContext';
 import { ProductProvider } from './context/ProductContext';
 import { SettingsProvider } from './context/SettingsContext';
 import { CompareProvider } from './context/CompareContext'; // Compare Context Provider
@@ -93,24 +92,6 @@ const storage = {
   }
 };
 
-// Quick synchronous check
-const validateSession = () => {
-  const token = storage.get('token');
-  const user = storage.get('jack_user');
-  
-  if (!token || !user) return false;
-  
-  try {
-    JSON.parse(user);
-    if (token.split('.').length !== 3 && token.length < 20) {
-      return false; 
-    }
-    return true;
-  } catch {
-    return false;
-  }
-};
-
 // --- Infrastructure Components ---
 
 class GlobalErrorBoundary extends Component {
@@ -142,8 +123,6 @@ class GlobalErrorBoundary extends Component {
           </p>
           <button
             onClick={() => {
-              storage.remove('token');
-              storage.remove('jack_user');
               window.location.replace('/');
             }}
             className="bg-slate-900 hover:bg-[#FF4500] text-white px-8 py-3 rounded-xl font-bold transition-all focus:ring-4 focus:ring-slate-300 outline-none cursor-pointer"
@@ -230,7 +209,7 @@ const EnterpriseAnalyticsManager = () => {
         };
         window.EnterpriseDataLayer.push(eventContext);
         
-        if (import.meta.env.DEV) {
+        if (import.meta?.env?.DEV) {
           console.debug(`[Analytics Event]: ${eventName}`, eventContext);
         }
       },
@@ -265,8 +244,10 @@ const SEOManager = () => {
 
 // --- Layout & Routing Architecture ---
 
-const StoreLayout = ({ isLoggedIn }) => {
+const StoreLayout = () => {
   const location = useLocation();
+  const { user } = useContext(UserContext);
+  const isLoggedIn = !!user;
   
   // 🔥 Automatically hide Navbar, Footer, and widgets on authentication routes for a clean D2C UX
   const hideLayoutElements = ['/login', '/register', '/forgot-password', '/secure-account', '/unlock-account'].includes(location.pathname);
@@ -290,10 +271,15 @@ const StoreLayout = ({ isLoggedIn }) => {
   );
 };
 
-const RequireAuth = ({ isLoggedIn, children }) => {
+const RequireAuth = ({ children }) => {
   const location = useLocation();
+  const { user, loading } = useContext(UserContext);
 
-  if (!isLoggedIn) {
+  if (loading) {
+    return <PageLoader />;
+  }
+
+  if (!user) {
     return <Navigate to="/login" state={{ from: location.pathname }} replace />;
   }
   
@@ -331,49 +317,6 @@ const NotFound = () => (
 // --- Main Application Entry ---
 
 const App = () => {
-  const [isLoggedIn, setIsLoggedIn] = useState(validateSession);
-
-  useEffect(() => {
-    const syncAuthState = async () => {
-      let isValid = validateSession();
-      
-      // 🔥 PHASE 8 SECURITY: Async Backend Validation (Clear token on 401)
-      if (isValid) {
-        try {
-          const user = JSON.parse(storage.get('jack_user'));
-          const token = storage.get('token');
-          const userId = user.id || user._id;
-          
-          const res = await fetch(`${API_URL}/orders/user/${userId}?limit=1`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-          });
-          
-          if (res.status === 401 || res.status === 403) {
-            console.warn("Session expired or invalid token. Forcing logout.");
-            isValid = false;
-          }
-        } catch (e) {
-          console.warn("Could not reach server for session validation", e);
-        }
-      }
-
-      setIsLoggedIn(isValid);
-      
-      if (!isValid && storage.get('token')) {
-        storage.remove('token');
-        storage.remove('jack_user');
-      }
-    };
-
-    syncAuthState();
-
-    const handleStorageChange = () => syncAuthState();
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
-  }, []);
-
-  const withAuth = (Component) => <Component isLoggedIn={isLoggedIn} setIsLoggedIn={setIsLoggedIn} />;
-
   return (
     <GlobalErrorBoundary>
       {/* 🔥 PHASE 8: Wrapped App in QueryClientProvider */}
@@ -389,21 +332,21 @@ const App = () => {
                     <SEOManager />
                     
                     <Routes>
-                      {/* Pass isLoggedIn to StoreLayout so Navbar gets correct auth state */}
-                      <Route element={<StoreLayout isLoggedIn={isLoggedIn} />}>
+                      {/* StoreLayout uses UserContext as single source of truth */}
+                      <Route element={<StoreLayout />}>
                         
-                        <Route path="/" element={withAuth(Home)} />
-                        <Route path="/shop" element={withAuth(Shop)} />
-                        <Route path="/product/:id" element={withAuth(ProductDetails)} />
-                        <Route path="/cart" element={withAuth(Cart)} />
+                        <Route path="/" element={<Home />} />
+                        <Route path="/shop" element={<Shop />} />
+                        <Route path="/product/:id" element={<ProductDetails />} />
+                        <Route path="/cart" element={<Cart />} />
                         <Route path="/wishlist" element={
-                          <RequireAuth isLoggedIn={isLoggedIn}>
-                            {withAuth(Wishlist)}
+                          <RequireAuth>
+                            <Wishlist />
                           </RequireAuth>
                         } />
                         
                         {/* SEO Content Engine Routes */}
-                        <Route path="/comparisons" element={withAuth(Comparisons)} />
+                        <Route path="/comparisons" element={<Comparisons />} />
 
                         <Route path="/help-center" element={<HelpCenter />} />
                         <Route path="/returns" element={<ReturnsPage />} />
@@ -412,30 +355,30 @@ const App = () => {
                         <Route path="/about" element={<AboutUs />} />
                         <Route path="/contact" element={<ContactUs />} />
                         <Route path="/track-order" element={
-                          <RequireAuth isLoggedIn={isLoggedIn}>
-                            {withAuth(TrackOrder)}
+                          <RequireAuth>
+                            <TrackOrder />
                           </RequireAuth>
                         } />
 
-                        <Route path="/login" element={withAuth(Login)} />
-                        <Route path="/register" element={withAuth(Register)} />
-                        <Route path="/forgot-password" element={withAuth(ForgotPassword)} /> 
+                        <Route path="/login" element={<Login />} />
+                        <Route path="/register" element={<Register />} />
+                        <Route path="/forgot-password" element={<ForgotPassword />} /> 
                         <Route path="/secure-account" element={<SecureAccount />} />
                         <Route path="/unlock-account" element={<UnlockAccount />} />
                         
                         <Route path="/checkout" element={
-                          <RequireAuth isLoggedIn={isLoggedIn}>
-                            {withAuth(Checkout)}
+                          <RequireAuth>
+                            <Checkout />
                           </RequireAuth>
                         } />
                         <Route path="/profile" element={
-                          <RequireAuth isLoggedIn={isLoggedIn}>
-                            {withAuth(Profile)}
+                          <RequireAuth>
+                            <Profile />
                           </RequireAuth>
                         } />
                         <Route path="/order/:id" element={
-                          <RequireAuth isLoggedIn={isLoggedIn}>
-                            {withAuth(OrderDetails)}
+                          <RequireAuth>
+                            <OrderDetails />
                           </RequireAuth>
                         } />
                         

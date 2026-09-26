@@ -65,22 +65,16 @@ Reply EXACTLY: [TRANSFER_TO_AGENT]
 `;
 };
 
-// ✅ AI RESPONSE FUNCTION PRESERVED & FIXED FOR NEW BACKEND
+// ✅ AI RESPONSE FUNCTION PRESERVED & UPGRADED FOR HTTP-ONLY COOKIES
 export const fetchAIResponse = async ({
   userText,
   messages,
   contextData,
   user,
   BACKEND_API_URL,
-  token,
+  token, // Kept as optional parameter for backward compatibility if passed
   signal // Added for abort capability
 }) => {
-  const activeToken = token || (
-    typeof window !== 'undefined' 
-      ? (localStorage.getItem('token') || localStorage.getItem('admin_token') || localStorage.getItem('jack_token') || localStorage.getItem('jwt')) 
-      : null
-  );
-
   const languageStyle = detectLanguageStyle(userText);
   const systemInstruction = createSystemPrompt({ contextData, user, languageStyle });
 
@@ -98,14 +92,12 @@ export const fetchAIResponse = async ({
 
   try {
     const headers = { "Content-Type": "application/json" };
-    if (activeToken) {
-      headers["Authorization"] = `Bearer ${activeToken}`;
-    }
+    // No Authorization header needed; credentials: "include" sends the secure cookie automatically.
 
     const response = await fetch(BACKEND_API_URL, {
       method: "POST",
       headers,
-      credentials: "include",
+      credentials: "include", // 🔥 CRITICAL: Transmits HTTP-Only session cookie securely
       signal,
       body: JSON.stringify({
         message: userText,
@@ -118,10 +110,18 @@ export const fetchAIResponse = async ({
     });
 
     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-    const data = await response.json();
+    const jsonRes = await response.json();
     
-    // 🔥 ROBUST PAYLOAD EXTRACTION: Handles all backend response variations safely
-    return data?.message?.content || data?.reply || data?.text || data?.message || fallbackMessage;
+    // 🔥 ROBUST PAYLOAD EXTRACTION: Handles all backend response variations safely including standardized wrappers
+    const payload = jsonRes?.data || jsonRes;
+    const rawReply = payload?.message?.content || payload?.reply || payload?.text || payload?.message || jsonRes?.reply || jsonRes?.message;
+    
+    // Ensure we never return an object directly to prevent UI rendering crashes like [object Object]
+    if (typeof rawReply === 'object' && rawReply !== null) {
+      return rawReply.reply || rawReply.content || rawReply.text || JSON.stringify(rawReply);
+    }
+
+    return rawReply || fallbackMessage;
     
   } catch (error) {
     if (error.name === 'AbortError') return null; // Silently handle cancellations

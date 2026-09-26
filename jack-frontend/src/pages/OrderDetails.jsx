@@ -1,10 +1,12 @@
-// src/pages/OrderDetails.jsx
+// jack-frontend/src/pages/OrderDetails.jsx
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FiArrowLeft, FiPackage, FiTruck, FiCheckCircle, FiClock, FiXCircle, FiMapPin, FiCreditCard, FiHelpCircle, FiCopy, FiDownload, FiStar, FiUpload, FiX } from 'react-icons/fi';
 import { useUser } from '../context/UserContext';
 import axiosInstance from '../api/axiosInstance';
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
 
 // 🔥 CANONICAL CURRENCY FORMATTER UTILITY
 const formatCurrency = (paise) => {
@@ -170,7 +172,7 @@ const OrderDetails = ({ isLoggedIn, setIsLoggedIn }) => {
     // 🔥 Fetch Real-Time Courier Tracking Events
     const fetchLiveTracking = async () => {
       try {
-        const res = await axiosInstance.get(`/track/${orderId}`);
+        const res = await axiosInstance.get(`/track/${id}`);
         if (res.data && res.data.success) {
           setLiveTracking(res.data);
         }
@@ -183,6 +185,95 @@ const OrderDetails = ({ isLoggedIn, setIsLoggedIn }) => {
 
     fetchLiveTracking();
   }, [id]);
+
+  // ==========================================
+  // 🖨️ GENERATE INVOICE PDF WITH EXACT TAX BREAKUP
+  // ==========================================
+  const downloadInvoice = () => {
+    if (!order) return;
+    const doc = new jsPDF();
+    const invoiceId = `INV-${order.orderNumber || (order.id || order._id).slice(-6).toUpperCase()}`;
+    const invoiceDate = new Date(order.createdAt).toLocaleDateString('en-IN');
+
+    // Headers
+    doc.setFontSize(22);
+    doc.setFont("helvetica", "bold");
+    doc.text("TAX INVOICE", 105, 20, null, null, "center");
+
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text("Jack Essentials E-Retail", 14, 30);
+    doc.text("GSTIN: 21ABCDE1234F1Z5", 14, 35); // Replace with your actual GSTIN
+    doc.text("Odisha, India", 14, 40);
+
+    doc.text(`Invoice Number: ${invoiceId}`, 130, 30);
+    doc.text(`Date: ${invoiceDate}`, 130, 35);
+    doc.text(`Payment: ${order.paymentMethod || 'Online'}`, 130, 40);
+
+    // Billed To
+    doc.setFont("helvetica", "bold");
+    doc.text("Billed To:", 14, 55);
+    doc.setFont("helvetica", "normal");
+    doc.text(`${order.userDetails?.name || order.address?.name || 'Customer'}`, 14, 60);
+    doc.text(`${order.address?.flat || ''}, ${order.address?.street || ''}`, 14, 65);
+    doc.text(`${order.address?.city || ''}, ${order.address?.state || ''} - ${order.address?.pincode || ''}`, 14, 70);
+    doc.text(`Phone: ${order.address?.primaryPhone || order.address?.phone || ''}`, 14, 75);
+
+    // Items Table
+    const tableColumn = ["Item Description", "Qty", "Base Price", "GST", "Total"];
+    const tableRows = [];
+
+    order.items.forEach(item => {
+      const itemData = [
+        item.title,
+        item.quantity,
+        `Rs ${( (item.taxableValuePaise || Math.round((item.pricePaise || 0)*0.82)) / 100).toFixed(2)}`,
+        `${item.gstRate || 18}%`,
+        `Rs ${( (item.totalPaise || item.pricePaise) / 100).toFixed(2)}`
+      ];
+      tableRows.push(itemData);
+    });
+
+    doc.autoTable({
+      startY: 85,
+      head: [tableColumn],
+      body: tableRows,
+      theme: 'grid',
+      headStyles: { fillColor: [40, 40, 40] },
+      styles: { fontSize: 9 }
+    });
+
+    // Tax & Totals Breakdown from Order Schema
+    const finalY = doc.lastAutoTable.finalY + 10;
+    
+    // Tax Breakup Logic mapping to Backend taxBreakup object
+    const taxableValue = ((order.taxBreakup?.taxableValuePaise || order.subtotalPaise || 0) / 100).toFixed(2);
+    const cgst = ((order.taxBreakup?.cgstPaise || 0) / 100).toFixed(2);
+    const sgst = ((order.taxBreakup?.sgstPaise || 0) / 100).toFixed(2);
+    const igst = ((order.taxBreakup?.igstPaise || 0) / 100).toFixed(2);
+    const shipping = ((order.shippingCostPaise || 0) / 100).toFixed(2);
+    const discount = ((order.discountPaise || 0) / 100).toFixed(2);
+    const grandTotal = ((order.totalPaise || 0) / 100).toFixed(2);
+
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Total Taxable Value: Rs ${taxableValue}`, 130, finalY);
+    if (Number(cgst) > 0) {
+      doc.text(`CGST: Rs ${cgst}`, 130, finalY + 5);
+      doc.text(`SGST: Rs ${sgst}`, 130, finalY + 10);
+    } else if (Number(igst) > 0) {
+      doc.text(`IGST: Rs ${igst}`, 130, finalY + 5);
+    }
+    
+    doc.text(`Shipping: Rs ${shipping}`, 130, finalY + 15);
+    doc.text(`Discount: -Rs ${discount}`, 130, finalY + 20);
+    
+    doc.setFont("helvetica", "bold");
+    doc.text(`Grand Total: Rs ${grandTotal}`, 130, finalY + 30);
+
+    // Save PDF
+    doc.save(`${invoiceId}.pdf`);
+  };
 
   if (!order) {
     return (
@@ -439,7 +530,7 @@ const OrderDetails = ({ isLoggedIn, setIsLoggedIn }) => {
                   )}
 
                   {order.status === 'Delivered' && (
-                    <button className="w-full py-4 bg-slate-900 text-white font-black rounded-2xl shadow-lg hover:bg-[#FF4500] transition-all active:scale-95 flex justify-center items-center gap-2">
+                    <button onClick={downloadInvoice} className="w-full py-4 bg-slate-900 text-white font-black rounded-2xl shadow-lg hover:bg-[#FF4500] transition-all active:scale-95 flex justify-center items-center gap-2">
                       <FiDownload /> Download Invoice
                     </button>
                   )}

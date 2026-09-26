@@ -4,27 +4,23 @@ import { io } from 'socket.io-client';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FiPackage, FiX } from 'react-icons/fi';
 import { API_URL } from '../config';
+import { useUser } from '../context/UserContext'; // 🔥 FIX: Added to check login state securely
 
 export const SmartStockAlertToast = () => {
   const [alertInfo, setAlertInfo] = useState(null);
   const timeoutRef = useRef(null);
+  const { user } = useUser(); // 🔥 FIX: Safe replacement for localStorage token check
 
   useEffect(() => {
-    // 🔥 UPGRADE: Robust token check matching multi-storage keys across app
-    const token = localStorage.getItem('token') || 
-                  localStorage.getItem('jack_token') || 
-                  localStorage.getItem('admin_token');
-    
-    // Agar token nahi hai (yani user login nahi hai), toh wapas laut jao (Socket connect mat karo)
-    if (!token) return;
+    // Agar user login nahi hai, toh wapas laut jao (Socket connect mat karo)
+    if (!user) return;
 
     // Resolve socket base URL cleanly from API_URL config
     const socketUrl = API_URL ? API_URL.replace(/\/api$/, '') : (window.location.origin.includes('localhost') ? 'http://localhost:5000' : undefined);
 
-    // Agar token mil gaya, tabhi safely socket connect karo
+    // 🔥 Secure Socket Connection using HTTP-Only Cookies (No need for auth: { token })
     const socket = io(socketUrl, {
-      auth: { token },
-      withCredentials: true
+      withCredentials: true // 🔥 Browser automatically sends the secure cookie to backend
     });
 
     socket.on('stock_alert_notification', (data) => {
@@ -41,7 +37,7 @@ export const SmartStockAlertToast = () => {
       socket.disconnect();
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };
-  }, []);
+  }, [user]); // 🔥 Dependency added so socket connects when user logs in
 
   const handleDismiss = () => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);

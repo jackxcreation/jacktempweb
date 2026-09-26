@@ -3,28 +3,29 @@ import React, { createContext, useState, useContext, useEffect } from 'react';
 import { API_URL } from '../config';
 import { io } from 'socket.io-client';
 
-const UserContext = createContext();
+// 🔥 FIXED: Added 'export' so App.jsx can import UserContext correctly
+export const UserContext = createContext();
 export const useUser = () => useContext(UserContext);
 
 // Initialize socket without auto-connecting so we can inject cookies/auth later
 const socket = io(API_URL ? API_URL.replace('/api', '') : 'http://localhost:5000', { autoConnect: false, withCredentials: true });
 
 export const UserProvider = ({ children }) => {
-  // 🔥 TASK #51 & #52: Removed insecure localStorage user parsing on initial boot. Start with null.
+  // 🔥 Removed insecure localStorage user parsing on initial boot. Start with null.
   const [user, setUser] = useState(null);
   const [recentlyViewed, setRecentlyViewed] = useState([]);
   const [orders, setOrders] = useState([]);
   const [wishlist, setWishlist] = useState([]); 
   const [isLoadingSession, setIsLoadingSession] = useState(true);
   
-  // 🔥 PHASE 4 FIX: Consolidated Admin State into single Auth Context
+  // 🔥 Consolidated Admin State into single Auth Context
   const [isAdmin, setIsAdmin] = useState(false);
 
-  // 🔥 TASK #51: Auth is now handled purely via HTTP-only secure cookies (`credentials: 'include'`). 
+  // 🔥 Auth is now handled purely via HTTP-only secure cookies (`credentials: 'include'`). 
   // No localStorage token extraction needed. Kept as a dummy helper for legacy compatibility if required.
   const getToken = () => null;
 
-  // 🔥 TASK #52: CLEAN SESSION VALIDATION VIA /auth/me AT STARTUP USING HTTP-ONLY COOKIES
+  // 🔥 CLEAN SESSION VALIDATION VIA /auth/me AT STARTUP USING HTTP-ONLY COOKIES
   useEffect(() => {
     const verifyUserSession = async () => {
       try {
@@ -44,7 +45,7 @@ export const UserProvider = ({ children }) => {
           setUser(userData);
           setRecentlyViewed(userData.recentlyViewed || []);
           
-          // 🔥 PHASE 4 FIX: Automatically identify if user is Admin
+          // Automatically identify if user is Admin
           setIsAdmin(userData.role === 'admin' || userData.role === 'manager' || userData.role === 'super_admin');
         } else {
           // Session invalid or expired
@@ -168,7 +169,6 @@ export const UserProvider = ({ children }) => {
 
   const socialLoginUser = async (name, email, firebaseId) => {
     try {
-      // 🔥 CANONICAL AUTH ROUTE ALIGNMENT: Updated to /api/auth/social/google
       const res = await fetch(`${API_URL}/auth/social/google`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -185,12 +185,12 @@ export const UserProvider = ({ children }) => {
         connectSecureSocket();
         return { success: true, isNewUser: json.data?.isNewUser || json.isNewUser }; 
       }
-      return { success: false, message: json.message || "Social login failed" };
+      return { success: false, message: json.error || json.message || "Social login failed" };
     } catch (error) { return { success: false, message: "Server connection error" }; }
   };
 
   // ==========================================
-  // 🔥 TASK #53: LOGOUT WITH SERVER SESSION INVALIDATION
+  // 🔥 LOGOUT WITH SERVER SESSION INVALIDATION
   // ==========================================
   const logoutUser = async () => {
     try {
@@ -362,7 +362,7 @@ export const UserProvider = ({ children }) => {
 
   return (
     <UserContext.Provider value={{ 
-      user, orders, recentlyViewed, wishlist, isLoadingSession, isAdmin,
+      user, orders, recentlyViewed, wishlist, isLoadingSession, isAdmin, getToken,
       loginUser, socialLoginUser, logoutUser, placeOrder, cancelOrder, addRecentlyViewed, 
       updateUserProfile, syncRecentlyViewed, fetchWishlist, toggleWishlist, socket
     }}>

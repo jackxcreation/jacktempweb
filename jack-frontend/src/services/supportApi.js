@@ -1,4 +1,4 @@
-﻿// jack-frontend/src/utils/support/supportApi.js
+﻿// src/utils/support/supportApi.js
 import { API_URL } from '../../config';
 
 const getAuthToken = () => {

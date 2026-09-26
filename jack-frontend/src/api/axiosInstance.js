@@ -2,6 +2,17 @@ import axios from 'axios';
 import { API_URL } from '../config'; 
 import { normalizeError, notifyUser, reportTelemetry } from '../utils/errorNormalizer';
 
+// ==========================================
+// 🔥 ENHANCEMENT & FIX: Safe ID Generator
+// Prevents "crypto is not defined" crashes on non-HTTPS (localhost) or older mobile browsers.
+// ==========================================
+const generateSafeId = (prefix = 'req') => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+};
+
 const axiosInstance = axios.create({
   // Backend URL strictly uses API_URL (should already include /api)
   baseURL: API_URL, 
@@ -19,18 +30,14 @@ axiosInstance.interceptors.request.use(
     // 🔥 PRODUCTION SECURITY FIX: Manual Authorization header injection removed.
     // Authentication tokens are now securely transmitted via HttpOnly cookies using withCredentials: true.
 
-    // Add correlation ID for easier server-side debugging
-    config.headers['X-Request-ID'] = crypto.randomUUID 
-      ? crypto.randomUUID() 
-      : `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    // Add correlation ID for easier server-side debugging safely
+    config.headers['X-Request-ID'] = generateSafeId('req');
 
     // ENTERPRISE IDEMPOTENCY: Safely inject Idempotency-Key for mutating requests
     const method = config.method?.toLowerCase();
     if (['post', 'put', 'patch', 'delete'].includes(method)) {
       if (!config.headers['Idempotency-Key'] && !config.headers['x-idempotency-key']) {
-        config.headers['Idempotency-Key'] = crypto.randomUUID 
-          ? crypto.randomUUID() 
-          : `idemp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        config.headers['Idempotency-Key'] = generateSafeId('idemp');
       }
     }
 
@@ -46,10 +53,12 @@ axiosInstance.interceptors.response.use(
   (response) => response,
   (error) => {
     // Normalize raw Axios error into standard enterprise error envelope
-    const normalizedErr = normalizeError(error);
+    const normalizedErr = normalizeError ? normalizeError(error) : error;
 
-    // Report error to Telemetry / Logging sink
-    reportTelemetry(normalizedErr);
+    // Report error to Telemetry / Logging sink safely
+    if (typeof reportTelemetry === 'function') {
+      reportTelemetry(normalizedErr);
+    }
 
     // Handle 401 / 403 Authentication Expiry
     if (error.response && (error.response.status === 401 || error.response.status === 403)) {
@@ -61,12 +70,16 @@ axiosInstance.interceptors.response.use(
 
       window.dispatchEvent(new Event('jack_auth_change'));
 
-      if (window.location.pathname !== '/login') {
+      // 🔥 FIX: Only redirect if not already on public browsing pages to prevent jarring UX
+      const publicPaths = ['/login', '/register', '/', '/shop'];
+      if (!publicPaths.includes(window.location.pathname)) {
         window.location.href = '/login';
       }
     } else {
-      // Trigger unified UI Toast notification for normalized user-facing errors
-      notifyUser(normalizedErr);
+      // Trigger unified UI Toast notification for normalized user-facing errors safely
+      if (typeof notifyUser === 'function') {
+        notifyUser(normalizedErr);
+      }
     }
 
     if (error.code === 'ECONNABORTED') {

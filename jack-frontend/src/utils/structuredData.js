@@ -2,28 +2,34 @@
 
 /**
  * Generates SEO-optimized Schema.org JSON-LD structured data for products.
- * Enhanced with safe date formatting, dual price/inventory fallbacks, and array validation.
+ * Enhanced with safe date formatting, dual price/inventory fallbacks, array validation, and dynamic validity.
  */
 export const generateProductSchema = (product, reviews = []) => {
   if (!product) return null;
 
-  // 🔥 UPGRADE: Support both pricePaise and raw price properties safely
-  const productPrice = product.pricePaise 
+  // 🔥 UPGRADE: Support both pricePaise and raw price properties safely with number validation
+  let productPrice = product.pricePaise 
     ? product.pricePaise / 100 
     : (product.price || 0);
+
+  productPrice = isNaN(Number(productPrice)) ? 0 : Number(productPrice);
 
   const productUrl = `https://thejackessentials.com/product/${product.id || product._id || ''}`;
   const productImage = product.image || (Array.isArray(product.images) && product.images[0]) || '';
   const safeReviews = Array.isArray(reviews) ? reviews : [];
 
+  // Dynamic price validity (2 years into the future to satisfy SEO structured data requirements)
+  const currentYear = new Date().getFullYear();
+  const priceValidUntilDate = `${currentYear + 2}-12-31`;
+
   // 1. Review Schemas with safe date formatting (Prevents TypeError if createdAt is a Date object)
   const reviewObjects = safeReviews.map(rev => {
-    let pubDate = "2026-01-01";
+    let pubDate = `${currentYear}-01-01`;
     if (rev.createdAt) {
       try {
         pubDate = new Date(rev.createdAt).toISOString().split('T')[0];
       } catch (e) {
-        pubDate = String(rev.createdAt).split('T')[0] || "2026-01-01";
+        pubDate = String(rev.createdAt).split('T')[0] || `${currentYear}-01-01`;
       }
     }
 
@@ -73,12 +79,14 @@ export const generateProductSchema = (product, reviews = []) => {
           },
           {
             "@type": "ListItem",
+            "@id": "https://thejackessentials.com/shop-breadcrumb",
             "position": 2,
             "name": product.category || "Shop",
             "item": "https://thejackessentials.com/shop"
           },
           {
             "@type": "ListItem",
+            "@id": "https://thejackessentials.com/product-breadcrumb",
             "position": 3,
             "name": product.title || "Product Details",
             "item": productUrl
@@ -102,7 +110,7 @@ export const generateProductSchema = (product, reviews = []) => {
           "url": productUrl,
           "priceCurrency": "INR",
           "price": productPrice,
-          "priceValidUntil": "2027-12-31",
+          "priceValidUntil": priceValidUntilDate,
           "itemCondition": "https://schema.org/NewCondition",
           "availability": Number(product.inventory || product.stock || 1) > 0 ? "https://schema.org/InStock" : "https://schema.org/OutOfStock",
           "seller": {
@@ -122,3 +130,5 @@ export const generateProductSchema = (product, reviews = []) => {
 
   return JSON.stringify(schema);
 };
+
+export default generateProductSchema;

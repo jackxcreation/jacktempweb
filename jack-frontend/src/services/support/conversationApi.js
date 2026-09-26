@@ -1,14 +1,34 @@
-﻿import { API_URL } from '../../config';
+﻿// src/utils/support/conversationApi.js
+import { API_URL } from '../../config';
 
+// 🔥 FIX: Removed insecure localStorage token extraction. 
+// HTTP-Only cookies will be sent automatically via credentials: 'include'.
 const getHeaders = () => {
-  const token = typeof window !== 'undefined' 
-    ? (localStorage.getItem('token') || localStorage.getItem('jack_token') || localStorage.getItem('admin_token') || localStorage.getItem('jwt')) 
-    : null;
-
   return {
-    'Content-Type': 'application/json',
-    ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+    'Content-Type': 'application/json'
   };
+};
+
+/**
+ * 🔥 NEW HELPER: Robust Error Parser & Smart Data Extractor
+ * Safely extracts exact error messages from the backend
+ * and automatically unwraps standardized { success: true, data: {...} } responses.
+ */
+const handleResponse = async (response) => {
+  if (!response.ok) {
+    let errorMessage = `API Request Failed (${response.status})`;
+    try {
+      const errData = await response.json();
+      errorMessage = errData.error || errData.message || errorMessage;
+    } catch (e) {
+      errorMessage = response.statusText || errorMessage;
+    }
+    throw new Error(errorMessage);
+  }
+  const responseData = await response.json();
+  
+  // 🔥 SMART EXTRACTOR
+  return responseData?.data || responseData;
 };
 
 export const conversationApi = {
@@ -20,13 +40,14 @@ export const conversationApi = {
       const response = await fetch(`${API_URL}/support/conversations/${conversationId}`, {
         method: 'GET',
         headers: getHeaders(),
-        credentials: 'include'
+        credentials: 'include' // 🔥 Enforces HttpOnly Cookie
       });
       
-      if (!response.ok) throw new Error('Failed to fetch conversation history');
-      return await response.json();
+      const data = await handleResponse(response);
+      return data;
     } catch (error) {
       console.error('conversationApi.getHistory error:', error);
+      // Safe fallback for UI state
       return { success: false, data: [] };
     }
   },
@@ -39,12 +60,11 @@ export const conversationApi = {
       const response = await fetch(`${API_URL}/support/conversations`, {
         method: 'POST',
         headers: getHeaders(),
-        credentials: 'include',
+        credentials: 'include', // 🔥 Enforces HttpOnly Cookie
         body: JSON.stringify(payload)
       });
 
-      if (!response.ok) throw new Error('Failed to start conversation');
-      return await response.json();
+      return await handleResponse(response);
     } catch (error) {
       console.error('conversationApi.startConversation error:', error);
       return { success: false, error: error.message };
@@ -59,12 +79,11 @@ export const conversationApi = {
       const response = await fetch(`${API_URL}/support/conversations/${conversationId}/messages`, {
         method: 'POST',
         headers: getHeaders(),
-        credentials: 'include',
+        credentials: 'include', // 🔥 Enforces HttpOnly Cookie
         body: JSON.stringify(messagePayload)
       });
 
-      if (!response.ok) throw new Error('Failed to send message');
-      return await response.json();
+      return await handleResponse(response);
     } catch (error) {
       console.error('conversationApi.sendMessage error:', error);
       return { success: false, error: error.message };
@@ -79,12 +98,11 @@ export const conversationApi = {
       const response = await fetch(`${API_URL}/support/conversations/${conversationId}/escalate`, {
         method: 'POST',
         headers: getHeaders(),
-        credentials: 'include',
+        credentials: 'include', // 🔥 Enforces HttpOnly Cookie
         body: JSON.stringify({ reason })
       });
 
-      if (!response.ok) throw new Error('Failed to escalate conversation');
-      return await response.json();
+      return await handleResponse(response);
     } catch (error) {
       console.error('conversationApi.escalateConversation error:', error);
       return { success: false, error: error.message };
@@ -96,14 +114,14 @@ export const conversationApi = {
    */
   resolveConversation: async (conversationId) => {
     try {
+      // 🔥 CRITICAL FIX: Changed from PUT to POST to match the backend router
       const response = await fetch(`${API_URL}/support/conversations/${conversationId}/resolve`, {
-        method: 'PUT',
+        method: 'POST',
         headers: getHeaders(),
-        credentials: 'include'
+        credentials: 'include' // 🔥 Enforces HttpOnly Cookie
       });
 
-      if (!response.ok) throw new Error('Failed to resolve conversation');
-      return await response.json();
+      return await handleResponse(response);
     } catch (error) {
       console.error('conversationApi.resolveConversation error:', error);
       return { success: false, error: error.message };

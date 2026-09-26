@@ -1,37 +1,53 @@
-// jack-frontend/src/hooks/support/useSupportSocket.js
+// src/hooks/support/useSupportSocket.js
 import { useEffect, useRef, useCallback } from 'react';
 import { io } from 'socket.io-client';
 
-export const useSupportSocket = ({ API_URL, isOpen, user, conversationId, onAdminReply, onSystemEvent }) => {
+export const useSupportSocket = ({ 
+  API_URL, 
+  isOpen = true, 
+  user, 
+  conversationId, 
+  onAdminReply, 
+  onSystemEvent,
+  // 🔥 Admin Dashboard Props
+  onNewMessage,
+  onTicketUpdate,
+  onNewTicket
+} = {}) => {
   const socketRef = useRef(null);
   const processedMessageIds = useRef(new Set()); // Deduplication registry
 
-  // 🔥 CRITICAL FIX 1: Stable Callback Refs
-  // Prevents the Socket from disconnecting/reconnecting every time the parent component's state changes.
+  // Stable Callback Refs for BOTH Customer and Admin events
   const onAdminReplyRef = useRef(onAdminReply);
   const onSystemEventRef = useRef(onSystemEvent);
+  const onNewMessageRef = useRef(onNewMessage);
+  const onTicketUpdateRef = useRef(onTicketUpdate);
+  const onNewTicketRef = useRef(onNewTicket);
 
   useEffect(() => {
     onAdminReplyRef.current = onAdminReply;
     onSystemEventRef.current = onSystemEvent;
-  }, [onAdminReply, onSystemEvent]);
+    onNewMessageRef.current = onNewMessage;
+    onTicketUpdateRef.current = onTicketUpdate;
+    onNewTicketRef.current = onNewTicket;
+  }, [onAdminReply, onSystemEvent, onNewMessage, onTicketUpdate, onNewTicket]);
 
   useEffect(() => {
     if (!isOpen) return;
 
-    // 🔥 CRITICAL FIX 2: Bulletproof Base URL resolution
-    // Safely strips '/api', '/support/message', or '/chat' to get the true root domain for Socket.io
-    let baseUrl = API_URL || '';
+    // Bulletproof Base URL resolution
+    let baseUrl = API_URL || (typeof window !== 'undefined' ? window.location.origin : '');
     baseUrl = baseUrl.replace(/\/api(\/.*)?$/, '').replace(/\/support\/message$/, '').replace(/\/chat$/, '');
 
-    // Retrieve auth token securely for socket handshake
+    // Retrieve auth token safely
     const token = typeof window !== 'undefined'
       ? (localStorage.getItem('token') || localStorage.getItem('admin_token') || localStorage.getItem('jack_token') || localStorage.getItem('jwt') || '')
       : '';
 
-    // Connect with authentication and robust retry config
+    // Added withCredentials: true for Cookie-based Auth & Standardized Transport
     socketRef.current = io(baseUrl, {
       auth: { token },
+      withCredentials: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 2000,
       transports: ['websocket', 'polling']
@@ -41,12 +57,16 @@ export const useSupportSocket = ({ API_URL, isOpen, user, conversationId, onAdmi
     const userIdForSocket = user?.id || user?._id || `guest_${socket.id || Date.now()}`;
 
     socket.on('connect', () => {
+      // 1. Join user-specific room
       socket.emit('join_user_room', userIdForSocket);
       
-      // Automatically join active conversation room if provided
+      // 2. Automatically join active conversation room if provided
       if (conversationId) {
         socket.emit('join_conversation', conversationId);
       }
+
+      // Automatically attempt to subscribe to Admin channels (restricted securely server-side)
+      socket.emit('subscribe_admin_channels');
 
       if (onSystemEventRef.current) {
         onSystemEventRef.current({ type: 'network', status: 'connected' });
@@ -59,7 +79,9 @@ export const useSupportSocket = ({ API_URL, isOpen, user, conversationId, onAdmi
       }
     });
 
-    // Unified handler for admin/agent replies with deduplication
+    // ========================================================
+    // 🛎️ CUSTOMER-FACING EVENT HANDLERS
+    // ========================================================
     const handleAdminMessage = (data) => {
       if (!data) return;
       const msgId = data.id || data._id || data.messageId || `admin-${Date.now()}-${Math.random()}`;
@@ -67,8 +89,7 @@ export const useSupportSocket = ({ API_URL, isOpen, user, conversationId, onAdmi
       if (processedMessageIds.current.has(msgId)) return;
       processedMessageIds.current.add(msgId);
       
-      // 🔥 FIX 3: Memory Leak Protection
-      // Cap the deduplication Set size to 500 so it doesn't grow infinitely in long sessions
+      // Memory Leak Protection
       if (processedMessageIds.current.size > 500) {
         const firstItem = processedMessageIds.current.values().next().value;
         processedMessageIds.current.delete(firstItem);
@@ -86,10 +107,8 @@ export const useSupportSocket = ({ API_URL, isOpen, user, conversationId, onAdmi
       }
     };
 
-    // Listen for all standard admin reply contracts
     socket.on('receive_admin_reply', handleAdminMessage);
     
-    // 🔥 FIX 4: Safe uppercase checking prevents undefined method crashes
     const safeMessageHandler = (data) => {
       const sender = String(data?.senderType || data?.sender || '').toUpperCase();
       if (['AGENT', 'ADMIN', 'SYSTEM'].includes(sender)) {
@@ -100,17 +119,45 @@ export const useSupportSocket = ({ API_URL, isOpen, user, conversationId, onAdmi
     socket.on('support:message', safeMessageHandler);
     socket.on('receive_message', safeMessageHandler);
 
-    // New Contract: Agent assignment
     socket.on('agent_joined', (data) => {
       if (onSystemEventRef.current) {
         onSystemEventRef.current({ type: 'agent_joined', agent: data?.agent || data });
       }
     });
 
-    // New Contract: Ticket resolved
     socket.on('ticket_resolved', (data) => {
       if (onSystemEventRef.current) {
         onSystemEventRef.current({ type: 'ticket_resolved', data });
+      }
+    });
+
+    // ========================================================
+    // 🛡️ ADMIN-FACING EVENT HANDLERS (Direct Backend Connection)
+    // ========================================================
+    socket.on('ticket.message.added', (data) => {
+      if (onNewMessageRef.current) {
+        onNewMessageRef.current(data);
+      }
+    });
+
+    socket.on('ticket.status.updated', (data) => {
+      if (onTicketUpdateRef.current) {
+        onTicketUpdateRef.current({ 
+          ticketId: data.ticketId, 
+          updates: { status: data.status, assignedAgent: data.assignedAgent }
+        });
+      }
+    });
+
+    socket.on('ticket.created', (data) => {
+      if (onNewTicketRef.current) {
+        onNewTicketRef.current(data);
+      }
+    });
+
+    socket.on('new_ticket_alert', (data) => {
+      if (onNewTicketRef.current) {
+        onNewTicketRef.current(data);
       }
     });
 
@@ -124,9 +171,19 @@ export const useSupportSocket = ({ API_URL, isOpen, user, conversationId, onAdmi
         socketRef.current = null;
       }
     };
-  // 🔥 Removed the unstable callbacks from dependency array!
-  }, [API_URL, isOpen, user?.id, user?._id, conversationId]); 
+  }, [API_URL, isOpen, user?.id, user?._id]); 
 
+  // 🔥 FIX: Dynamic Room Switcher Effect (Jo pichle room ko leave karke naye conversation room ko join karega)
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (socket && socket.connected && conversationId) {
+      socket.emit('join_conversation', conversationId);
+    }
+  }, [conversationId]);
+
+  // ========================================================
+  // 🚀 OUTGOING EMITTERS
+  // ========================================================
   const escalate = useCallback((payload) => {
     if (socketRef.current?.connected) {
       socketRef.current.emit('escalate_to_human', payload);
@@ -139,5 +196,13 @@ export const useSupportSocket = ({ API_URL, isOpen, user, conversationId, onAdmi
     }
   }, []);
 
-  return { escalate, joinRoom, socket: socketRef.current };
+  const emitTyping = useCallback((isTyping, room) => {
+    if (socketRef.current?.connected && room) {
+      socketRef.current.emit('support:typing', { room, isTyping });
+    }
+  }, []);
+
+  return { escalate, joinRoom, emitTyping, socket: socketRef.current };
 };
+
+export default useSupportSocket;

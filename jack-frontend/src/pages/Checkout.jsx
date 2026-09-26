@@ -1,4 +1,4 @@
-// src/pages/Checkout.jsx
+// jack-frontend/src/pages/Checkout.jsx
 import React, { useState, useEffect, useMemo, useCallback, memo } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -17,9 +17,6 @@ const formatCurrency = (paise) => {
   if (typeof paise !== 'number') return '₹0.00';
   return `₹${(paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
-
-// 🔥 HELPER TO GET TOKEN
-const getToken = () => localStorage.getItem('token');
 
 // 🔥 TASK #62: HELPER FOR UNIQUE IDEMPOTENCY KEY GENERATION
 const generateIdempotencyKey = () => {
@@ -127,7 +124,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
     try {
       const res = await axiosInstance.get(`/delivery-check?pincode=${pincode}&cartTotal=${cartTotalPaise}&userId=${user?._id || ''}`, {
         timeout: 10000, 
-        headers: { Authorization: `Bearer ${getToken()}` } 
+        withCredentials: true // 🔥 FIX: Send secure cookie instead of Bearer token
       });
       if (res.data && res.data.success) {
         setCodIntelligence({
@@ -195,7 +192,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
       try {
         const res = await axiosInstance.get(`/pincode-info/${pin}`, {
           timeout: 10000, 
-          headers: { Authorization: `Bearer ${getToken()}` } 
+          withCredentials: true // 🔥 FIX: Send secure cookie instead of Bearer token
         });
         if (res.data && res.data.success && res.data.data) {
           const postalDetails = res.data.data;
@@ -238,6 +235,10 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
   // RAZORPAY SCRIPT LOADER
   const loadRazorpayScript = useCallback(() => {
     return new Promise((resolve) => {
+      if (window.Razorpay) {
+        resolve(true);
+        return;
+      }
       const script = document.createElement('script');
       script.src = "https://checkout.razorpay.com/v1/checkout.js";
       script.onload = () => resolve(true);
@@ -356,16 +357,17 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
         orderId: pendingOrderId 
       }, {
         timeout: 15000, 
+        withCredentials: true, // 🔥 FIX: HttpOnly cookie logic
         headers: { 
-          Authorization: `Bearer ${getToken()}`,
           'X-Idempotency-Key': generateIdempotencyKey()
         } 
       });
 
-      const orderData = res.data;
+      // 🔥 FIX: Properly unwrap response data envelope { success: true, data: { order_id, amount, currency } }
+      const orderData = res.data.data || res.data;
 
-      if (!orderData.success || !orderData.order_id) {
-        showToast("Backend Error: " + (orderData.error || "Could not create Razorpay Order."), "error");
+      if (!res.data.success || !orderData.order_id) {
+        showToast("Backend Error: " + (res.data.error || res.data.message || "Could not create Razorpay Order."), "error");
         setIsProcessing(false);
         return;
       }
@@ -393,7 +395,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
               razorpay_signature: response.razorpay_signature
             }, {
               timeout: 15000,
-              headers: { Authorization: `Bearer ${getToken()}` } 
+              withCredentials: true // 🔥 FIX: HttpOnly cookie logic
             });
             
             const verifyData = verifyRes.data;
@@ -928,7 +930,7 @@ const Checkout = ({ isLoggedIn, setIsLoggedIn }) => {
               </p>
               <div className="flex items-center space-x-3 bg-slate-50 px-6 py-3.5 rounded-full border border-slate-200/60 shadow-inner">
                 <div className="w-5 h-5 border-2 border-slate-300 border-t-[#FF4500] rounded-full animate-spin"></div>
-                <p className="text-[11px] text-slate-600 font-bold tracking-widest uppercase">Redirecting to Dashboard...</p>
+                <p className="text-[10px] text-slate-600 font-bold tracking-widest uppercase">Redirecting to Dashboard...</p>
               </div>
             </motion.div>
           )}
